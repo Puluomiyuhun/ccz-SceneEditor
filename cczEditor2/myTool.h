@@ -1,8 +1,9 @@
 #pragma once
 #include <afxstr.h>
 #include <string>
+#include "CMyComboBox.h"
 
-int CString2Int(CString str)
+inline int CString2Int(CString str)
 {
 	if (str.GetLength() == 0)return 0;
 	if (str[0] == 'x'|| str[0] == 'X') {
@@ -32,16 +33,16 @@ int CString2Int(CString str)
 	}
 }
 
-// ÕûĞÍ×ª»¯³É´ó¶Ë/Ğ¡¶ËĞÎÊ½µÄ16½øÖÆ£¬·µ»ØÖµ³¤¶ÈÎªÅ¼ÊıÎ»
-CString Int2HexStr(int mask) {
-	// ×îÖÕ16½øÖÆ×Ö·û´®³¤¶ÈÎªÅ¼Êı
+// æ•´æ•°è½¬æ¢æˆå¤§/å°å†™å½¢å¼çš„16è¿›åˆ¶ï¼Œè¿”å›å€¼ç±»å‹ä¸ºå¶æ•°ä½
+inline CString Int2HexStr(int mask) {
+	// å›ºå®š16è¿›åˆ¶å­—ç¬¦ä¸²é•¿åº¦ä¸ºå¶æ•°
 	int hexLen = 8;
-	//16½øÖÆ×Ö·û¼¯
+	//16è¿›åˆ¶å­—ç¬¦æ•°ç»„
 	CString hexes[16] = { L"0",L"1",L"2",L"3",L"4",L"5",L"6",L"7",L"8",L"9",L"A",L"B",L"C",L"D",L"E",L"F" };
 	CString hexstring = L"";
 	for (int i = 0; i < hexLen; i++) {
 		int j = hexLen - i - 1;
-		// °´Ë³ĞòÈ¡4bitÊı
+		// é€†é¡ºåºå–4bitå€¼
 		int number = (mask >> 4 * j) & 0xf;
 		hexstring += hexes[number];
 	}
@@ -52,7 +53,7 @@ CString Int2HexStr(int mask) {
 	return hexstring;
 }
 
-void ComboAddPer(CMyComboBox &combo)
+inline void ComboAddPer(CMyComboBox &combo)
 {
 	wchar_t show[10];
 	for (int i = 0; i < 1024; i++)
@@ -68,11 +69,11 @@ void ComboAddPer(CMyComboBox &combo)
 		wcscat_s(show, std::to_wstring(i).c_str());
 		combo.AddString(show);
 	}
-	wcscpy_s(show, L"ÎŞ");
+	wcscpy_s(show, L"æ— ");
 	combo.AddString(show);
 }
 
-int Per1Code2List(int k)
+inline int Per1Code2List(int k)
 {
 	if (k >= 0)return k;
 	else
@@ -82,7 +83,7 @@ int Per1Code2List(int k)
 	}
 }
 
-int Per1List2Code(int k)
+inline int Per1List2Code(int k)
 {
 	if (k < 1024)return k;
 	else
@@ -92,7 +93,7 @@ int Per1List2Code(int k)
 	}
 }
 
-void ComboAddPer2(CMyComboBox& combo)
+inline void ComboAddPer2(CMyComboBox& combo)
 {
 	wchar_t show[10];
 	for (int i = 0; i < 1024; i++)
@@ -102,10 +103,10 @@ void ComboAddPer2(CMyComboBox& combo)
 		wcscat_s(show, L":");
 		combo.AddString(show);
 	}
-	combo.AddString(L"ÈÎºÎ²¿¶Ó");
-	combo.AddString(L"ÎÒ¾ü»òÓÑ¾ü");
-	combo.AddString(L"µĞ¾ü");
-	combo.AddString(L"ÎÒ¾üµ±Ç°ÈËÎï");
+	combo.AddString(L"ä»»ä½•éƒ¨é˜Ÿ");
+	combo.AddString(L"æˆ‘å†›æˆ–å‹å†›");
+	combo.AddString(L"æ•Œå†›");
+	combo.AddString(L"æˆ‘å†›å½“å‰äººç‰©");
 
 	for (int i = 0; i < 4096; i++)
 	{
@@ -113,11 +114,11 @@ void ComboAddPer2(CMyComboBox& combo)
 		wcscat_s(show, std::to_wstring(i).c_str());
 		combo.AddString(show);
 	}
-	wcscpy_s(show, L"ÎŞ");
+	wcscpy_s(show, L"æ— ");
 	combo.AddString(show);
 }
 
-int Per2Code2List(int k)
+inline int Per2Code2List(int k)
 {
 	if (k >= 0)return k;
 	else
@@ -127,7 +128,7 @@ int Per2Code2List(int k)
 	}
 }
 
-int Per2List2Code(int k)
+inline int Per2List2Code(int k)
 {
 	if (k < 1028 + 250)return k;
 	else
@@ -137,21 +138,21 @@ int Per2List2Code(int k)
 	}
 }
 
-int DebuffCode2List(int k)
+inline int DebuffCode2List(int k)
 {
 	if (k < 0)return 30;
 	else if (k <= 30) return k / 2 - 1;
 	else return (k - 128) / 2 + 14;
 }
 
-int DebuffList2Code(int k)
+inline int DebuffList2Code(int k)
 {
 	if (k >= 30)return -1;
 	else if (k < 15) return k * 2 + 2;
 	else return (k - 14) * 2 + 128;
 }
 
-int ch2int(unsigned char* p, int num)
+inline int ch2int(unsigned char* p, int num)
 {
 	int sum = 0;
 	int quan = 1;
@@ -164,7 +165,7 @@ int ch2int(unsigned char* p, int num)
 	return sum;
 }
 
-int ch2int(unsigned char* p, int num, bool sign)
+inline int ch2int(unsigned char* p, int num, bool sign)
 {
 	int sum = 0;
 	int quan = 1;
@@ -177,7 +178,7 @@ int ch2int(unsigned char* p, int num, bool sign)
 	return sum;
 }
 
-int ch2int(unsigned char* p, int num, int cnt)
+inline int ch2int(unsigned char* p, int num, int cnt)
 {
 	int sum = 0;
 	int quan = 1;

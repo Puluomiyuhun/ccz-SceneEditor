@@ -269,6 +269,7 @@ public:
 	ItemData* InitData(int id);
 	void UpdateShow(HTREEITEM me);
 	HTREEITEM CreateItem(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
+	HTREEITEM InsertInstructionAt(int id, HTREEITEM hAfter, const int* intData, int dataCount);
 	HTREEITEM CreateZsj(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateScene(HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateSection(HTREEITEM parent, HTREEITEM hInsertAfter);

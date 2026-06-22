@@ -144,8 +144,8 @@ void CcczEditor2View::ReadString()
 					break;
 				}
 			}
-			int wlen = MultiByteToWideChar(CP_ACP, 0, savestring, len, NULL, 0);
-			MultiByteToWideChar(CP_ACP, 0, savestring, len, res_string, wlen);
+			int wlen = MultiByteToWideChar(936, 0, savestring, len, NULL, 0);
+			MultiByteToWideChar(936, 0, savestring, len, res_string, wlen);
 			res_string[wlen] = 0;
 			int pos = 0;
 			for (int j = 0; j < wlen; j++) {
@@ -277,7 +277,8 @@ void CcczEditor2View::ReadDataFromFile()
 
 			if (f.Open(exe_path, CFile::modeRead)) {
 				read_exe = true;
-				f.Seek(0x68F1, CFile::begin);
+				//f.Seek(0x68F1, CFile::begin);
+				f.Seek(0x7CD3, CFile::begin);
 				char l;
 				f.Read(&l, 1);
 				if (set_level < 0) set_level = l;
@@ -286,12 +287,12 @@ void CcczEditor2View::ReadDataFromFile()
 					strcpy_s(per_gbk, ""); wcscpy_s(per_utf, L"");
 					f.Seek(0xD18D0 + i * 9, CFile::begin);
 					f.Read(per_gbk, 8);
-					int wlen = MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, NULL, 0);
+					int wlen = MultiByteToWideChar(936, 0, per_gbk, -1, NULL, 0);
 					if (wlen >= 8) {
 						wlen = 8;
 						per_gbk[8] = 0;
 					}
-					MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, per_utf, wlen);
+					MultiByteToWideChar(936, 0, per_gbk, -1, per_utf, wlen);
 					per_utf[8] = 0;
 					wcscat_s(job[i], per_utf);
 				}
@@ -301,12 +302,12 @@ void CcczEditor2View::ReadDataFromFile()
 						strcpy_s(per_gbk, ""); wcscpy_s(per_utf, L"");
 						f.Seek(set_tejibase + i * 16, CFile::begin);
 						f.Read(per_gbk, 14);
-						int wlen = MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, NULL, 0);
+						int wlen = MultiByteToWideChar(936, 0, per_gbk, -1, NULL, 0);
 						if (wlen >= 14) {
 							wlen = 14;
 							per_gbk[14] = 0;
 						}
-						MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, per_utf, wlen);
+						MultiByteToWideChar(936, 0, per_gbk, -1, per_utf, wlen);
 						per_utf[14] = 0;
 						wcscat_s(teji[i], per_utf);
 					}
@@ -331,12 +332,12 @@ void CcczEditor2View::ReadDataFromFile()
 				strcpy_s(per_gbk, ""); wcscpy_s(per_utf, L"");
 				f.Seek(0x18C + i * 0x20, CFile::begin);
 				f.Read(per_gbk, 12);
-				int wlen = MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, NULL, 0);
+				int wlen = MultiByteToWideChar(936, 0, per_gbk, -1, NULL, 0);
 				if (wlen >= 12) {
 					wlen = 12;
 					per_gbk[12] = 0;
 				}
-				MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, per_utf, wlen);
+				MultiByteToWideChar(936, 0, per_gbk, -1, per_utf, wlen);
 				per_utf[12] = 0;
 				wcscat_s(per1[i], per_utf);
 				wcscat_s(per2[i], per_utf);
@@ -346,12 +347,12 @@ void CcczEditor2View::ReadDataFromFile()
 				strcpy_s(per_gbk, ""); wcscpy_s(per_utf, L"");
 				f.Seek(0x818C + i * 0x19, CFile::begin);
 				f.Read(per_gbk, 16);
-				int wlen = MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, NULL, 0);
+				int wlen = MultiByteToWideChar(936, 0, per_gbk, -1, NULL, 0);
 				if (wlen >= 16) {
 					wlen = 16;
 					per_gbk[16] = 0;
 				}
-				MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, per_utf, wlen);
+				MultiByteToWideChar(936, 0, per_gbk, -1, per_utf, wlen);
 				per_utf[16] = 0;
 				wcscat_s(item[i], per_utf);
 			}
@@ -360,12 +361,12 @@ void CcczEditor2View::ReadDataFromFile()
 				strcpy_s(per_gbk, ""); wcscpy_s(per_utf, L"");
 				f.Seek(0xB204 + i * 0x61, CFile::begin);
 				f.Read(per_gbk, 10);
-				int wlen = MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, NULL, 0);
+				int wlen = MultiByteToWideChar(936, 0, per_gbk, -1, NULL, 0);
 				if (wlen >= 10) {
 					wlen = 10;
 					per_gbk[10] = 0;
 				}
-				MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, per_utf, wlen);
+				MultiByteToWideChar(936, 0, per_gbk, -1, per_utf, wlen);
 				per_utf[10] = 0;
 				wcscat_s(meff[i], per_utf);
 			}
@@ -385,12 +386,12 @@ void CcczEditor2View::ReadDataFromFile()
 					strcpy_s(per_gbk, ""); wcscpy_s(per_utf, L"");
 					f.Seek(i * 0x19, CFile::begin);
 					f.Read(per_gbk, 16);
-					int wlen = MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, NULL, 0);
+					int wlen = MultiByteToWideChar(936, 0, per_gbk, -1, NULL, 0);
 					if (wlen >= 16) {
 						wlen = 16;
 						per_gbk[16] = 0;
 					}
-					MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, per_utf, wlen);
+					MultiByteToWideChar(936, 0, per_gbk, -1, per_utf, wlen);
 					per_utf[16] = 0;
 					wcscat_s(item[i + 104], per_utf);
 				}
@@ -412,12 +413,12 @@ void CcczEditor2View::ReadDataFromFile()
 					strcpy_s(per_gbk, ""); wcscpy_s(per_utf, L"");
 					f.Seek(i * 0x19, CFile::begin);
 					f.Read(per_gbk, 16);
-					int wlen = MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, NULL, 0);
+					int wlen = MultiByteToWideChar(936, 0, per_gbk, -1, NULL, 0);
 					if (wlen >= 16) {
 						wlen = 16;
 						per_gbk[16] = 0;
 					}
-					MultiByteToWideChar(CP_ACP, 0, per_gbk, -1, per_utf, wlen);
+					MultiByteToWideChar(936, 0, per_gbk, -1, per_utf, wlen);
 					per_utf[16] = 0;
 					wcscat_s(item[i + 256], per_utf);
 				}
@@ -768,8 +769,8 @@ int CcczEditor2View::EditData(ItemData* me, unsigned char* c)
 				c++;
 				if (tmp[j] == 0)break;
 			}
-			int wlen = MultiByteToWideChar(CP_ACP, 0, tmp, -1, NULL, 0);
-			MultiByteToWideChar(CP_ACP, 0, tmp, -1, me->long_char_data, wlen);
+			int wlen = MultiByteToWideChar(936, 0, tmp, -1, NULL, 0);
+			MultiByteToWideChar(936, 0, tmp, -1, me->long_char_data, wlen);
 			long_char_sum++;
 		}
 		else if (ins == 0x35)
@@ -1850,6 +1851,30 @@ HTREEITEM CcczEditor2View::CreateItem(int id, HTREEITEM parent, HTREEITEM hInser
 	return hCur;
 }
 
+HTREEITEM CcczEditor2View::InsertInstructionAt(int id, HTREEITEM hAfter, const int* intData, int dataCount)
+{
+	CTreeCtrl& m_TreeCtrl = GetTreeCtrl();
+	if (!hAfter) return nullptr;
+
+	HTREEITEM parent = m_TreeCtrl.GetParentItem(hAfter);
+	if (!parent) parent = TVI_ROOT;
+
+	HTREEITEM hNew = CreateItem(id, parent, hAfter);
+	if (!hNew) return nullptr;
+
+	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(hNew);
+	if (data && intData) {
+		int count = min(dataCount, (int)data->int_data.size());
+		for (int i = 0; i < count; i++)
+			data->int_data[i] = intData[i];
+	}
+
+	UpdateShow(hNew);
+	m_TreeCtrl.SelectItem(hNew);
+	GetDocument()->SetModifiedFlag(TRUE);
+	return hNew;
+}
+
 HTREEITEM CcczEditor2View::CreateZsj(int id, HTREEITEM parent, HTREEITEM hInsertAfter)
 {
 	HTREEITEM hCur = CreateItem(1, parent, hInsertAfter);
@@ -2151,6 +2176,7 @@ void CcczEditor2View::OnEditModify()
 	cur_data = *(ItemData*)m_TreeCtrl.GetItemData(cur_item);
 	int id = item->id;
 	cur_code = id;
+
 	if (id == 2 || id == 20 || (id >= 22 && id <= 26) || id == 105 || id == 122) { Dialog_2 d; d.DoModal(); }
 	if (id == 4 || id == 8 || id == 98 || id == 116) { Dialog_4 d; d.DoModal(); }
 	if (id == 5) { Dialog_5 d; d.DoModal(); }
@@ -7422,6 +7448,11 @@ void CcczEditor2View::OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult)
 		wcscpy_s(show, L"id:");
 		wcscat_s(show, std::to_wstring(data->ord).c_str());
 		pFrame->m_wndStatusBar.SetPaneText(0, show);
+
+		// 更新场景预览
+		pFrame->m_wndScenePreview.InitCharList(per2);
+		pFrame->m_wndScenePreview.UpdatePreview(
+			GetTreeCtrl(), cur_item, GetDocument()->pathName);
 	}
 	*pResult = 0;
 }

@@ -197,7 +197,7 @@ void CPropertiesWnd::InitPropList()
 					break;
 				}
 			}
-			MultiByteToWideChar(CP_ACP, 0, savestring, -1, res_string, len);
+			MultiByteToWideChar(936, 0, savestring, -1, res_string, len);
 			int rgb_pos = 0; int sums = 0;
 			for (int j = 0; j <= len; j++) {
 				if (res_string[j] == 0)break;

@@ -54,6 +54,9 @@
     <ClInclude Include="PropertiesWnd.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ScenePreviewWnd.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="pch.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -64,6 +67,39 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="myTool.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\InstructionTypes.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\GameDataManager.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\AllDialogs.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\DialogBase.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\TextDialog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\BoolDialog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\NumberDialog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\VarTestDialog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\MiscDialogs.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\GenericDialog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialogs\DialogFactory.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
@@ -98,6 +134,9 @@
     <ClCompile Include="PropertiesWnd.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ScenePreviewWnd.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="pch.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -105,6 +144,33 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="CMyComboBox.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\InstructionRegistry.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\GameDataManager.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialogs\TextDialog.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialogs\BoolDialog.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialogs\NumberDialog.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialogs\VarTestDialog.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialogs\MiscDialogs.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialogs\GenericDialog.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialogs\DialogFactory.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
@@ -203,5 +269,6 @@
     <None Include="res\cczEditor2.rc2">
       <Filter>资源文件</Filter>
     </None>
+    <None Include="Instructions.json" />
   </ItemGroup>
 </Project>

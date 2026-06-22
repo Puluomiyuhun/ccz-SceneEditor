@@ -15,6 +15,10 @@
 #define new DEBUG_NEW
 #endif
 #include <string>
+#include <GdiPlus.h>
+#pragma comment(lib, "gdiplus.lib")
+
+static ULONG_PTR g_gdiplusToken = 0;
 
 
 // CcczEditor2App
@@ -63,6 +67,10 @@ CcczEditor2App theApp;
 
 BOOL CcczEditor2App::InitInstance()
 {
+	// 初始化GDI+
+	Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+	Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);
+
 	// 如果一个运行在 Windows XP 上的应用程序清单指定要
 	// 使用 ComCtl32.dll 版本 6 或更高版本来启用可视化方式，
 	//则需要 InitCommonControlsEx()。  否则，将无法创建窗口。
@@ -154,6 +162,7 @@ int CcczEditor2App::ExitInstance()
 	//TODO: 处理可能已添加的附加资源
 	AfxOleTerm(FALSE);
 	//this->CleanState();
+	if (g_gdiplusToken) Gdiplus::GdiplusShutdown(g_gdiplusToken);
 	return CWinAppEx::ExitInstance();
 }
 
@@ -280,9 +289,9 @@ void CcczEditor2App::OnSaveCustom()
 				if (k < 2) wcscat_s(content, L",");
 				else wcscat_s(content, L"\n");
 			}
-	len = WideCharToMultiByte(CP_OEMCP, 0, content, -1, NULL, 0, NULL, FALSE);
+	len = WideCharToMultiByte(936, 0, content, -1, NULL, 0, NULL, FALSE);
 	char res[3000];
-	WideCharToMultiByte(CP_OEMCP, 0, content, -1, res, len, NULL, FALSE);
+	WideCharToMultiByte(936, 0, content, -1, res, len, NULL, FALSE);
 	f.Write(res, len);
 	f.Close();
 

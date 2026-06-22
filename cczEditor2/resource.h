@@ -211,6 +211,38 @@
 #define IDC_BUTTON2                     1019
 #define IDC_CHECK12                     1019
 #define IDC_STATIC4                     1020
+#define IDC_SCENE_CHAR_SEARCH           1021
+#define IDC_SCENE_CHAR_LIST             1022
+#define IDS_SCENE_PREVIEW               309
+#define ID_VIEW_SCENEPREVIEW            390
+#define ID_SCENE_DIR_0                  40010
+#define ID_SCENE_DIR_1                  40011
+#define ID_SCENE_DIR_2                  40012
+#define ID_SCENE_DIR_3                  40013
+#define ID_SCENE_ACTION_0              40020
+#define ID_SCENE_ACTION_1              40021
+#define ID_SCENE_ACTION_2              40022
+#define ID_SCENE_ACTION_3              40023
+#define ID_SCENE_ACTION_4              40024
+#define ID_SCENE_ACTION_5              40025
+#define ID_SCENE_ACTION_6              40026
+#define ID_SCENE_ACTION_7              40027
+#define ID_SCENE_ACTION_8              40028
+#define ID_SCENE_ACTION_9              40029
+#define ID_SCENE_ACTION_10             40030
+#define ID_SCENE_ACTION_11             40031
+#define ID_SCENE_ACTION_12             40032
+#define ID_SCENE_ACTION_13             40033
+#define ID_SCENE_ACTION_14             40034
+#define ID_SCENE_ACTION_15             40035
+#define ID_SCENE_ACTION_16             40036
+#define ID_SCENE_ACTION_17             40037
+#define ID_SCENE_ACTION_18             40038
+#define ID_SCENE_ACTION_19             40039
+#define ID_SCENE_DISAPPEAR             40040
+#define ID_SCENE_MOVE                  40041
+#define ID_SCENE_ADJUST                40042
+#define ID_SCENE_TOGGLE_GRID           40043
 #define ID_32771                        32771
 #define ID_32772                        32772
 #define ID_32773                        32773
@@ -244,6 +276,9 @@
 #define ID_32801                        32801
 #define ID_32802                        32802
 #define ID_EXPORT_TXT                   32803
+#define ID_EXPORT_JSON                  32813
+#define ID_START_HTTP_SERVER            32814
+#define ID_STOP_HTTP_SERVER             32815
 #define ID_32804                        32804
 #define ID_SAVE_CUSTOM                  32805
 #define ID_Menu32806                    32806
@@ -258,9 +293,9 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        390
-#define _APS_NEXT_COMMAND_VALUE         32813
-#define _APS_NEXT_CONTROL_VALUE         1021
-#define _APS_NEXT_SYMED_VALUE           310
+#define _APS_NEXT_RESOURCE_VALUE        391
+#define _APS_NEXT_COMMAND_VALUE         40044
+#define _APS_NEXT_CONTROL_VALUE         1023
+#define _APS_NEXT_SYMED_VALUE           311
 #endif
 #endif

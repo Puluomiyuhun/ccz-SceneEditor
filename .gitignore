@@ -1,0 +1,25 @@
+# Build outputs
+Debug/
+Release/
+x64/
+*.exe
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+*.log
+*.tlog/
+
+# IDE
+.vs/
+.idea/
+.qwen/
+*.aps
+*.user
+
+# Per-project
+cczEditor2/Debug/
+cczEditor2/Release/
+cczEditor2/x64/
