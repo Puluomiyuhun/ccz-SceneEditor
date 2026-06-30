@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cczEditor": {
+      "command": "node",
+      "args": ["F:\\cczEditor2\\mcp-bridge.js"],
+      "env": {
+        "CCZ_EDITOR_PORT": "8080"
+      }
+    }
+  }
+}
