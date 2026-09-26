@@ -4,6 +4,7 @@
 
 #pragma once
 #include "CMyComboBox.h"
+#include <vector>
 
 class CcczEditor2View : public CTreeView
 {
@@ -260,6 +261,7 @@ public:
 	void ReadDataFromFile();
 	void ReadDataFromLocal();
 	void ReadDataDefault();
+	void NormalizeItemSegmentCounts();
 	void InitBaseData();
 	void CreateRoot(LPWSTR root_name);
 	void CreateNewTree();
@@ -270,6 +272,8 @@ public:
 	void UpdateShow(HTREEITEM me);
 	HTREEITEM CreateItem(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
 	HTREEITEM InsertInstructionAt(int id, HTREEITEM hAfter, const int* intData, int dataCount);
+	HTREEITEM InsertBattleInstructionAt(int instructionId, HTREEITEM parent,
+		HTREEITEM hInsertAfter, const std::vector<int>& intData);
 	HTREEITEM CreateZsj(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateScene(HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateSection(HTREEITEM parent, HTREEITEM hInsertAfter);
@@ -308,9 +312,16 @@ public:
 	afx_msg void OnMoveUp();
 	afx_msg void OnMoveDown();
 	afx_msg void OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult);
+	void RefreshScenePreview();
+	void SelectPlaybackItem(HTREEITEM item, bool suppress_preview_refresh);
 	afx_msg void OnEditDuplicate();
 	afx_msg void OnEditBatch();
 	afx_msg BOOL OnEraseBkgnd(CDC* pDC);
+	afx_msg void OnDestroy();
+	bool m_suppressPreviewRefreshOnce = false;
+	// S battle native writeback suppresses selection-triggered preview reloads
+	// until its complete transaction (or rollback) has restored a stable state.
+	bool m_suppressBattleWritebackPreview = false;
 };
 
 #ifndef _DEBUG  // cczEditor2View.cpp 中的调试版本
@@ -358,6 +369,9 @@ protected:
 	virtual void DoDataExchange(CDataExchange* pDX) {
 		CDialogEx::DoDataExchange(pDX);
 		DDX_Control(pDX, IDC_EDIT1, edit1);
+		DDX_Control(pDX, IDC_WRAP_ENABLE, wrap_enable);
+		DDX_Control(pDX, IDC_WRAP_BYTES, wrap_bytes);
+		DDX_Control(pDX, IDC_WRAP_MODE, wrap_mode);
 	}
 	virtual BOOL PreTranslateMessage(MSG* pMsg) /// 热键
 	{
@@ -386,9 +400,18 @@ protected:
 	}
 public:
 	CMyEdit edit1;
+	CButton wrap_enable;
+	CEdit wrap_bytes;
+	CButton wrap_mode;
+	bool wrap_history_mode = false;
+	bool wrap_supported = false;
+	bool wrap_updating = false;
 	bool ctrl_on;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
+	afx_msg void OnBnClickedWrapMode();
+	afx_msg void OnBnClickedWrapEnable();
+	afx_msg void OnEnChangeWrapText();
 };
 
 class Dialog_4 :
@@ -597,13 +620,20 @@ protected:
 		DDX_Control(pDX, IDC_EDIT1, edit1);
 		DDX_Control(pDX, IDC_COMBO1, combo1);
 		DDX_Control(pDX, IDC_COMBO2, combo2);
+		DDX_Control(pDX, IDC_WRAP_ENABLE, wrap_enable);
+		DDX_Control(pDX, IDC_WRAP_BYTES, wrap_bytes);
 	}
 public:
 	CMyEdit edit1;
 	CMyComboBox combo1;
 	CMyComboBox combo2;
+	CButton wrap_enable;
+	CEdit wrap_bytes;
+	bool wrap_updating = false;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
+	afx_msg void OnBnClickedWrapEnable();
+	afx_msg void OnEnChangeWrapText();
 };
 
 
@@ -895,14 +925,21 @@ protected:
 		DDX_Control(pDX, IDC_CHECK1, check1);
 		DDX_Control(pDX, IDC_CHECK2, check2);
 		DDX_Control(pDX, IDC_CHECK3, check3);
+		DDX_Control(pDX, IDC_WRAP_ENABLE, wrap_enable);
+		DDX_Control(pDX, IDC_WRAP_BYTES, wrap_bytes);
 	}
 public:
 	CMyEdit edit1;
 	CButton check1;
 	CButton check2;
 	CButton check3;
+	CButton wrap_enable;
+	CEdit wrap_bytes;
+	bool wrap_updating = false;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
+	afx_msg void OnBnClickedWrapEnable();
+	afx_msg void OnEnChangeWrapText();
 };
 
 

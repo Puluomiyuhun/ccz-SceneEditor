@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "path": "../../ccz_preview_ext/releases/phase1-20260916/cczEditor_v0.24.exe",
+      "sha256": "781A3833B6031D216392591FCE5D5F43D899BAA5B3ABC148A999EC6D2B0B45C8"
+    },
+    {
+      "path": "../../ccz_preview_ext/releases/phase1-20260916/cczPreviewExt.dll",
+      "sha256": "929DA194A7732163743D29C0CF570EB1535E566CFEFC716625CFE1331A724FF3"
+    },
+    {
+      "path": "../../ccz_preview_ext/releases/phase1-20260916/cczPreviewExtLauncher.exe",
+      "sha256": "25B89C8111C327580D1E4C97ED32E87F786EDC82CA8EAAFADE06ABB2D0A3E87E"
+    },
+    {
+      "path": "Release/s.exe",
+      "sha256": "5A3CB3DE8AA4F71A9A602A8A5F9EE874E5818C4F04F037B0E1A7A3BC3C39E3AD"
+    }
+  ]
+}

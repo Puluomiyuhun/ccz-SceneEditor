@@ -7,7 +7,7 @@
 #include "ClassView.h"
 #include "OutputWnd.h"
 #include "PropertiesWnd.h"
-#include "ScenePreviewWnd.h"
+#include "ScenePreviewHost.h"
 
 class CMainFrame : public CMDIFrameWndEx
 {

@@ -14,13 +14,17 @@
 #include "cczEditor2View.h"
 
 #include "CMyTreeCtrl.h"
+#include "LongCharData.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
 #include "MainFrm.h"
+#include <algorithm>
+#include <memory>
 #include <string>
 #include "myTool.h"
+#include "TextWrapAssist.h"
 #pragma comment(lib, "version.lib")
 #include <atlimage.h>
 
@@ -65,6 +69,7 @@ BEGIN_MESSAGE_MAP(CcczEditor2View, CTreeView)
 	ON_COMMAND(ID_EDIT_BATCH, &CcczEditor2View::OnEditBatch)
 	ON_WM_PAINT()
 	ON_WM_ERASEBKGND()
+	ON_WM_DESTROY()
 END_MESSAGE_MAP()
 
 // CcczEditor2View 构造/析构
@@ -79,12 +84,22 @@ CcczEditor2View::~CcczEditor2View()
 {
 }
 
+void CcczEditor2View::OnDestroy()
+{
+	CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
+	if (frame != nullptr)
+		frame->m_wndScenePreview.InvalidatePendingPreviewRefresh();
+	CTreeView::OnDestroy();
+}
+
 BOOL CcczEditor2View::PreCreateWindow(CREATESTRUCT& cs)
 {
 	// TODO: 在此处通过修改
 	//  CREATESTRUCT cs 来修改窗口类或样式
 	night_mode = theApp.custom_night_mode;
-	cs.lpszClass = AfxRegisterWndClass(CS_HREDRAW | CS_VREDRAW, 0, (HBRUSH)::GetStockObject(m_bgcolor), 0);
+	// CTreeView owns the common-control window class and requires lpszClass to
+	// remain null until its PreCreateWindow installs that class. Background
+	// painting is handled by OnEraseBkgnd, so a custom window class is unnecessary.
 	return CTreeView::PreCreateWindow(cs);
 }
 
@@ -475,6 +490,19 @@ void CcczEditor2View::ReadDataDefault()
 	if (set_armor < 0)set_armor = 39;
 	if (set_product < 0)set_product = 41;
 	if (set_rs < 0)set_rs = 100;
+	NormalizeItemSegmentCounts();
+}
+
+void CcczEditor2View::NormalizeItemSegmentCounts()
+{
+	// item[] is a fixed 512-entry table.  Keep the configured segments
+	// non-negative and preserve their declared order while ensuring their
+	// cumulative ranges cannot run past that table.
+	constexpr int kItemTableCapacity = 512;
+	set_weapon = max(0, min(set_weapon, kItemTableCapacity));
+	set_armor = max(0, min(set_armor, kItemTableCapacity - set_weapon));
+	set_product = max(0, min(set_product,
+		kItemTableCapacity - set_weapon - set_armor));
 }
 
 void CcczEditor2View::InitBaseData()
@@ -581,6 +609,9 @@ void CcczEditor2View::InitBaseData()
 
 void CcczEditor2View::CreateRoot(LPWSTR root_name)
 {
+	CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
+	if (frame != nullptr)
+		frame->m_wndScenePreview.InvalidatePendingPreviewRefresh();
 	CTreeCtrl& m_TreeCtrl = GetTreeCtrl();
 	//m_TreeCtrl.ModifyStyle(0, TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS | TVS_SHOWSELALWAYS | TVS_CHECKBOXES);
 	m_TreeCtrl.ModifyStyle(TVS_CHECKBOXES, TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS | TVS_SHOWSELALWAYS );
@@ -763,14 +794,31 @@ int CcczEditor2View::EditData(ItemData* me, unsigned char* c)
 		if (ins == 0x5)
 		{
 			char tmp[10000];
+			bool terminated = false;
 			for (int j = 0; j < 10000; j++)
 			{
 				tmp[j] = *c;
 				c++;
-				if (tmp[j] == 0)break;
+				if (tmp[j] == 0) {
+					terminated = true;
+					break;
+				}
 			}
+			if (!terminated) tmp[9999] = 0;
 			int wlen = MultiByteToWideChar(936, 0, tmp, -1, NULL, 0);
-			MultiByteToWideChar(936, 0, tmp, -1, me->long_char_data, wlen);
+			if (wlen > 0) {
+				std::vector<wchar_t> decoded(static_cast<std::size_t>(wlen));
+				if (MultiByteToWideChar(936, 0, tmp, -1, decoded.data(), wlen) == wlen) {
+					const std::size_t storageCapacity = (std::max)(
+						ccz::editor::kLongCharDataCapacity,
+						static_cast<std::size_t>(wlen));
+					ccz::editor::ReplaceLongCharData(
+						me->long_char_data,
+						me->long_char_data_capacity,
+						decoded.data(),
+						storageCapacity);
+				}
+			}
 			long_char_sum++;
 		}
 		else if (ins == 0x35)
@@ -836,8 +884,11 @@ ItemData* CcczEditor2View::InitData(int id)
 	{
 		if (code_instruct[id][i] == 5)
 		{
-			item->long_char_data = new wchar_t[3000];
-			wcscpy_s(item->long_char_data, 3000, L"");
+			ccz::editor::ReplaceLongCharData(
+				item->long_char_data,
+				item->long_char_data_capacity,
+				L"",
+				ccz::editor::kLongCharDataCapacity);
 		}
 	}
 
@@ -1875,6 +1926,86 @@ HTREEITEM CcczEditor2View::InsertInstructionAt(int id, HTREEITEM hAfter, const i
 	return hNew;
 }
 
+HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
+	int instructionId, HTREEITEM parent, HTREEITEM hInsertAfter,
+	const std::vector<int>& intData)
+{
+	// Battle records use editor instruction IDs 0x4B (20 native integers),
+	// 0x46/0x47 (1000 native integers each).  Do not route these through the
+	// generic 20-field insertion helper, which intentionally has different
+	// selection/dirty behavior and a truncating copy contract.
+	const std::size_t expectedSize = instructionId == 0x4b ? 20U : 1000U;
+	if ((instructionId != 0x4b && instructionId != 0x46 &&
+		instructionId != 0x47) || intData.size() != expectedSize || !parent)
+		return nullptr;
+
+	// This native tree bridge is reserved for S-battle deployment writeback.
+	// Fail closed for unsaved documents and every R/non-S script.
+	CcczEditor2Doc* document = GetDocument();
+	if (document == nullptr || document->pathName == nullptr)
+		return nullptr;
+	CString fileName(document->pathName);
+	const int lastSeparator = max(fileName.ReverseFind(L'\\'),
+		fileName.ReverseFind(L'/'));
+	fileName = fileName.Mid(lastSeparator + 1);
+	fileName.MakeUpper();
+	const bool isBattleScript = fileName.Left(2) == L"S_" ||
+		fileName.Left(2) == L"S-";
+	if (!isBattleScript)
+		return nullptr;
+
+	CTreeCtrl& tree = GetTreeCtrl();
+	ItemData* parentData = reinterpret_cast<ItemData*>(tree.GetItemData(parent));
+	if (parentData == nullptr || parentData->id != 0)
+		return nullptr;
+	// The value batch uses zero for the native tree's TVI_FIRST sentinel.
+	// Normalize that representation before sibling validation/insertion.
+	if (hInsertAfter == nullptr) hInsertAfter = TVI_FIRST;
+	if (hInsertAfter != TVI_FIRST && hInsertAfter != TVI_LAST &&
+		tree.GetParentItem(hInsertAfter) != parent)
+		return nullptr;
+
+	std::unique_ptr<ItemData> data;
+	try {
+		data = std::make_unique<ItemData>(static_cast<int>(expectedSize));
+		data->id = instructionId;
+		data->ord = cur_code_ord;
+		data->int_data = intData;
+	}
+	catch (...) {
+		return nullptr;
+	}
+
+	TVINSERTSTRUCT insert{};
+	insert.hParent = parent;
+	insert.hInsertAfter = hInsertAfter;
+	insert.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_IMAGE |
+		TVIF_SELECTEDIMAGE;
+	insert.item.pszText = code[instructionId];
+	insert.item.lParam = 0;
+	insert.item.iImage = 0;
+	insert.item.iSelectedImage = 1;
+	HTREEITEM item = tree.InsertItem(&insert);
+	if (item == nullptr)
+		return nullptr;
+	if (!tree.SetItemData(item, reinterpret_cast<DWORD_PTR>(data.get()))) {
+		tree.DeleteItem(item);
+		return nullptr;
+	}
+
+	++cur_code_ord;
+	try {
+		UpdateShow(item);
+	}
+	catch (...) {
+		tree.DeleteItem(item);
+		--cur_code_ord;
+		return nullptr;
+	}
+	data.release();
+	return item;
+}
+
 HTREEITEM CcczEditor2View::CreateZsj(int id, HTREEITEM parent, HTREEITEM hInsertAfter)
 {
 	HTREEITEM hCur = CreateItem(1, parent, hInsertAfter);
@@ -2196,7 +2327,10 @@ void CcczEditor2View::OnEditModify()
 	if (id == 36) { Dialog_36 d; d.DoModal(); }
 	if (id == 37 || id == 41 || id == 42) { Dialog_37 d; d.DoModal(); }
 	if (id == 38) { Dialog_38 d; d.DoModal(); }
-	if (id == 39) { Dialog_39 d; d.DoModal(); }
+	if (id == 39) {
+		Dialog_39 d;
+		d.DoModal();
+	}
 	if (id == 43 || id == 45 || id == 92) { Dialog_43 d; d.DoModal(); }
 	if (id == 44) { Dialog_44 d; d.DoModal(); }
 	if (id == 46 || id == 94 || id == 108) { Dialog_46 d; d.DoModal(); }
@@ -2249,6 +2383,10 @@ void CcczEditor2View::OnEditModify()
 	if (id == 119) { Dialog_119 d; d.DoModal(); }
 	if (id == 120) { Dialog_120 d; d.DoModal(); }
 	if (id == 121) { Dialog_121 d; d.DoModal(); }
+	// Every completed instruction edit goes through the same event-driven
+	// preview coordinator, including a cancelled dialog.  The session keeps
+	// unchanged model fingerprints from causing unnecessary work.
+	RefreshScenePreview();
 }
 
 
@@ -2346,6 +2484,11 @@ void CcczEditor2View::OnEditDelete()
 				return;
 			}
 		}
+		// The nested ItemData/tree handles below can be destroyed by this
+		// operation; invalidate any delayed preview before that boundary.
+		CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
+		if (frame != nullptr)
+			frame->m_wndScenePreview.InvalidatePendingPreviewRefresh();
 		/*检查是否是删嵌套*/
 		HTREEITEM child = m_TreeCtrl.GetChildItem(cur_items);
 		if (child) {
@@ -2355,7 +2498,13 @@ void CcczEditor2View::OnEditDelete()
 			if (last != TVI_FIRST) {
 				if (((ItemData*)m_TreeCtrl.GetItemData(last))->id == 1)
 				{
-					delete (ItemData*)(m_TreeCtrl.GetItemData(last));
+					ItemData* nestedData = (ItemData*)m_TreeCtrl.GetItemData(last);
+					if (nestedData) {
+						ccz::editor::ReleaseLongCharData(
+							nestedData->long_char_data,
+							nestedData->long_char_data_capacity);
+						delete nestedData;
+					}
 					m_TreeCtrl.DeleteItem(last);
 				}
 			}
@@ -2364,7 +2513,12 @@ void CcczEditor2View::OnEditDelete()
 		HTREEITEM next = m_TreeCtrl.GetNextSiblingItem(cur_items);
 		int id = data->id;
 
-		if (data != NULL)delete data;
+		if (data != NULL) {
+			ccz::editor::ReleaseLongCharData(
+				data->long_char_data,
+				data->long_char_data_capacity);
+			delete data;
+		}
 		m_TreeCtrl.DeleteItem(cur_items);
 		GetDocument()->OnModified(TRUE);
 
@@ -2459,6 +2613,151 @@ void Dialog_SelectCode::OnBnClickedOk()
 	pView->GetDocument()->OnModified(TRUE);CDialogEx::OnOK();
 }
 
+namespace
+{
+bool IsHistoryInfoContext(CcczEditor2View* pView)
+{
+	if (pView == nullptr || pView->cur_item == nullptr)
+		return false;
+
+	CTreeCtrl& tree = pView->GetTreeCtrl();
+	HTREEITEM previous = tree.GetPrevSiblingItem(pView->cur_item);
+	if (previous == nullptr)
+		return false;
+
+	ItemData* data = reinterpret_cast<ItemData*>(tree.GetItemData(previous));
+	return data != nullptr && data->id == 0x77 && data->int_data.size() > 1 &&
+		data->int_data[1] == 4071;
+}
+
+void SetWrapControlVisible(CWnd* dialog, int controlId, bool visible)
+{
+	if (dialog == nullptr)
+		return;
+	if (CWnd* control = dialog->GetDlgItem(controlId))
+	{
+		control->ShowWindow(visible ? SW_SHOW : SW_HIDE);
+		control->EnableWindow(visible ? TRUE : FALSE);
+	}
+}
+
+void ConfigureWrapControls(CWnd* dialog, bool visible, bool showMode)
+{
+	SetWrapControlVisible(dialog, IDC_WRAP_ENABLE, visible);
+	SetWrapControlVisible(dialog, IDC_WRAP_BYTES_LABEL, visible);
+	SetWrapControlVisible(dialog, IDC_WRAP_BYTES, visible);
+	SetWrapControlVisible(dialog, IDC_WRAP_MODE, visible && showMode);
+}
+
+void SetWrapLimitText(CEdit& edit, int value)
+{
+	CString text;
+	text.Format(L"%d", value);
+	edit.SetWindowTextW(text);
+}
+
+void SetLongTextInputLimit(CEdit& edit)
+{
+	edit.SetLimitText(static_cast<UINT>(ccz::editor::kLongCharDataMaxLength));
+}
+
+bool StoreLongCharDataOrReport(ItemData* data, const CString& text)
+{
+	if (data == nullptr || data->long_char_data == nullptr ||
+		data->long_char_data_capacity == 0 ||
+		static_cast<std::size_t>(text.GetLength()) > ccz::editor::kLongCharDataMaxLength ||
+		!ccz::editor::StoreLongCharData(
+			data->long_char_data,
+			data->long_char_data_capacity,
+			text.GetString())) {
+		AfxMessageBox(
+			_T("文本过长，超过编辑器支持的 2999 个 UTF-16 字符上限，未保存。"),
+			MB_ICONWARNING);
+		return false;
+	}
+	return true;
+}
+
+CString ApplyAutoWrapForStorage(const CString& text, int limit)
+{
+	CString wrapped = ccz::text_wrap::ApplyAutoWrap(text, limit);
+	int lineBreakCount = 0;
+	for (int i = 0; i < wrapped.GetLength(); ++i)
+	{
+		if (wrapped[i] == L'\n')
+			++lineBreakCount;
+	}
+	// The stored EEX value uses LF, but the edit control uses CRLF.  Reserve
+	// one extra code unit per generated/manual line break for the UI limit.
+	if (wrapped.GetLength() + lineBreakCount <=
+		static_cast<int>(ccz::editor::kLongCharDataMaxLength))
+		return wrapped;
+
+	// The byte threshold controls each line, while the EEX text field has a
+	// separate whole-value UTF-16 contract.  Do not make the dialog's live
+	// helper create a value that the save path must reject; preserve the user's
+	// text and let manual line breaks remain untouched.
+	return text;
+}
+
+CString ToEditLineBreaks(const CString& text)
+{
+	CString result;
+	result.Preallocate(text.GetLength() + 8);
+	for (int i = 0; i < text.GetLength(); ++i)
+	{
+		if (text[i] == L'\r')
+		{
+			result += L'\r';
+			if (i + 1 < text.GetLength() && text[i + 1] == L'\n')
+			{
+				result += L'\n';
+				++i;
+			}
+		}
+		else if (text[i] == L'\n')
+		{
+			result += L"\r\n";
+		}
+		else
+		{
+			result += text[i];
+		}
+	}
+	return result;
+}
+
+void ApplyWrapToEdit(CEdit& edit, int limit)
+{
+	if (limit <= 0)
+		return;
+
+	CString current;
+	edit.GetWindowTextW(current);
+	CString wrapped = ApplyAutoWrapForStorage(current, limit);
+	CString editText = ToEditLineBreaks(wrapped);
+	if (editText == current)
+		return;
+
+	int selectionStart = 0;
+	int selectionEnd = 0;
+	edit.GetSel(selectionStart, selectionEnd);
+	const int maxSelection = current.GetLength();
+	selectionStart = (std::max)(0, (std::min)(selectionStart, maxSelection));
+	selectionEnd = (std::max)(selectionStart, (std::min)(selectionEnd, maxSelection));
+
+	// ApplyAutoWrap only inserts characters, so wrapping the two prefixes maps
+	// the old selection to the new text without forcing the caret to the end.
+	const int mappedStart = ToEditLineBreaks(ApplyAutoWrapForStorage(
+		current.Left(selectionStart), limit)).GetLength();
+	const int mappedEnd = ToEditLineBreaks(ApplyAutoWrapForStorage(
+		current.Left(selectionEnd), limit)).GetLength();
+
+	edit.SetWindowTextW(editText);
+	edit.SetSel(mappedStart, mappedEnd);
+}
+}
+
 BOOL Dialog_2::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
@@ -2474,11 +2773,34 @@ BOOL Dialog_2::OnInitDialog()
 		}
 	}
 	edit1.SetWindowTextW(str);
+	SetLongTextInputLimit(edit1);
 	SetWindowTextW(pView->code[pView->cur_code]);
+
+	wrap_supported = ccz::text_wrap::IsSupportedCommand(pView->cur_code);
+	wrap_history_mode = pView->cur_code == 22 && IsHistoryInfoContext(pView);
+	ConfigureWrapControls(this, wrap_supported, pView->cur_code == 22);
+	if (wrap_supported)
+	{
+		wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(
+			pView->cur_code, wrap_history_mode, true) ? BST_CHECKED : BST_UNCHECKED);
+		const int limit = ccz::text_wrap::LoadLimit(pView->cur_code, wrap_history_mode);
+		SetWrapLimitText(wrap_bytes, limit);
+		if (pView->cur_code == 22)
+			wrap_mode.SetWindowTextW(wrap_history_mode ? L"历史信息" : L"普通信息");
+		if (wrap_enable.GetCheck() == BST_CHECKED)
+		{
+			wrap_updating = true;
+			ApplyWrapToEdit(edit1, limit);
+			wrap_updating = false;
+		}
+	}
 	return TRUE;
 }
 BEGIN_MESSAGE_MAP(Dialog_2, myDialog)
 	ON_BN_CLICKED(IDOK, &Dialog_2::OnBnClickedOk)
+	ON_BN_CLICKED(IDC_WRAP_MODE, &Dialog_2::OnBnClickedWrapMode)
+	ON_BN_CLICKED(IDC_WRAP_ENABLE, &Dialog_2::OnBnClickedWrapEnable)
+	ON_EN_CHANGE(IDC_EDIT1, &Dialog_2::OnEnChangeWrapText)
 END_MESSAGE_MAP()
 
 
@@ -2489,6 +2811,27 @@ void Dialog_2::OnBnClickedOk()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 	CString str;
 	edit1.GetWindowTextW(str);
+	if (wrap_supported)
+	{
+		const int fallback = ccz::text_wrap::DefaultLimit(pView->cur_code, wrap_history_mode);
+		CString limitText;
+		wrap_bytes.GetWindowTextW(limitText);
+		const int limit = ccz::text_wrap::ParseLimit(limitText, fallback);
+		SetWrapLimitText(wrap_bytes, limit);
+		const bool wrapEnabled = wrap_enable.GetCheck() == BST_CHECKED;
+		if (wrapEnabled)
+			str = ApplyAutoWrapForStorage(str, limit);
+		for (int i = 0; i < str.GetLength(); i++)
+		{
+			if (str[i] == '\r') {
+				str.Delete(i);
+				i++;
+			}
+		}
+		if (!StoreLongCharDataOrReport(data, str)) return;
+		ccz::text_wrap::SaveLimit(pView->cur_code, wrap_history_mode, limit);
+		ccz::text_wrap::SaveEnabled(pView->cur_code, wrap_history_mode, wrapEnabled);
+	}
 	for (int i = 0; i < str.GetLength(); i++)
 	{
 		if (str[i] == '\r') {
@@ -2496,10 +2839,69 @@ void Dialog_2::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!wrap_supported && !StoreLongCharDataOrReport(data, str)) return;
 
 	pView->UpdateShow(pView->cur_item);
 	pView->GetDocument()->OnModified(TRUE);CDialogEx::OnOK();
+}
+
+void Dialog_2::OnBnClickedWrapMode()
+{
+	if (!wrap_supported)
+		return;
+
+	CcczEditor2View* pView = (CcczEditor2View*)(((CMainFrame*)AfxGetMainWnd())->MDIGetActive()->GetActiveView());
+	if (pView == nullptr || pView->cur_code != 22)
+		return;
+
+	wrap_history_mode = !wrap_history_mode;
+	const int limit = ccz::text_wrap::LoadLimit(pView->cur_code, wrap_history_mode);
+	SetWrapLimitText(wrap_bytes, limit);
+	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(
+		pView->cur_code, wrap_history_mode, true) ? BST_CHECKED : BST_UNCHECKED);
+	wrap_mode.SetWindowTextW(wrap_history_mode ? L"历史信息" : L"普通信息");
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+	{
+		wrap_updating = true;
+		ApplyWrapToEdit(edit1, limit);
+		wrap_updating = false;
+	}
+}
+
+void Dialog_2::OnBnClickedWrapEnable()
+{
+	if (!wrap_supported || wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+		return;
+
+	CcczEditor2View* pView = (CcczEditor2View*)(((CMainFrame*)AfxGetMainWnd())->MDIGetActive()->GetActiveView());
+	if (pView == nullptr)
+		return;
+
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(pView->cur_code, wrap_history_mode));
+	wrap_updating = true;
+	ApplyWrapToEdit(edit1, limit);
+	wrap_updating = false;
+}
+
+void Dialog_2::OnEnChangeWrapText()
+{
+	if (!wrap_supported || wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+		return;
+
+	CcczEditor2View* pView = (CcczEditor2View*)(((CMainFrame*)AfxGetMainWnd())->MDIGetActive()->GetActiveView());
+	if (pView == nullptr)
+		return;
+
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(pView->cur_code, wrap_history_mode));
+	wrap_updating = true;
+	ApplyWrapToEdit(edit1, limit);
+	wrap_updating = false;
 }
 BEGIN_MESSAGE_MAP(Dialog_4, myDialog)
 	ON_BN_CLICKED(IDOK, &Dialog_4::OnBnClickedOk)
@@ -2638,6 +3040,7 @@ BOOL Dialog_6::OnInitDialog()
 		per[i] = data->int_data[i + 2 - off];
 	//ComboAddPer(combo1);
 	for (int i = 0; i < 5121; i++)combo1.AddString(pView->per1[i]);
+	combo1.EnablePersonSearch();
 
 	list1.SetCurSel(0);
 	OnLbnSelchangeList1();
@@ -2859,6 +3262,7 @@ BOOL Dialog_18::OnInitDialog()
 
 	edit1.SetWindowTextW(str);
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 	return TRUE;
@@ -2878,7 +3282,8 @@ void Dialog_18::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!StoreLongCharDataOrReport(data, str))
+		return;
 
 	int list = combo1.GetCurSel();
 	data->int_data[0] = Per2List2Code(list);
@@ -2889,6 +3294,8 @@ void Dialog_18::OnBnClickedOk()
 
 BEGIN_MESSAGE_MAP(Dialog_21, myDialog)
 	ON_BN_CLICKED(IDOK, &Dialog_21::OnBnClickedOk)
+	ON_BN_CLICKED(IDC_WRAP_ENABLE, &Dialog_21::OnBnClickedWrapEnable)
+	ON_EN_CHANGE(IDC_EDIT1, &Dialog_21::OnEnChangeWrapText)
 END_MESSAGE_MAP()
 
 BOOL Dialog_21::OnInitDialog()
@@ -2907,13 +3314,27 @@ BOOL Dialog_21::OnInitDialog()
 	}
 
 	edit1.SetWindowTextW(str);
+	SetLongTextInputLimit(edit1);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 	code = pView->cur_data.int_data[1];
 	combo2.SetCurSel(Per2Code2List(code));
+
+	ConfigureWrapControls(this, true, false);
+	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(21, false, true) ? BST_CHECKED : BST_UNCHECKED);
+	const int limit = ccz::text_wrap::LoadLimit(21, false);
+	SetWrapLimitText(wrap_bytes, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+	{
+		wrap_updating = true;
+		ApplyWrapToEdit(edit1, limit);
+		wrap_updating = false;
+	}
 	return TRUE;
 }
 
@@ -2924,6 +3345,14 @@ void Dialog_21::OnBnClickedOk()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 	CString str;
 	edit1.GetWindowTextW(str);
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(21, false));
+	SetWrapLimitText(wrap_bytes, limit);
+	const bool wrapEnabled = wrap_enable.GetCheck() == BST_CHECKED;
+	if (wrapEnabled)
+		str = ApplyAutoWrapForStorage(str, limit);
 	for (int i = 0; i < str.GetLength(); i++)
 	{
 		if (str[i] == '\r') {
@@ -2931,7 +3360,9 @@ void Dialog_21::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!StoreLongCharDataOrReport(data, str)) return;
+	ccz::text_wrap::SaveLimit(21, false, limit);
+	ccz::text_wrap::SaveEnabled(21, false, wrapEnabled);
 
 	int list = combo1.GetCurSel();
 	data->int_data[0] = Per2List2Code(list);
@@ -2940,6 +3371,34 @@ void Dialog_21::OnBnClickedOk()
 
 	pView->UpdateShow(pView->cur_item);
 	pView->GetDocument()->OnModified(TRUE);CDialogEx::OnOK();
+}
+
+void Dialog_21::OnBnClickedWrapEnable()
+{
+	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+		return;
+
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(21, false));
+	wrap_updating = true;
+	ApplyWrapToEdit(edit1, limit);
+	wrap_updating = false;
+}
+
+void Dialog_21::OnEnChangeWrapText()
+{
+	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+		return;
+
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(21, false));
+	wrap_updating = true;
+	ApplyWrapToEdit(edit1, limit);
+	wrap_updating = false;
 }
 
 BEGIN_MESSAGE_MAP(Dialog_27, myDialog)
@@ -2954,6 +3413,7 @@ BOOL Dialog_27::OnInitDialog()
 	SetWindowTextW(pView->code[pView->cur_code]);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	combo2.AddString(L"false");
 	combo2.AddString(L"true");
 	int code = pView->cur_data.int_data[0];
@@ -3262,6 +3722,7 @@ BOOL Dialog_37::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -3313,6 +3774,7 @@ BOOL Dialog_38::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -3431,6 +3893,7 @@ BOOL Dialog_43::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 	return 0;
@@ -3452,6 +3915,8 @@ void Dialog_43::OnBnClickedOk()
 
 BEGIN_MESSAGE_MAP(Dialog_44, myDialog)
 	ON_BN_CLICKED(IDOK, &Dialog_44::OnBnClickedOk)
+	ON_BN_CLICKED(IDC_WRAP_ENABLE, &Dialog_44::OnBnClickedWrapEnable)
+	ON_EN_CHANGE(IDC_EDIT1, &Dialog_44::OnEnChangeWrapText)
 END_MESSAGE_MAP()
 
 BOOL Dialog_44::OnInitDialog()
@@ -3469,11 +3934,23 @@ BOOL Dialog_44::OnInitDialog()
 	}
 
 	edit1.SetWindowTextW(str);
+	SetLongTextInputLimit(edit1);
 	SetWindowTextW(pView->code[pView->cur_code]);
 
 	check1.SetCheck(pView->cur_data.int_data[0]);
 	check2.SetCheck(pView->cur_data.int_data[1]);
 	check3.SetCheck(pView->cur_data.int_data[2]);
+
+	ConfigureWrapControls(this, true, false);
+	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(44, false, true) ? BST_CHECKED : BST_UNCHECKED);
+	const int limit = ccz::text_wrap::LoadLimit(44, false);
+	SetWrapLimitText(wrap_bytes, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+	{
+		wrap_updating = true;
+		ApplyWrapToEdit(edit1, limit);
+		wrap_updating = false;
+	}
 	return TRUE;
 }
 
@@ -3484,6 +3961,14 @@ void Dialog_44::OnBnClickedOk()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 	CString str;
 	edit1.GetWindowTextW(str);
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(44, false));
+	SetWrapLimitText(wrap_bytes, limit);
+	const bool wrapEnabled = wrap_enable.GetCheck() == BST_CHECKED;
+	if (wrapEnabled)
+		str = ApplyAutoWrapForStorage(str, limit);
 	for (int i = 0; i < str.GetLength(); i++)
 	{
 		if (str[i] == '\r') {
@@ -3491,7 +3976,9 @@ void Dialog_44::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!StoreLongCharDataOrReport(data, str)) return;
+	ccz::text_wrap::SaveLimit(44, false, limit);
+	ccz::text_wrap::SaveEnabled(44, false, wrapEnabled);
 
 	data->int_data[0] = check1.GetCheck();
 	data->int_data[1] = check2.GetCheck();
@@ -3499,6 +3986,34 @@ void Dialog_44::OnBnClickedOk()
 
 	pView->UpdateShow(pView->cur_item);
 	pView->GetDocument()->OnModified(TRUE);CDialogEx::OnOK();
+}
+
+void Dialog_44::OnBnClickedWrapEnable()
+{
+	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+		return;
+
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(44, false));
+	wrap_updating = true;
+	ApplyWrapToEdit(edit1, limit);
+	wrap_updating = false;
+}
+
+void Dialog_44::OnEnChangeWrapText()
+{
+	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+		return;
+
+	CString limitText;
+	wrap_bytes.GetWindowTextW(limitText);
+	const int limit = ccz::text_wrap::ParseLimit(
+		limitText, ccz::text_wrap::DefaultLimit(44, false));
+	wrap_updating = true;
+	ApplyWrapToEdit(edit1, limit);
+	wrap_updating = false;
 }
 
 BEGIN_MESSAGE_MAP(Dialog_46, myDialog)
@@ -3519,6 +4034,8 @@ BOOL Dialog_46::OnInitDialog()
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
+	combo2.EnablePersonSearch();
 	int code = data->int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 	code = data->int_data[1];
@@ -3560,6 +4077,7 @@ BOOL Dialog_48::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -3624,6 +4142,7 @@ BOOL Dialog_49::OnInitDialog()
 	combo1.SetCurSel(data->int_data[0]);
 
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = pView->cur_data.int_data[1];
 	combo2.SetCurSel(Per2Code2List(code));
 
@@ -3710,6 +4229,7 @@ BOOL Dialog_50::OnInitDialog()
 	combo1.SetCurSel(data->int_data[0] == 1 ? 1 : 0);
 
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = pView->cur_data.int_data[1];
 	combo2.SetCurSel(Per2Code2List(code));
 
@@ -3785,6 +4305,7 @@ BOOL Dialog_51::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -3829,6 +4350,7 @@ BOOL Dialog_52::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -3868,6 +4390,7 @@ BOOL Dialog_53::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -3912,6 +4435,7 @@ BOOL Dialog_54::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -4012,6 +4536,7 @@ BOOL Dialog_56::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -4112,6 +4637,7 @@ BOOL Dialog_59::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -4166,6 +4692,7 @@ BOOL Dialog_60::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -4207,6 +4734,7 @@ BOOL Dialog_61::OnInitDialog()
 
 	for (int i = 0; i < 256 * (1 + (int)pView->extend); i++)combo1.AddString(pView->item[i]);
 	combo1.SetCurSel(data->int_data[0] >= 0 ? data->int_data[0] : 255);
+	combo1.EnableItemSearch();
 
 	/*combo2.AddString(L"默认等级");
 	wchar_t show[10];
@@ -4225,6 +4753,7 @@ BOOL Dialog_61::OnInitDialog()
 	check1.SetCheck(data->int_data[2]);
 
 	for (int i = 0; i < 5375; i++)combo3.AddString(pView->per2[i]);
+	combo3.EnablePersonSearch();
 	int code = pView->cur_data.int_data[3];
 	combo3.SetCurSel(Per2Code2List(code));
 	return 0;
@@ -4266,20 +4795,24 @@ BOOL Dialog_62::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
 	combo2.AddString(L"默认装备"); combo2.AddString(L"卸去装备");
 	for (int i = 0; i < pView->set_weapon; i++) combo2.AddString(pView->item[i]);
 	combo2.SetCurSel(max(0, data->int_data[1]));
+	combo2.EnableItemSegmentSearch(0);
 
 	combo4.AddString(L"默认装备"); combo4.AddString(L"卸去装备");
 	for (int i = 0; i < pView->set_armor; i++) combo4.AddString(pView->item[pView->set_weapon + i]);
 	combo4.SetCurSel(max(0, data->int_data[3]));
+	combo4.EnableItemSegmentSearch(pView->set_weapon);
 
 	combo6.AddString(L"默认装备"); combo6.AddString(L"卸去装备");
 	for (int i = 0; i < pView->set_product; i++) combo6.AddString(pView->item[pView->set_weapon + pView->set_armor + i]);
 	combo6.SetCurSel(max(0, data->int_data[5]));
+	combo6.EnableItemSegmentSearch(pView->set_weapon + pView->set_armor);
 
 	combo3.AddString(L"默认"); combo5.AddString(L"默认");
 	wchar_t show[10];
@@ -4524,6 +5057,8 @@ BOOL Dialog_69::OnInitDialog()
 		combo2.AddString(pView->per2[i]);
 		combo3.AddString(pView->per2[i]);
 	}
+	combo2.EnablePersonSearch();
+	combo3.EnablePersonSearch();
 	combo2.SetCurSel(Per2Code2List(pView->cur_data.int_data[5]));
 
 	wcscpy_s(show, L"");
@@ -4624,6 +5159,8 @@ BOOL Dialog_70::OnInitDialog()
 		combo1.AddString(pView->per2[i]);
 		combo6.AddString(pView->per2[i]);
 	}
+	combo1.EnablePersonSearch();
+	combo6.EnablePersonSearch();
 
 	for (int i = 0; i < 5; i++) combo2.AddString(pView->dir[i]);
 
@@ -4845,6 +5382,7 @@ BOOL Dialog_76::OnInitDialog()
 	combo1.SetCurSel(data->int_data[0]);
 
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = pView->cur_data.int_data[1];
 	combo2.SetCurSel(Per2Code2List(code));
 
@@ -4904,6 +5442,7 @@ BOOL Dialog_77::OnInitDialog()
 	combo1.SetCurSel(data->int_data[0]);
 
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = pView->cur_data.int_data[1];
 	combo2.SetCurSel(Per2Code2List(code));
 
@@ -5047,6 +5586,8 @@ BOOL Dialog_78::OnInitDialog()
 		combo2.AddString(pView->per2[i]);
 		combo5.AddString(pView->per2[i]);
 	}
+	combo2.EnablePersonSearch();
+	combo5.EnablePersonSearch();
 	int code = pView->cur_data.int_data[1];
 	combo2.SetCurSel(Per2Code2List(code));
 
@@ -5163,7 +5704,9 @@ BOOL Dialog_79::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = data->int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 	code = data->int_data[1];
@@ -5215,6 +5758,7 @@ BOOL Dialog_80::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = data->int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -5260,6 +5804,7 @@ BOOL Dialog_82::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -5302,6 +5847,7 @@ BOOL Dialog_83::OnInitDialog()
 	combo1.SetCurSel(data->int_data[0]);
 
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = pView->cur_data.int_data[1];
 	combo2.SetCurSel(Per2Code2List(code));
 
@@ -5494,6 +6040,9 @@ BOOL Dialog_89::OnInitDialog()
 		combo3.AddString(pView->item[i]);
 		combo5.AddString(pView->item[i]);
 	}
+	combo1.EnableItemSearch();
+	combo3.EnableItemSearch();
+	combo5.EnableItemSearch();
 	combo1.SetCurSel(data->int_data[1] >= 0 ? data->int_data[1] : 255);
 	combo3.SetCurSel(data->int_data[3] >= 0 ? data->int_data[3] : 255);
 	combo5.SetCurSel(data->int_data[5] >= 0 ? data->int_data[5] : 255);
@@ -5690,8 +6239,6 @@ void Dialog_96::OnBnClickedOk()
 	CTreeCtrl& m_TreeCtrl = pView->GetTreeCtrl();
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
-	data->int_data[0] = check1.GetCheck();
-
 	CString str;
 	edit1.GetWindowTextW(str);
 	for (int i = 0; i < str.GetLength(); i++)
@@ -5701,7 +6248,10 @@ void Dialog_96::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!StoreLongCharDataOrReport(data, str))
+		return;
+
+	data->int_data[0] = check1.GetCheck();
 
 	data->int_data[1] = combo1.GetCurSel();
 
@@ -5744,9 +6294,6 @@ void Dialog_99::OnBnClickedOk()
 	CTreeCtrl& m_TreeCtrl = pView->GetTreeCtrl();
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
-	data->int_data[0] = check1.GetCheck();
-	data->int_data[1] = check2.GetCheck();
-
 	CString str;
 	edit1.GetWindowTextW(str);
 	for (int i = 0; i < str.GetLength(); i++)
@@ -5756,7 +6303,11 @@ void Dialog_99::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!StoreLongCharDataOrReport(data, str))
+		return;
+
+	data->int_data[0] = check1.GetCheck();
+	data->int_data[1] = check2.GetCheck();
 
 	pView->UpdateShow(pView->cur_item);
 	pView->GetDocument()->OnModified(TRUE);CDialogEx::OnOK();
@@ -5905,8 +6456,6 @@ void Dialog_103::OnBnClickedOk()
 	CString str; int num = 0;
 	edit1.GetWindowTextW(str);
 	num = CString2Int(str);
-	data->int_data[0] = num;
-
 	edit2.GetWindowTextW(str);
 	for (int i = 0; i < str.GetLength(); i++)
 	{
@@ -5915,7 +6464,10 @@ void Dialog_103::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!StoreLongCharDataOrReport(data, str))
+		return;
+
+	data->int_data[0] = num;
 
 	pView->UpdateShow(pView->cur_item);
 	pView->GetDocument()->OnModified(TRUE);CDialogEx::OnOK();
@@ -5937,7 +6489,9 @@ BOOL Dialog_104::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = data->int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 	code = data->int_data[1];
@@ -6056,6 +6610,8 @@ BOOL Dialog_109::OnInitDialog()
 		combo2.AddString(pView->per2[i]);
 		combo3.AddString(pView->per2[i]);
 	}
+	combo2.EnablePersonSearch();
+	combo3.EnablePersonSearch();
 	combo2.SetCurSel(Per2Code2List(data->int_data[1]));
 	combo3.SetCurSel(Per2Code2List(data->int_data[3]));
 
@@ -6135,6 +6691,7 @@ BOOL Dialog_111::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 256; i++)combo1.AddString(pView->item[i]);
+	combo1.EnableItemSearch();
 	combo1.SetCurSel(data->int_data[0] < 255 ? data->int_data[0] : 255);
 	return 0;
 }
@@ -6169,6 +6726,8 @@ BOOL Dialog_112::OnInitDialog()
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
+	combo2.EnablePersonSearch();
 	int code = data->int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 	code = data->int_data[1];
@@ -6345,8 +6904,6 @@ void Dialog_114::OnBnClickedOk()
 	CString str; int num = 0;
 	edit1.GetWindowTextW(str);
 	num = CString2Int(str);
-	data->int_data[0] = num;
-
 	edit2.GetWindowTextW(str);
 	for (int i = 0; i < str.GetLength(); i++)
 	{
@@ -6355,7 +6912,10 @@ void Dialog_114::OnBnClickedOk()
 			i++;
 		}
 	}
-	wcscpy_s(data->long_char_data, 3000, str);
+	if (!StoreLongCharDataOrReport(data, str))
+		return;
+
+	data->int_data[0] = num;
 
 	pView->UpdateShow(pView->cur_item);
 	pView->GetDocument()->OnModified(TRUE); CDialogEx::OnOK();
@@ -6376,6 +6936,7 @@ BOOL Dialog_115::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	for (int i = 0; i < 5375; i++)combo1.AddString(pView->per2[i]);
+	combo1.EnablePersonSearch();
 	int code = pView->cur_data.int_data[0];
 	combo1.SetCurSel(Per2Code2List(code));
 
@@ -6503,6 +7064,7 @@ BOOL Dialog_120::OnInitDialog()
 	combo1.SetCurSel(data->int_data[1]);
 
 	for (int i = 0; i < 5375; i++)combo2.AddString(pView->per2[i]);
+	combo2.EnablePersonSearch();
 	int code = pView->cur_data.int_data[2];
 	combo2.SetCurSel(Per2Code2List(code));
 
@@ -6909,8 +7471,14 @@ void recur_copy(HTREEITEM cur, ItemData* des, CcczEditor2View* pView, int depth)
 		des->id = p->id;
 		for (int i = 0; i < p->int_data.size(); i++) des->int_data[i] = p->int_data[i];
 		if (p->long_char_data != NULL) {
-			des->long_char_data = new wchar_t[3000];
-			wcscpy_s(des->long_char_data, 3000, p->long_char_data);
+			const std::size_t sourceCapacity = (std::max)(
+				ccz::editor::kLongCharDataCapacity,
+				p->long_char_data_capacity);
+			ccz::editor::ReplaceLongCharData(
+				des->long_char_data,
+				des->long_char_data_capacity,
+				p->long_char_data,
+				sourceCapacity);
 		}
 	}
 	HTREEITEM child = tree.GetChildItem(cur);
@@ -6982,8 +7550,14 @@ void recur_paste(HTREEITEM cur, ItemData* src, CcczEditor2View* pView)
 	ItemData* p = (ItemData*)tree.GetItemData(cur);
 	for (int i = 0; i < src->int_data.size(); i++) p->int_data[i] = src->int_data[i];
 	if (src->long_char_data != NULL) {
-		p->long_char_data = new wchar_t[3000];
-		wcscpy_s(p->long_char_data, 3000, src->long_char_data);
+		const std::size_t sourceCapacity = (std::max)(
+			ccz::editor::kLongCharDataCapacity,
+			src->long_char_data_capacity);
+		ccz::editor::ReplaceLongCharData(
+			p->long_char_data,
+			p->long_char_data_capacity,
+			src->long_char_data,
+			sourceCapacity);
 	}
 	pView->UpdateShow(cur);
 
@@ -7268,8 +7842,14 @@ void recur_move(HTREEITEM cur, HTREEITEM src, CcczEditor2View* pView, int depth)
 	for (int i = 0; i < data_src->int_data.size(); i++) p->int_data[i] = data_src->int_data[i];
 	p->ord = data_src->ord;
 	if (data_src->long_char_data != NULL) {
-		p->long_char_data = new wchar_t[3000];
-		wcscpy_s(p->long_char_data, 3000, data_src->long_char_data);
+		const std::size_t sourceCapacity = (std::max)(
+			ccz::editor::kLongCharDataCapacity,
+			data_src->long_char_data_capacity);
+		ccz::editor::ReplaceLongCharData(
+			p->long_char_data,
+			p->long_char_data_capacity,
+			data_src->long_char_data,
+			sourceCapacity);
 	}
 	pView->UpdateShow(cur);
 
@@ -7434,12 +8014,37 @@ void CcczEditor2View::OnEditBatch()
 	Dialog_Edit dialog;
 	dialog.DoModal();
 }
-
+void CcczEditor2View::SelectPlaybackItem(HTREEITEM item,
+	bool suppress_preview_refresh)
+{
+	CTreeCtrl& tree = GetTreeCtrl();
+	if (item == nullptr || tree.GetSafeHwnd() == nullptr ||
+		!::IsWindow(tree.GetSafeHwnd())) {
+		return;
+	}
+	TVITEM itemInfo{};
+	itemInfo.mask = TVIF_HANDLE;
+	itemInfo.hItem = item;
+	if (!TreeView_GetItem(tree.GetSafeHwnd(), &itemInfo)) return;
+	if (tree.GetSelectedItem() == item) {
+		cur_item = item;
+		return;
+	}
+	m_suppressPreviewRefreshOnce = suppress_preview_refresh;
+	tree.SelectItem(item);
+	cur_item = item;
+	// MFC normally dispatches TVN_SELCHANGED synchronously from SelectItem.
+	// Clear the guard here as a safety net for tree implementations that do
+	// not emit the notification (or emit it after the call returns).
+	m_suppressPreviewRefreshOnce = false;
+}
 
 void CcczEditor2View::OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult)
 {
 	LPNMTREEVIEW pNMTreeView = reinterpret_cast<LPNMTREEVIEW>(pNMHDR);
 	// TODO: 在此添加控件通知处理程序代码
+	const bool suppress_preview_refresh = m_suppressPreviewRefreshOnce;
+	m_suppressPreviewRefreshOnce = false;
 	cur_item = GetTreeCtrl().GetSelectedItem();
 	ItemData* data = (ItemData*)GetTreeCtrl().GetItemData(cur_item);
 	if (data) {
@@ -7448,13 +8053,22 @@ void CcczEditor2View::OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult)
 		wcscpy_s(show, L"id:");
 		wcscat_s(show, std::to_wstring(data->ord).c_str());
 		pFrame->m_wndStatusBar.SetPaneText(0, show);
-
-		// 更新场景预览
-		pFrame->m_wndScenePreview.InitCharList(per2);
-		pFrame->m_wndScenePreview.UpdatePreview(
-			GetTreeCtrl(), cur_item, GetDocument()->pathName);
+	}
+	// Root/document selections have no ItemData but are valid idle preview
+	// input; always route selection changes through the single coordinator.
+	if (!suppress_preview_refresh && !m_suppressBattleWritebackPreview) {
+		RefreshScenePreview();
 	}
 	*pResult = 0;
+}
+
+void CcczEditor2View::RefreshScenePreview()
+{
+	CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
+	if (frame == nullptr || cur_item == nullptr) return;
+	frame->m_wndScenePreview.RequestPreviewRefresh(
+		GetTreeCtrl(), cur_item, GetDocument()->pathName);
+	frame->m_wndScenePreview.InitCharList(per2);
 }
 
 BOOL CcczEditor2View::PreTranslateMessage(MSG* pMsg)

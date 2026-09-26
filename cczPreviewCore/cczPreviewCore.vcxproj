@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <ProjectGuid>{3EF31258-CF86-4C0D-9AA6-93F4C2B6EBD5}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>cczPreviewCore</RootNamespace>
+    <ProjectName>cczPreviewCore</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <PreviewCoreCompilerArchitecture>x86</PreviewCoreCompilerArchitecture>
+    <PreviewCoreLibMachine>X86</PreviewCoreLibMachine>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+    <PreviewCoreCompilerArchitecture>x86</PreviewCoreCompilerArchitecture>
+    <PreviewCoreLibMachine>X86</PreviewCoreLibMachine>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <PreviewCoreCompilerArchitecture>x64</PreviewCoreCompilerArchitecture>
+    <PreviewCoreLibMachine>X64</PreviewCoreLibMachine>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+    <PreviewCoreCompilerArchitecture>x64</PreviewCoreCompilerArchitecture>
+    <PreviewCoreLibMachine>X64</PreviewCoreLibMachine>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ccz\preview\dialogue_profile.h" />
+    <ClInclude Include="include\ccz\preview\dialogue_model.h" />
+    <ClInclude Include="include\ccz\preview\face_archive.h" />
+    <ClInclude Include="include\ccz\preview\portrait_resolver.h" />
+    <ClInclude Include="include\ccz\preview\dialogue_overlay_model.h" />
+    <ClInclude Include="include\ccz\preview\portrait_overlay.h" />
+    <ClInclude Include="include\ccz\preview\dialogue_replay.h" />
+    <ClInclude Include="include\ccz\preview\condition_tree.h" />
+    <ClInclude Include="include\ccz\preview\native_replay_plan.h" />
+    <ClInclude Include="include\ccz\preview\execution_model.h" />
+    <ClInclude Include="include\ccz\preview\script_variable_index.h" />
+    <ClInclude Include="include\ccz\preview\instruction_catalog.h" />
+    <ClInclude Include="include\ccz\preview\condition_tree_state.h" />
+    <ClInclude Include="include\ccz\preview\variable_control_state.h" />
+    <ClInclude Include="include\ccz\preview\playback_timeline.h" />
+    <ClInclude Include="include\ccz\preview\battle_mode_classifier.h" />
+    <ClInclude Include="include\ccz\preview\battle_preview.h" />
+    <ClInclude Include="include\ccz\preview\battle_hexzmap.h" />
+    <ClInclude Include="include\ccz\preview\battle_instruction_parser.h" />
+    <ClInclude Include="include\ccz\preview\battle_field_spec.h" />
+    <ClInclude Include="include\ccz\preview\battle_interaction.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\dialogue_profile.cpp" />
+    <ClCompile Include="src\dialogue_model.cpp" />
+    <ClCompile Include="src\face_archive.cpp" />
+    <ClCompile Include="src\portrait_resolver.cpp" />
+    <ClCompile Include="src\dialogue_overlay_model.cpp" />
+    <ClCompile Include="src\portrait_overlay.cpp" />
+    <ClCompile Include="src\dialogue_replay.cpp" />
+    <ClCompile Include="src\condition_tree.cpp" />
+    <ClCompile Include="src\native_replay_plan.cpp" />
+    <ClCompile Include="src\execution_model.cpp" />
+    <ClCompile Include="src\script_variable_index.cpp" />
+    <ClCompile Include="src\instruction_catalog.cpp" />
+    <ClCompile Include="src\condition_tree_state.cpp" />
+    <ClCompile Include="src\variable_control_state.cpp" />
+    <ClCompile Include="src\playback_timeline.cpp" />
+    <ClCompile Include="src\battle_mode_classifier.cpp" />
+    <ClCompile Include="src\battle_preview.cpp" />
+    <ClCompile Include="src\battle_hexzmap.cpp" />
+    <ClCompile Include="src\battle_instruction_parser.cpp" />
+    <ClCompile Include="src\battle_field_spec.cpp" />
+    <ClCompile Include="src\battle_interaction.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

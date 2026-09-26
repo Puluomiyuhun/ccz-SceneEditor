@@ -11,6 +11,7 @@
 #endif
 
 #include "cczEditor2Doc.h"
+#include "LongCharData.h"
 
 #include <propkey.h>
 #include <string>
@@ -306,8 +307,9 @@ void CcczEditor2Doc::recur_close(HTREEITEM cur,CTreeCtrl & tree, bool del)
 {
 	ItemData* p = (ItemData*)tree.GetItemData(cur);
 	if (p != NULL) {
-		if (p->long_char_data != NULL)
-			delete p->long_char_data;
+		ccz::editor::ReleaseLongCharData(
+			p->long_char_data,
+			p->long_char_data_capacity);
 		delete p;
 	}
 	HTREEITEM child = tree.GetChildItem(cur);
@@ -347,14 +349,17 @@ void CcczEditor2Doc::Serialize(CArchive& ar)
 
 void CcczEditor2Doc::recur_export(HTREEITEM cur, CTreeCtrl& tree, int depth, CFile& f)
 {
-	POSITION vp = GetFirstViewPosition();
-	CcczEditor2View* pView = (CcczEditor2View*)GetNextView(vp);
 	if (cur != NULL) {
 		for (int i = 0; i < depth; i++) f.Write("\t", 1);
-		char tmp[3000];
-		int len = WideCharToMultiByte(936, 0, tree.GetItemText(cur), -1, NULL, 0, NULL, FALSE);
-		WideCharToMultiByte(936, 0, tree.GetItemText(cur), -1, tmp, len, NULL, FALSE);
-		f.Write(tmp, len);
+		const CString text = tree.GetItemText(cur);
+		const int required = WideCharToMultiByte(
+			936, 0, text, -1, NULL, 0, NULL, FALSE);
+		if (required > 0) {
+			std::vector<char> encoded(static_cast<std::size_t>(required));
+			const int written = WideCharToMultiByte(
+				936, 0, text, -1, encoded.data(), required, NULL, FALSE);
+			if (written > 1) f.Write(encoded.data(), written - 1);
+		}
 		f.Write("\n", 1);
 	}
 	HTREEITEM child = tree.GetChildItem(cur);
@@ -1233,12 +1238,19 @@ bool CcczEditor2Doc::AddInstruction(int afterOrd, int instructionId, const int* 
 
 	// 复制文本参数
 	if (text != NULL && wcslen(text) > 0) {
-		if (newData->long_char_data != NULL) {
-			delete[] newData->long_char_data;
+		if (!ccz::editor::ReplaceLongCharData(
+			newData->long_char_data,
+			newData->long_char_data_capacity,
+			text,
+			ccz::editor::kLongCharDataCapacity)) {
+			ccz::editor::ReleaseLongCharData(
+				newData->long_char_data,
+				newData->long_char_data_capacity);
+			delete newData;
+			AfxMessageBox(L"文本过长，超过编辑器支持的 2999 个 UTF-16 字符上限。",
+				MB_OK | MB_ICONWARNING);
+			return false;
 		}
-		int len = (int)wcslen(text) + 1;
-		newData->long_char_data = new wchar_t[len];
-		wcscpy_s(newData->long_char_data, len, text);
 	}
 
 	// 分配新的ord
@@ -1377,12 +1389,17 @@ static int RecurAddInstructionFromJson(CcczEditor2View* pView, CTreeCtrl& tree, 
 		if (instrJson.contains("text") && instrJson["text"].is_string()) {
 			std::wstring text = Utf8ToWide(instrJson["text"].get<std::string>());
 			if (!text.empty()) {
-				if (newData->long_char_data != NULL) {
-					delete[] newData->long_char_data;
+				if (!ccz::editor::ReplaceLongCharData(
+					newData->long_char_data,
+					newData->long_char_data_capacity,
+					text.c_str(),
+					ccz::editor::kLongCharDataCapacity)) {
+					ccz::editor::ReleaseLongCharData(
+						newData->long_char_data,
+						newData->long_char_data_capacity);
+					delete newData;
+					return 0;
 				}
-				int len = (int)text.length() + 1;
-				newData->long_char_data = new wchar_t[len];
-				wcscpy_s(newData->long_char_data, len, text.c_str());
 			}
 		}
 
@@ -2125,32 +2142,40 @@ void CcczEditor2Doc::StartHttpServer(int port)
 						toolResult["text"] = "错误: 找不到ord=" + std::to_string(ord) + "的指令";
 						isError = true;
 					}
-					else {
-						ItemData* data = (ItemData*)tree.GetItemData(item);
+			else {
+				ItemData* data = (ItemData*)tree.GetItemData(item);
 
-						if (args.contains("intData") && args["intData"].is_array()) {
-							auto newData = args["intData"].get<std::vector<int>>();
-							int cnt = min((int)newData.size(), (int)data->int_data.size());
-							for (int i = 0; i < cnt; i++)
-								data->int_data[i] = newData[i];
-						}
-						if (args.contains("text")) {
-							std::string textUtf8 = args["text"].get<std::string>();
-							std::wstring text = Utf8ToWide(textUtf8);
-							if (data->long_char_data) delete[] data->long_char_data;
-							int len = (int)text.size() + 1;
-							data->long_char_data = new wchar_t[len];
-							wcscpy_s(data->long_char_data, len, text.c_str());
-						}
+				std::wstring replacementText;
+				bool textUpdateOk = true;
+				if (args.contains("text")) {
+					std::string textUtf8 = args["text"].get<std::string>();
+					replacementText = Utf8ToWide(textUtf8);
+					textUpdateOk = ccz::editor::ReplaceLongCharData(
+						data->long_char_data,
+						data->long_char_data_capacity,
+						replacementText.c_str(),
+						ccz::editor::kLongCharDataCapacity);
+				}
 
-						pView->UpdateShow(item);
-						this->OnModified(TRUE);
-
-						json out;
-						out["success"] = true;
-						out["message"] = "指令修改成功";
-						toolResult["text"] = out.dump();
+				json out;
+				if (!textUpdateOk) {
+					out["success"] = false;
+					out["message"] = "文本过长，超过编辑器支持的 2999 个 UTF-16 字符上限";
+				}
+				else {
+					if (args.contains("intData") && args["intData"].is_array()) {
+						auto newData = args["intData"].get<std::vector<int>>();
+						int cnt = min((int)newData.size(), (int)data->int_data.size());
+						for (int i = 0; i < cnt; i++)
+							data->int_data[i] = newData[i];
 					}
+					pView->UpdateShow(item);
+					this->OnModified(TRUE);
+					out["success"] = true;
+					out["message"] = "指令修改成功";
+				}
+				toolResult["text"] = out.dump();
+			}
 				}
 				else if (toolName == "delete_instruction") {
 					int ord = args.value("ord", -1);
@@ -2170,11 +2195,13 @@ void CcczEditor2Doc::StartHttpServer(int port)
 								recurDelete(child);
 								child = next;
 							}
-							ItemData* d = (ItemData*)tree.GetItemData(h);
-							if (d) {
-								if (d->long_char_data) delete[] d->long_char_data;
-								delete d;
-							}
+			ItemData* d = (ItemData*)tree.GetItemData(h);
+			if (d) {
+				ccz::editor::ReleaseLongCharData(
+					d->long_char_data,
+					d->long_char_data_capacity);
+				delete d;
+			}
 						};
 						recurDelete(item);
 						tree.DeleteItem(item);

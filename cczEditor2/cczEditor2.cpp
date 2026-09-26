@@ -10,6 +10,7 @@
 #include "MainFrm.h"
 
 #include "ChildFrm.h"
+#include "LongCharData.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -172,7 +173,9 @@ void CcczEditor2App::deleteCopy(ItemData* data)
 	deleteCopy(data->child);
 	deleteCopy(data->bro);
 
-	if (data->long_char_data != NULL)delete data->long_char_data;
+	ccz::editor::ReleaseLongCharData(
+		data->long_char_data,
+		data->long_char_data_capacity);
 	delete data;
 }
 

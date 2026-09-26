@@ -257,12 +257,13 @@ BOOL CMainFrame::CreateDockingWindows()
 	CString strScenePreview;
 	bNameValid = strScenePreview.LoadString(IDS_SCENE_PREVIEW);
 	ASSERT(bNameValid);
+	// The dock pane hosts independent R and S child pages.  Battle scrollbars
+	// are owned by the S page rather than by this shared docking host.
 	if (!m_wndScenePreview.Create(strScenePreview, this, CRect(0, 0, 660, 420), TRUE, ID_VIEW_SCENEPREVIEW, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | CBRS_BOTTOM | CBRS_FLOAT_MULTI))
 	{
 		TRACE0("Failed to create Scene Preview window\n");
 		return FALSE;
 	}
-
 	SetDockingWindowIcons(theApp.m_bHiColorIcons);
 	return TRUE;
 }

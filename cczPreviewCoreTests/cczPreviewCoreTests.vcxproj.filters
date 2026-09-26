@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="tests">
+      <UniqueIdentifier>{A0C09BF1-5DA5-4A1B-9DCE-8D7D6D5A8C92}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="tests\test_framework.h">
+      <Filter>tests</Filter>
+    </ClInclude>
+    <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleEditorOps.h"><Filter>tests</Filter></ClInclude>
+    <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleCharacterCatalog.h"><Filter>tests</Filter></ClInclude>
+    <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleWritebackAdapter.h"><Filter>tests</Filter></ClInclude>
+    <ClCompile Include="tests\test_main.cpp">
+      <Filter>tests</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\dialogue_profile_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\dialogue_model_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\face_archive_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\portrait_resolver_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\portrait_overlay_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\dialogue_replay_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\condition_tree_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\choice_default_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\native_replay_plan_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\execution_model_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\instruction_catalog_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\script_variable_index_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\variable_control_state_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\free_r_preview_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\free_r_replay_composer_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_mode_classifier_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_preview_adapter_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_coordinate_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_instruction_parser_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_field_spec_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_preview_state_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_interaction_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_writeback_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\tests\preview_integration\battle_editor_ops_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\tests\preview_integration\battle_character_catalog_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleWritebackAdapter.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleEditorOps.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleCharacterCatalog.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\EditorPreviewAdapter.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewAdapter.cpp"><Filter>tests</Filter></ClCompile>
+  </ItemGroup>
+</Project>

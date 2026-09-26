@@ -4,6 +4,7 @@
 #include <vector>
 #include <thread>
 #include <string>
+#include <cstddef>
 #pragma once
 
 // 前向声明
@@ -16,6 +17,7 @@ struct ItemData
 	int ord;
 	std::vector<int> int_data;
 	wchar_t* long_char_data = NULL;
+	std::size_t long_char_data_capacity = 0;
 	ItemData* child = NULL;
 	ItemData* bro = NULL;
 

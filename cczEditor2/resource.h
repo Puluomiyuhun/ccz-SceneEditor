@@ -213,6 +213,10 @@
 #define IDC_STATIC4                     1020
 #define IDC_SCENE_CHAR_SEARCH           1021
 #define IDC_SCENE_CHAR_LIST             1022
+#define IDC_WRAP_ENABLE                 1023
+#define IDC_WRAP_BYTES                  1024
+#define IDC_WRAP_MODE                   1025
+#define IDC_WRAP_BYTES_LABEL            1026
 #define IDS_SCENE_PREVIEW               309
 #define ID_VIEW_SCENEPREVIEW            390
 #define ID_SCENE_DIR_0                  40010
@@ -243,6 +247,24 @@
 #define ID_SCENE_MOVE                  40041
 #define ID_SCENE_ADJUST                40042
 #define ID_SCENE_TOGGLE_GRID           40043
+#define ID_SCENE_MULTI_ALIGN           40050
+#define ID_SCENE_MULTI_DISTRIBUTE       40051
+#define ID_SCENE_MULTI_MOVE             40052
+#define ID_SCENE_MULTI_DISAPPEAR        40053
+#define ID_SCENE_MULTI_SET_PRIMARY      40054
+#define ID_SCENE_PRIMARY_ALIGN_X        40055
+#define ID_SCENE_PRIMARY_ALIGN_Y        40056
+#define ID_SCENE_PRECISE_DISTRIBUTE_X   40057
+#define ID_SCENE_PRECISE_DISTRIBUTE_Y   40058
+#define ID_SCENE_MULTI_GROUP_MOVE       40059
+#define ID_SCENE_MULTI_POINT_MOVE       40060
+#define ID_SCENE_MULTI_REMOVE_SELECTED  40061
+#define ID_BATTLE_TEMP_RESET            40044
+#define ID_BATTLE_PAGE_NEXT             40045
+#define ID_BATTLE_CHARACTER_PAGE_NEXT  40046
+#define ID_BATTLE_MODIFY_UNAVAILABLE    40047
+#define ID_BATTLE_DELETE_UNAVAILABLE    40048
+#define ID_BATTLE_PAINT_UNAVAILABLE     40049
 #define ID_32771                        32771
 #define ID_32772                        32772
 #define ID_32773                        32773
@@ -294,8 +316,8 @@
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        391
-#define _APS_NEXT_COMMAND_VALUE         40044
-#define _APS_NEXT_CONTROL_VALUE         1023
+#define _APS_NEXT_COMMAND_VALUE         40062
+#define _APS_NEXT_CONTROL_VALUE         1027
 #define _APS_NEXT_SYMED_VALUE           311
 #endif
 #endif
