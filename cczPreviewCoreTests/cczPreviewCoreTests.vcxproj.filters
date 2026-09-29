@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClInclude Include="..\cczEditor2\PreviewIntegration\BattlePreviewSession.h"><Filter>tests</Filter></ClInclude>
+    <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleBitmapCachePolicy.h"><Filter>tests</Filter></ClInclude>
+    <ClInclude Include="..\cczPreviewCore\include\ccz\preview\r_document_session.h"><Filter>tests</Filter></ClInclude>
     <Filter Include="tests">
       <UniqueIdentifier>{A0C09BF1-5DA5-4A1B-9DCE-8D7D6D5A8C92}</UniqueIdentifier>
     </Filter>
@@ -31,6 +34,13 @@
     <ClCompile Include="tests\free_r_preview_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\free_r_replay_composer_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\battle_mode_classifier_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_quick_mode_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_preview_session_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_bitmap_cache_policy_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\r_document_session_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewSession.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleBitmapCachePolicy.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\battle_condition_tree_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\battle_preview_adapter_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\battle_coordinate_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\battle_instruction_parser_tests.cpp"><Filter>tests</Filter></ClCompile>
@@ -45,5 +55,7 @@
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleCharacterCatalog.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\EditorPreviewAdapter.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewAdapter.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleQuickModeResolver.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleConditionTreeAdapter.cpp"><Filter>tests</Filter></ClCompile>
   </ItemGroup>
 </Project>

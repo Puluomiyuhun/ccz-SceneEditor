@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,10 @@ struct BattleUnit {
 bool is_battle_field_dirty(const BattleUnit& unit, BattleFieldRole role);
 void mark_battle_field_dirty(BattleUnit& unit, BattleFieldRole role);
 bool is_battle_deployment_slot_marker(const BattleUnit& unit);
+// Resolve the Pro arm_kind used for appearance-0 faction variants from the
+// deployment instruction currently represented by this unit. Staged editor
+// placement takes precedence over its immutable source instruction.
+std::optional<int> battle_visual_arm_kind(const BattleUnit& unit) noexcept;
 
 struct BattlePreviewState {
     BattleMapInfo map;

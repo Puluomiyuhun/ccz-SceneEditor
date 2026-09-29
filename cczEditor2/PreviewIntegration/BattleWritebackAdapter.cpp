@@ -18,6 +18,27 @@ using ccz::preview::BattleFieldRole;
 using ccz::preview::BattleFieldSpec;
 using ccz::preview::BattleUnit;
 
+struct BattleInsertAnchorKey {
+    std::uintptr_t parent_handle{};
+    std::uintptr_t before_handle{};
+
+    bool operator==(const BattleInsertAnchorKey& other) const noexcept {
+        return parent_handle == other.parent_handle &&
+            before_handle == other.before_handle;
+    }
+};
+
+struct BattleInsertAnchorKeyHash {
+    std::size_t operator()(const BattleInsertAnchorKey& key) const noexcept {
+        const std::size_t parent_hash =
+            std::hash<std::uintptr_t>{}(key.parent_handle);
+        const std::size_t before_hash =
+            std::hash<std::uintptr_t>{}(key.before_handle);
+        return parent_hash ^ (before_hash + static_cast<std::size_t>(0x9e3779b9) +
+            (parent_hash << 6) + (parent_hash >> 2));
+    }
+};
+
 std::int32_t empty_sentinel(BattleFieldRole role) {
     switch (role) {
     case BattleFieldRole::DataId:
@@ -246,6 +267,8 @@ bool valid_native_source(const BattleWritebackSourceInstruction& source,
 struct PlannedNode {
     std::uint16_t instruction_id{};
     ccz::preview::LogicalNodeKey source_key;
+    ccz::preview::LogicalNodeKey insert_parent_key;
+    ccz::preview::LogicalNodeKey insert_before_key;
     int ordinal{-1};
     std::vector<std::int32_t> int_data;
     bool source_backed{};
@@ -345,6 +368,24 @@ const ccz::preview::RawReplayNode* find_raw_node(
         }
         if (const auto* child = find_raw_node(node.children, runtime_handle,
                                                matches)) {
+            found = child;
+        }
+    }
+    return found;
+}
+
+const ccz::preview::RawReplayNode* find_raw_node_by_key(
+    const std::vector<ccz::preview::RawReplayNode>& nodes,
+    const ccz::preview::LogicalNodeKey& logical_key,
+    std::size_t& matches) {
+    const ccz::preview::RawReplayNode* found = nullptr;
+    for (const auto& node : nodes) {
+        if (node.logical_key == logical_key) {
+            ++matches;
+            found = &node;
+        }
+        if (const auto* child = find_raw_node_by_key(
+                node.children, logical_key, matches)) {
             found = child;
         }
     }
@@ -508,7 +549,9 @@ bool BuildBattleWritebackSectionSnapshot(
     const BattlePreviewCapture& baseline,
     const BattlePreviewCapture& current,
     BattleWritebackSectionSnapshot& output,
-    std::wstring& diagnostic) {
+    std::wstring& diagnostic,
+    BattleWritebackRevisionScope revision_scope,
+    const BattleWritebackReachabilityScope* reachability_scope) {
     output = {};
     diagnostic.clear();
     const auto fail = [&output, &diagnostic](const wchar_t* reason) {
@@ -521,6 +564,11 @@ bool BuildBattleWritebackSectionSnapshot(
         current.mode.mode != ccz::preview::PreviewMode::Battle) {
         return fail(L"战场写回快照失败：基线或当前捕获不是有效的 S 战场预览");
     }
+    const bool revision_mismatch =
+        revision_scope == BattleWritebackRevisionScope::PinnedSection
+            ? baseline.input.section_revision != current.input.section_revision
+            : (baseline.input.document_revision != current.input.document_revision ||
+               baseline.input.section_revision != current.input.section_revision);
     if (normalized_path(baseline.input.document_path).empty() ||
         normalized_path(baseline.input.document_path) !=
             normalized_path(current.input.document_path) ||
@@ -530,14 +578,16 @@ bool BuildBattleWritebackSectionSnapshot(
             normalized_path(current.snapshot.document_path) ||
         normalized_path(baseline.snapshot.document_path) !=
             normalized_path(current.snapshot.document_path) ||
-        baseline.input.document_revision != current.input.document_revision ||
+        revision_mismatch ||
         baseline.input.scope_key.empty() ||
         baseline.input.scope_key != current.input.scope_key ||
         baseline.snapshot.section_path != current.snapshot.section_path ||
         baseline.snapshot.section_root.runtime_handle == 0 ||
         baseline.snapshot.section_root.runtime_handle !=
             current.snapshot.section_root.runtime_handle) {
-        return fail(L"战场写回快照失败：文档、Section 或加载后版本已变化，请刷新预览");
+        return fail(revision_scope == BattleWritebackRevisionScope::PinnedSection
+            ? L"战场写回快照失败：文档、Scene1 Section 或来源版本已变化，请刷新预览"
+            : L"战场写回快照失败：文档、Section 或加载后版本已变化，请刷新预览");
     }
 
     std::vector<CapturedDeployment> original;
@@ -547,12 +597,137 @@ bool BuildBattleWritebackSectionSnapshot(
         output = {};
         return false;
     }
+    if (reachability_scope != nullptr &&
+        reachability_scope->filter_deployments) {
+        std::unordered_set<ccz::preview::LogicalNodeKey> reachable_keys;
+        for (const auto& key : reachability_scope->reachable_deployment_keys) {
+            if (!key_in_scope(key, current.input.scope_key) ||
+                !reachable_keys.emplace(key).second) {
+                return fail(L"战场写回快照失败：条件树出场来源键越界或重复");
+            }
+        }
+        const auto retain_reachable = [&reachable_keys](
+            const CapturedDeployment& deployment) {
+            return reachable_keys.find(deployment.key) != reachable_keys.end();
+        };
+        original.erase(std::remove_if(original.begin(), original.end(),
+            [&retain_reachable](const CapturedDeployment& deployment) {
+                return !retain_reachable(deployment);
+            }), original.end());
+        live.erase(std::remove_if(live.begin(), live.end(),
+            [&retain_reachable](const CapturedDeployment& deployment) {
+                return !retain_reachable(deployment);
+            }), live.end());
+        if (original.size() != reachable_keys.size() ||
+            live.size() != reachable_keys.size()) {
+            return fail(L"战场写回快照失败：活动条件分支的出场来源无法在基线和当前树中一一映射");
+        }
+    }
     if (original.size() != live.size()) {
         return fail(L"战场写回快照失败：当前 Section 的出场指令集合与缓存基线不同");
     }
 
     BattleWritebackSectionSnapshot candidate;
     candidate.scope_key = current.input.scope_key;
+    if (reachability_scope != nullptr) {
+        std::unordered_map<std::uintptr_t, const CapturedEditorNode*>
+            captured_by_handle;
+        bool captured_nodes_indexed = false;
+        const auto validate_anchor = [&](
+            const ccz::preview::LogicalNodeKey& parent_key,
+            const ccz::preview::LogicalNodeKey& before_key,
+            std::wstring& anchor_diagnostic) {
+            if (parent_key.empty() || before_key.empty()) {
+                anchor_diagnostic = L"条件树插入父节点与终止锚点不完整";
+                return false;
+            }
+            if (!key_in_scope(parent_key, candidate.scope_key) ||
+                !key_in_scope(before_key, candidate.scope_key)) {
+                anchor_diagnostic = L"条件树插入锚点越过当前 Section";
+                return false;
+            }
+            std::size_t parent_matches = 0;
+            std::size_t before_matches = 0;
+            const auto* parent = find_raw_node_by_key(
+                current.input.nodes, parent_key, parent_matches);
+            const auto* before = find_raw_node_by_key(
+                current.input.nodes, before_key, before_matches);
+            if (!captured_nodes_indexed) {
+                if (!index_captured_nodes(current.snapshot.section_root,
+                        captured_by_handle, anchor_diagnostic)) return false;
+                captured_nodes_indexed = true;
+            }
+            if (parent_matches != 1 || before_matches != 1 ||
+                parent == nullptr || before == nullptr ||
+                parent->children.empty() ||
+                parent->children.back().logical_key != before_key ||
+                before->instruction_id != 0 || !before->children.empty() ||
+                parent->runtime_handle == 0 || before->runtime_handle == 0) {
+                anchor_diagnostic =
+                    L"条件树插入目标不是唯一且末尾为 0x00 的原生子事件";
+                return false;
+            }
+            const auto captured_parent =
+                captured_by_handle.find(parent->runtime_handle);
+            const auto captured_before =
+                captured_by_handle.find(before->runtime_handle);
+            if (captured_parent == captured_by_handle.end() ||
+                captured_before == captured_by_handle.end() ||
+                captured_parent->second->instruction_id !=
+                    static_cast<int>(parent->instruction_id) ||
+                captured_before->second->instruction_id != 0 ||
+                captured_parent->second->children.size() !=
+                    parent->children.size() ||
+                captured_parent->second->children.empty() ||
+                captured_parent->second->children.back().runtime_handle !=
+                    before->runtime_handle) {
+                anchor_diagnostic =
+                    L"条件树插入锚点无法映射回原生子事件";
+                return false;
+            }
+            return true;
+        };
+
+        const auto& parent_key = reachability_scope->insert_parent_key;
+        const auto& before_key = reachability_scope->insert_before_key;
+        if (parent_key.empty() != before_key.empty()) {
+            return fail(L"战场写回快照失败：条件树插入父节点与终止锚点不完整");
+        }
+        if (!parent_key.empty()) {
+            std::wstring anchor_diagnostic;
+            if (!validate_anchor(parent_key, before_key, anchor_diagnostic)) {
+                output = {};
+                diagnostic = L"战场写回快照失败：" + anchor_diagnostic;
+                return false;
+            }
+            candidate.insert_parent_key = parent_key;
+            candidate.insert_before_key = before_key;
+        }
+
+        std::unordered_set<std::uint16_t> seen_anchor_types;
+        for (const BattleDeploymentInsertionAnchor& anchor :
+             reachability_scope->insertion_anchors) {
+            if (!is_battle_deployment(anchor.instruction_id) ||
+                !seen_anchor_types.insert(anchor.instruction_id).second) {
+                return fail(L"战场写回快照失败：条件树插入锚点类别无效或重复");
+            }
+            if (!anchor.resolved) {
+                if (!anchor.parent_key.empty() || !anchor.before_key.empty()) {
+                    return fail(L"战场写回快照失败：未决锚点携带了可写入节点");
+                }
+                candidate.insertion_anchors.push_back(anchor);
+                continue;
+            }
+            std::wstring anchor_diagnostic;
+            if (!validate_anchor(anchor.parent_key, anchor.before_key,
+                                 anchor_diagnostic)) {
+                output = {};
+                diagnostic = L"战场写回快照失败：" + anchor_diagnostic;
+                return false;
+            }
+            candidate.insertion_anchors.push_back(anchor);
+        }
+    }
     for (const auto& baseline_node : original) {
         const auto found = std::find_if(
             live.begin(), live.end(), [&baseline_node](const auto& node) {
@@ -579,14 +754,15 @@ bool BuildBattleWritebackSectionSnapshot(
         candidate.instructions.push_back(std::move(instruction));
     }
 
-    // New records belong to the first explicit Section event.  Only create
+    // New records in legacy callers belong to the first explicit Section event. Only create
     // anchors when that event has a recognizable final 0x00 terminator; any
     // unfamiliar layout stays non-insertable and the planner fails closed.
     std::size_t raw_section_matches = 0;
     const auto* raw_section = find_raw_node(
         current.input.nodes, current.snapshot.section_root.runtime_handle,
         raw_section_matches);
-    if (raw_section_matches == 1 && raw_section != nullptr) {
+    if (reachability_scope == nullptr &&
+        raw_section_matches == 1 && raw_section != nullptr) {
         const auto event = std::find_if(
             raw_section->children.begin(), raw_section->children.end(),
             [](const auto& node) { return node.instruction_id == 0; });
@@ -618,6 +794,53 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
     if (scope_key.empty() || snapshot.scope_key != scope_key) {
         return fail_plan(L"战场写回计划失败：Section 作用域不一致");
     }
+    const auto resolve_insert_anchor = [&snapshot, &scope_key](
+        std::uint16_t instruction_id,
+        ccz::preview::LogicalNodeKey& parent_key,
+        ccz::preview::LogicalNodeKey& before_key,
+        std::wstring& diagnostic) {
+        std::size_t matches = 0;
+        const BattleDeploymentInsertionAnchor* typed_anchor = nullptr;
+        for (const auto& anchor : snapshot.insertion_anchors) {
+            if (anchor.instruction_id != instruction_id) continue;
+            typed_anchor = &anchor;
+            ++matches;
+        }
+        if (matches > 1) {
+            diagnostic = L"战场写回计划失败：" +
+                hex_instruction(instruction_id) +
+                L" 存在重复的子事件插入锚点";
+            return false;
+        }
+        if (typed_anchor != nullptr) {
+            if (!typed_anchor->resolved) {
+                diagnostic = typed_anchor->diagnostic.empty()
+                    ? L"战场写回计划失败：" + hex_instruction(instruction_id) +
+                        L" 子事件插入锚点不唯一"
+                    : L"战场写回计划失败：" + typed_anchor->diagnostic;
+                return false;
+            }
+            parent_key = typed_anchor->parent_key;
+            before_key = typed_anchor->before_key;
+        } else if (snapshot.insertion_anchors.empty()) {
+            parent_key = snapshot.insert_parent_key;
+            before_key = snapshot.insert_before_key;
+        } else {
+            diagnostic = L"战场写回计划失败：当前可达分支没有 " +
+                hex_instruction(instruction_id) +
+                L" 类型指令的唯一子事件插入锚点";
+            return false;
+        }
+        if (!key_in_scope(parent_key, scope_key) ||
+            !key_in_scope(before_key, scope_key) ||
+            parent_key == before_key) {
+            diagnostic = L"战场写回计划失败：" +
+                hex_instruction(instruction_id) +
+                L" 指令插入锚点未限定在当前 Section";
+            return false;
+        }
+        return true;
+    };
 
     std::vector<std::uint64_t> cache_ids;
     std::vector<MinionBrushBatch> minion_batches;
@@ -890,6 +1113,11 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
         std::size_t row_index = 0;
         if (instruction == 0x4b) {
             PlannedNode node = make_new_node(instruction);
+            std::wstring anchor_diagnostic;
+            if (!resolve_insert_anchor(instruction, node.insert_parent_key,
+                    node.insert_before_key, anchor_diagnostic)) {
+                return fail_plan(anchor_diagnostic);
+            }
             node.changed = true;
             nodes.push_back(std::move(node));
             changed_cache_ids.resize(nodes.size());
@@ -908,12 +1136,12 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
                 if (node_index != nodes.size()) break;
             }
             if (node_index == nodes.size()) {
-                if (!key_in_scope(snapshot.insert_parent_key, scope_key) ||
-                    !key_in_scope(snapshot.insert_before_key, scope_key) ||
-                    snapshot.insert_parent_key == snapshot.insert_before_key) {
-                    return fail_plan(L"战场写回计划失败：新指令插入锚点未限定在当前 Section");
-                }
                 PlannedNode node = make_new_node(instruction);
+                std::wstring anchor_diagnostic;
+                if (!resolve_insert_anchor(instruction, node.insert_parent_key,
+                        node.insert_before_key, anchor_diagnostic)) {
+                    return fail_plan(anchor_diagnostic);
+                }
                 node.changed = true;
                 nodes.push_back(std::move(node));
                 changed_cache_ids.resize(nodes.size());
@@ -948,14 +1176,14 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
                 ? BattleWritebackChangeKind::DeleteInstruction
                 : BattleWritebackChangeKind::UpdateInstruction;
         } else {
-            if (!key_in_scope(snapshot.insert_parent_key, scope_key) ||
-                !key_in_scope(snapshot.insert_before_key, scope_key) ||
-                snapshot.insert_parent_key == snapshot.insert_before_key) {
-                return fail_plan(L"战场写回计划失败：新指令插入锚点未限定在当前 Section");
+            if (!key_in_scope(node.insert_parent_key, scope_key) ||
+                !key_in_scope(node.insert_before_key, scope_key) ||
+                node.insert_parent_key == node.insert_before_key) {
+                return fail_plan(L"战场写回计划失败：新指令的类型专属锚点无效");
             }
             change.kind = BattleWritebackChangeKind::InsertInstruction;
-            change.insert_parent_key = snapshot.insert_parent_key;
-            change.insert_before_key = snapshot.insert_before_key;
+            change.insert_parent_key = node.insert_parent_key;
+            change.insert_before_key = node.insert_before_key;
         }
         node_to_change[node_index] = result.changes.size();
         result.changes.push_back(std::move(change));
@@ -1076,8 +1304,8 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
             }
             const auto* parent = parent_found->second;
             const auto* before = before_found->second;
-            if (parent->instruction_id != 0 || parent->children.empty() ||
-                before->instruction_id != 0 || !before->children.empty() ||
+            if (parent->children.empty() || before->instruction_id != 0 ||
+                !before->children.empty() ||
                 parent->children.back().logical_key != before->logical_key) {
                 return fail_batch(L"战场原生预检失败：插入锚点不是当前事件的末尾终止指令");
             }
@@ -1087,7 +1315,8 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
                 before->runtime_handle);
             if (captured_parent == captured_by_handle.end() ||
                 captured_before == captured_by_handle.end() ||
-                captured_parent->second->instruction_id != 0 ||
+                captured_parent->second->instruction_id !=
+                    static_cast<int>(parent->instruction_id) ||
                 captured_before->second->instruction_id != 0 ||
                 captured_parent->second->children.size() !=
                     parent->children.size() ||
@@ -1182,6 +1411,18 @@ bool BattleWritebackNativeTransaction::Apply(
         diagnostic = L"S 战场事务拒绝：无法捕获有效的文档状态";
         return false;
     }
+    if (undo_stack_.size() == undo_stack_.max_size()) {
+        diagnostic = L"S 战场事务拒绝：撤回记录数量已达上限";
+        return false;
+    }
+    try {
+        // Reserve the undo slot before mutating the native tree.  Committing
+        // the prepared record at the end then cannot allocate after writes.
+        undo_stack_.reserve(undo_stack_.size() + 1);
+    } catch (...) {
+        diagnostic = L"S 战场事务拒绝：无法预留撤回记录空间";
+        return false;
+    }
 
     struct PreparedChange {
         AppliedOperation operation;
@@ -1193,9 +1434,14 @@ bool BattleWritebackNativeTransaction::Apply(
         batch.changes.size());
     std::unordered_set<std::uintptr_t> source_handles;
     std::unordered_set<std::uintptr_t> deleted_handles;
+    std::unordered_map<BattleInsertAnchorKey, std::uintptr_t,
+        BattleInsertAnchorKeyHash> last_inserted_by_anchor;
     std::size_t insert_count = 0;
     try {
         prepared.reserve(batch.changes.size());
+        source_handles.reserve(batch.changes.size());
+        deleted_handles.reserve(batch.changes.size());
+        last_inserted_by_anchor.reserve(batch.changes.size());
         for (std::size_t index = 0; index < batch.changes.size(); ++index) {
             const BattleWritebackNativeChange& change = batch.changes[index];
             if (!is_battle_deployment(change.instruction_id) ||
@@ -1276,6 +1522,7 @@ bool BattleWritebackNativeTransaction::Apply(
 
     // Resolve every event and terminal anchor, including the predecessor
     // chain that will remain after this batch's deletions, before any writes.
+    int next_insert_ordinal = before_state.next_ordinal;
     for (std::size_t index = 0; index < batch.changes.size(); ++index) {
         const auto& change = batch.changes[index];
         if (change.kind != BattleWritebackChangeKind::InsertInstruction) continue;
@@ -1286,11 +1533,12 @@ bool BattleWritebackNativeTransaction::Apply(
             !host.NodeExists(change.insert_before_handle) ||
             !host.CaptureNode(change.parent_handle, parent) ||
             !host.CaptureNode(change.insert_before_handle, before) ||
-            parent.instruction_id != 0 || before.instruction_id != 0 ||
+            !parent.has_children || before.instruction_id != 0 ||
             before.parent_handle != change.parent_handle ||
             before.has_children || before.has_long_text ||
             before.has_structural_links ||
-            before.previous_sibling_handle != change.insert_after_handle) {
+            before.previous_sibling_handle != change.insert_after_handle ||
+            before.next_sibling_handle != 0) {
             diagnostic = L"S 战场事务拒绝：插入父节点/末尾终止锚点已变化";
             return false;
         }
@@ -1326,13 +1574,20 @@ bool BattleWritebackNativeTransaction::Apply(
         entry.base_insert_after = surviving_after;
         entry.operation.node.previous_sibling_handle = surviving_after;
         entry.operation.node.next_sibling_handle = change.insert_before_handle;
-        entry.operation.node.ordinal = before_state.next_ordinal +
-            static_cast<int>(std::count_if(
-                prepared.begin(), prepared.begin() + static_cast<std::ptrdiff_t>(index),
-                [](const PreparedChange& candidate) {
-                    return candidate.operation.kind ==
-                        BattleWritebackChangeKind::InsertInstruction;
-                }));
+        entry.operation.node.ordinal = next_insert_ordinal++;
+        const BattleInsertAnchorKey anchor_key{
+            change.parent_handle, change.insert_before_handle};
+        try {
+            const auto [anchor, inserted] = last_inserted_by_anchor.try_emplace(
+                anchor_key, surviving_after);
+            if (!inserted && anchor->second != surviving_after) {
+                diagnostic = L"S 战场事务拒绝：同一终止锚点对应多个前置节点";
+                return false;
+            }
+        } catch (...) {
+            diagnostic = L"S 战场事务拒绝：无法预分配插入前置索引";
+            return false;
+        }
     }
 
     UndoRecord candidate;
@@ -1365,7 +1620,18 @@ bool BattleWritebackNativeTransaction::Apply(
                     restored = false;
                     break;
                 }
-                if (value != operation->after_int_data) restored = false;
+                BattleWritebackNativeNodeSnapshot restored_node;
+                if (!host.CaptureNode(operation->current_handle,
+                                      restored_node) ||
+                    restored_node.handle != operation->current_handle ||
+                    restored_node.parent_handle !=
+                        operation->node.parent_handle ||
+                    restored_node.instruction_id !=
+                        operation->node.instruction_id ||
+                    restored_node.ordinal != operation->node.ordinal ||
+                    restored_node.int_data != operation->node.int_data) {
+                    restored = false;
+                }
                 break;
             }
             case BattleWritebackChangeKind::DeleteInstruction: {
@@ -1429,28 +1695,43 @@ bool BattleWritebackNativeTransaction::Apply(
             if (!source_matches) {
                 return fail_and_rollback(L"S 战场事务失败：更新节点在预检后发生变化");
             }
+            BattleWritebackNativeNodeSnapshot updated_snapshot;
+            const AppliedOperation& applied_operation =
+                candidate.operations.back();
+            if (!host.CaptureNode(applied_operation.current_handle,
+                                  updated_snapshot) ||
+                updated_snapshot.handle != applied_operation.current_handle ||
+                updated_snapshot.parent_handle !=
+                    applied_operation.node.parent_handle ||
+                updated_snapshot.instruction_id !=
+                    applied_operation.node.instruction_id ||
+                updated_snapshot.ordinal != applied_operation.node.ordinal ||
+                updated_snapshot.int_data != applied_operation.after_int_data ||
+                updated_snapshot.has_children ||
+                updated_snapshot.has_long_text ||
+                updated_snapshot.has_structural_links) {
+                return fail_and_rollback(
+                    L"S 战场事务失败：更新节点字段未能完整回读验证");
+            }
         } else if (change.kind == BattleWritebackChangeKind::DeleteInstruction) {
             if (!host.DeleteBattleNode(operation.current_handle))
                 return fail_and_rollback(L"S 战场事务失败：删除原生 0x4B 指令未完成");
             candidate.operations.push_back(std::move(operation));
         } else {
-            std::uintptr_t after_handle = entry.base_insert_after;
-            for (auto previous = candidate.operations.rbegin();
-                 previous != candidate.operations.rend(); ++previous) {
-                if (previous->kind == BattleWritebackChangeKind::InsertInstruction &&
-                    previous->node.parent_handle == change.parent_handle &&
-                    previous->node.next_sibling_handle ==
-                        change.insert_before_handle) {
-                    after_handle = previous->current_handle;
-                    break;
-                }
-            }
+            const BattleInsertAnchorKey anchor_key{
+                change.parent_handle, change.insert_before_handle};
+            const auto anchor = last_inserted_by_anchor.find(anchor_key);
+            if (anchor == last_inserted_by_anchor.end())
+                return fail_and_rollback(
+                    L"S 战场事务失败：新增指令的插入前置索引丢失");
+            const std::uintptr_t after_handle = anchor->second;
             std::uintptr_t inserted_handle = 0;
             if (!host.InsertBattleNode(change.parent_handle, after_handle,
                     change.instruction_id, operation.node.int_data,
                     next_ordinal, inserted_handle) || inserted_handle == 0) {
                 return fail_and_rollback(L"S 战场事务失败：新增原生出场指令未完成");
             }
+            anchor->second = inserted_handle;
             operation.current_handle = inserted_handle;
             operation.node.handle = inserted_handle;
             operation.node.ordinal = next_ordinal++;
@@ -1490,26 +1771,23 @@ bool BattleWritebackNativeTransaction::Apply(
     }
     if (!host.RestoreDocumentState(committed_state, {}))
         return fail_and_rollback(L"S 战场事务失败：无法恢复提交后的选择/dirty 状态");
-    if (!host.CaptureDocumentState(committed_state) ||
-        committed_state.next_ordinal != next_ordinal ||
-        !committed_state.custom_modified || !committed_state.framework_modified) {
-        return fail_and_rollback(L"S 战场事务失败：提交后的文档状态无法确认");
-    }
-
+    // RestoreDocumentState only restores selection, the global ordinal, and
+    // dirty flags. It does not touch script nodes, so the full-tree revision
+    // captured immediately above remains the committed content revision.
     candidate.committed_revision = committed_state.document_revision;
-    undo_ = std::move(candidate);
-    undo_available_ = true;
-    diagnostic = L"S 战场原生变更已作为单一事务提交；可执行一次专用撤回";
+    undo_stack_.push_back(std::move(candidate));
+    diagnostic = L"S 战场原生变更已作为独立事务提交；可按提交顺序撤回";
     return true;
 }
 
 bool BattleWritebackNativeTransaction::Undo(
     BattleWritebackNativeHost& host, std::wstring& diagnostic) {
     diagnostic.clear();
-    if (!undo_available_) {
+    if (undo_stack_.empty()) {
         diagnostic = L"S 战场撤回不可用：当前没有已提交的原生事务";
         return false;
     }
+    UndoRecord& undo_ = undo_stack_.back();
 
     BattleWritebackNativeDocumentState committed_state;
     if (!host.CaptureDocumentState(committed_state) ||
@@ -1669,14 +1947,15 @@ bool BattleWritebackNativeTransaction::Undo(
         return fail_undo(L"S 战场撤回失败：撤回后的原始文档状态不匹配");
     }
 
-    Clear();
-    diagnostic = L"S 战场原生事务已撤回；布阵缓存仍保留最终状态且尚未写入剧本";
+    undo_stack_.pop_back();
+    diagnostic = undo_stack_.empty()
+        ? L"S 战场原生事务已撤回"
+        : L"最近一次 S 战场原生事务已撤回；更早提交仍可继续撤回";
     return true;
 }
 
 void BattleWritebackNativeTransaction::Clear() noexcept {
-    undo_available_ = false;
-    undo_ = {};
+    undo_stack_.clear();
 }
 
 void ClearBattleFixedEmptySlot(BattleUnit& unit) {

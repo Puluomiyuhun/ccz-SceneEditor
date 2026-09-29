@@ -7,6 +7,7 @@
 #include "cczEditor2View.h"
 #include "LongCharData.h"
 #include "PreviewIntegration/EditorPreviewAdapter.h"
+#include "PreviewIntegration/EditorPreviewCatalog.h"
 #include "PreviewIntegration/EditorTreeSnapshot.h"
 #include "PreviewIntegration/E5ImageLoader.h"
 #include "PreviewIntegration/FreeRPreviewResolver.h"
@@ -82,28 +83,6 @@ ccz::preview::DialogueProfile MakeEditorDialogueProfile()
 	return profile;
 }
 
-ccz::preview::InstructionCatalog MakeEditorPreviewCatalog()
-{
-	ccz::preview::InstructionCatalog catalog;
-	catalog.valid = true;
-	catalog.names = {
-		{0x00, L"事件结束"}, {0x02, L"内部信息"},
-		{0x03, L"else"}, {0x0a, L"初始化局部变量"},
-		{0x12, L"选择框"}, {0x13, L"case"},
-		{0x14, L"对话"}, {0x15, L"对话2"}, {0x16, L"信息"},
-		{0x17, L"场所名设定"}, {0x18, L"事件名称设定"},
-		{0x1c, L"绘图"}, {0x20, L"头像状态"}, {0x24, L"CD音轨"},
-		{0x27, L"背景显示"}, {0x29, L"地图头像显示"},
-		{0x2a, L"地图头像移动"}, {0x2b, L"地图头像消失"},
-		{0x2c, L"地图文字显示"}, {0x2f, L"清除人物"},
-		{0x30, L"武将出现"}, {0x31, L"武将消失"},
-		{0x32, L"武将移动"}, {0x33, L"武将转向"},
-		{0x34, L"武将动作"}, {0x63, L"单挑对话"},
-		{0x69, L"旁白"}, {0x7a, L"对话3"}, {0x79, L"变量测试"},
-	};
-	return catalog;
-}
-
 struct ResolvedNativeReplayItem {
 	HTREEITEM item{};
 	ItemData* data{};
@@ -142,6 +121,31 @@ HTREEITEM FindCurrentTreeItem(CTreeCtrl& tree, HTREEITEM expected)
 		}
 	}
 	return nullptr;
+}
+
+bool IsLiveTreeItem(HWND treeWindow, HTREEITEM item)
+{
+	if (item == nullptr) return true;
+	if (treeWindow == nullptr || !::IsWindow(treeWindow)) return false;
+	TVITEM itemInfo{};
+	itemInfo.mask = TVIF_HANDLE;
+	itemInfo.hItem = item;
+	return TreeView_GetItem(treeWindow, &itemInfo) != FALSE;
+}
+
+ccz::editor_preview::RDocumentActivationSnapshot MakeRActivationSnapshot(
+	const CcczEditor2Doc& document, CTreeCtrl& tree, HTREEITEM selectedItem)
+{
+	ccz::editor_preview::RDocumentActivationSnapshot snapshot;
+	snapshot.document_id = document.GetPreviewDocumentId();
+	snapshot.normalized_path_key =
+		ccz::editor_preview::NormalizeRPreviewDocumentPath(
+			document.pathName != nullptr ? document.pathName : L"");
+	snapshot.content_epoch = document.GetPreviewContentEpoch();
+	snapshot.tree_generation = document.GetPreviewTreeGeneration();
+	snapshot.tree_window = reinterpret_cast<std::uintptr_t>(tree.GetSafeHwnd());
+	snapshot.selected_target = reinterpret_cast<std::uintptr_t>(selectedItem);
+	return snapshot;
 }
 
 void AppendNativePlanDiagnostic(std::wstring& destination,
@@ -222,24 +226,13 @@ END_MESSAGE_MAP()
 CRScenePreviewPage::CRScenePreviewPage() noexcept
 {
 	m_dialogueProfile = MakeEditorDialogueProfile();
-	m_previewCatalog = MakeEditorPreviewCatalog();
+	m_previewCatalog = ccz::editor_preview::MakeEditorPreviewCatalog();
 }
 
 CRScenePreviewPage::~CRScenePreviewPage()
 {
 	InvalidatePendingPreviewRefresh();
-	if (m_pMapBitmap) {
-		delete m_pMapBitmap;
-		m_pMapBitmap = nullptr;
-	}
-	for (auto& pair : m_spriteCache) {
-		delete pair.second;
-	}
-	m_spriteCache.clear();
-	for (auto& pair : m_portraitCache) {
-		delete pair.second;
-	}
-	m_portraitCache.clear();
+	ClearRBitmapCaches();
 }
 
 BOOL CRScenePreviewPage::CreatePage(CWnd* parent, UINT control_id)
@@ -259,6 +252,295 @@ void CRScenePreviewPage::InvalidatePendingPreviewRefresh()
 	m_previewRefreshState.Invalidate();
 	++m_previewTreeGeneration;
 	ClearNativePreviewState();
+	m_previewSession = {};
+	m_documentSessions.clear();
+	m_activeDocumentId = 0;
+	m_activeActivation = {};
+	m_hasActiveBaseline = false;
+}
+
+bool CRScenePreviewPage::ActivateDocument(
+	CTreeCtrl& tree, HTREEITEM selectedItem, CcczEditor2Doc& document,
+	bool& reusedSession)
+{
+	using ccz::editor_preview::DecideRDocumentActivation;
+	using ccz::editor_preview::RDocumentActivationDecision;
+	reusedSession = false;
+	const auto current = MakeRActivationSnapshot(document, tree, selectedItem);
+	if (current.document_id == 0 || current.normalized_path_key.empty() ||
+		tree.GetSafeHwnd() == nullptr || !::IsWindow(tree.GetSafeHwnd())) {
+		return false;
+	}
+
+	const bool selectedItemIsLive = IsLiveTreeItem(
+		tree.GetSafeHwnd(), selectedItem) && tree.GetSelectedItem() == selectedItem;
+	if (m_activeDocumentId == current.document_id) {
+		if (m_hasActiveBaseline && selectedItemIsLive &&
+			DecideRDocumentActivation(&m_activeActivation, current) ==
+				RDocumentActivationDecision::Reuse) {
+			m_pTreeCtrl = &tree;
+			m_hCurItem = selectedItem;
+			reusedSession = true;
+			return true;
+		}
+		if (m_pendingPreviewRequest.valid() && selectedItemIsLive &&
+			DecideRDocumentActivation(
+				&m_pendingPreviewRequest.activation, current) ==
+				RDocumentActivationDecision::Reuse) {
+			reusedSession = true;
+			return true;
+		}
+		// A changed selection/content stays on the current logical session and
+		// will be consumed by the ordinary forced refresh path.
+		m_activeActivation = current;
+		m_hasActiveBaseline = false;
+		return true;
+	}
+
+	ParkActiveDocument();
+	auto cached = m_documentSessions.find(current.document_id);
+	bool preservedSameDocumentSession = false;
+	if (cached != m_documentSessions.end()) {
+		const bool sameDocument =
+			cached->second.activation.document_id == current.document_id &&
+			cached->second.activation.normalized_path_key ==
+				current.normalized_path_key;
+		const auto decision = DecideRDocumentActivation(
+			cached->second.has_baseline ? &cached->second.activation : nullptr,
+			current);
+		if (decision == RDocumentActivationDecision::Reuse &&
+			selectedItemIsLive) {
+			RDocumentPreviewSession session = std::move(cached->second);
+			m_documentSessions.erase(cached);
+
+			const CString newPath(document.pathName);
+			const CString oldRoot = GetRootPath(m_modPath);
+			const CString newRoot = GetRootPath(newPath);
+			if (newRoot.CompareNoCase(oldRoot) != 0) {
+				ClearRBitmapCaches();
+			}
+			m_modPath = newPath;
+			std::wstring assetDiagnostic;
+			if (newPath.IsEmpty()) {
+				m_previewAssetCache.Clear();
+			} else {
+				m_previewAssetCache.LoadForDocument(
+					std::wstring(newPath.GetString()), m_dialogueProfile,
+					&assetDiagnostic);
+			}
+			m_previewCatalog = ccz::editor_preview::MakeEditorPreviewCatalog();
+			const auto& documentCatalog = m_previewAssetCache.instruction_catalog();
+			if (documentCatalog.valid) {
+				for (const auto& entry : documentCatalog.names)
+					m_previewCatalog.names[entry.first] = entry.second;
+				m_previewCatalog.valid = true;
+			}
+
+			m_state = std::move(session.state);
+			m_previewSession = std::move(session.preview_session);
+			m_lastPreviewInput = std::move(session.last_preview_input);
+			m_lastEditorTreeSnapshot =
+				std::move(session.last_editor_tree_snapshot);
+			m_hasEditorTreeSnapshot = session.has_editor_tree_snapshot;
+			m_cachedSceneResolution =
+				std::move(session.cached_scene_resolution);
+			m_cachedSceneResolutionValid =
+				session.cached_scene_resolution_valid;
+			m_cachedFreeRPrefixPlan =
+				std::move(session.cached_free_r_prefix_plan);
+			m_cachedFreeRPrefixValid = session.cached_free_r_prefix_valid;
+			m_debugInfo = session.debug_info.c_str();
+			m_internalizationFallbackActive =
+				session.internalization_fallback_active;
+			m_conditionButtonVisible = session.condition_button_visible;
+			m_activationButtonVisible = session.activation_button_visible;
+			m_conditionPaneVisible = session.condition_pane_visible;
+			m_variableButtonVisible = session.variable_button_visible;
+			m_variablePaneVisible = session.variable_pane_visible;
+			m_playbackVisible = session.playback_visible;
+			m_selectedCharIDs = std::move(session.selected_character_ids);
+			m_primaryCharID = session.primary_character_id;
+			m_previewUndoStack = std::move(session.undo_stack);
+			m_dynamicTimeline = std::move(session.dynamic_timeline);
+			m_dynamicStaticProgressIndex =
+				session.dynamic_static_progress_index;
+			m_dynamicPlaybackRange = session.dynamic_playback_range;
+			m_dynamicPlaybackSession.Stop();
+			m_dynamicPlaybackSession.SetSpeed(session.dynamic_playback_speed);
+			m_dynamicPlaybackActive = false;
+			m_dynamicPlaybackPrepared = false;
+			m_dynamicVisualProgress = 0.0;
+			m_visibleDialogueOverlay = m_previewSession.frame().dialogue;
+			m_pTreeCtrl = &tree;
+			m_hCurItem = selectedItem;
+			m_activeDocumentId = current.document_id;
+			m_activeActivation = current;
+			m_hasActiveBaseline = true;
+
+			EnsureDynamicAssets();
+			ReconcileCharacterSelection();
+			UpdateConditionPaneFromFrame();
+			UpdateVariablePaneFromFrame();
+			UpdatePlaybackControls();
+			UpdateUndoButton();
+			m_conditionTreePane.ShowPane(m_conditionPaneVisible);
+			m_variableControlPane.ShowPane(m_variablePaneVisible);
+			CRect clientRect;
+			GetClientRect(&clientRect);
+			LayoutConditionUi(clientRect.Width(), clientRect.Height());
+			Invalidate(FALSE);
+			reusedSession = true;
+			return true;
+		}
+
+		// Keep only the same document's condition/variable simulation when its
+		// source changed.  Every captured tree handle and rendered scene value is
+		// discarded before the forced refresh.
+		if (sameDocument) {
+			m_previewSession = std::move(cached->second.preview_session);
+			preservedSameDocumentSession = true;
+		}
+		m_documentSessions.erase(cached);
+	} else {
+		m_previewSession = {};
+	}
+
+	ClearNativePreviewState();
+	if (!preservedSameDocumentSession) {
+		// The cache entry may have been erased above; this assignment also
+		// guarantees that a different open document cannot inherit R options.
+		m_previewSession = {};
+	}
+	m_pTreeCtrl = &tree;
+	m_hCurItem = selectedItem;
+	m_activeDocumentId = current.document_id;
+	m_activeActivation = current;
+	m_hasActiveBaseline = false;
+	return true;
+}
+
+void CRScenePreviewPage::ParkActiveDocument()
+{
+	if (m_activeDocumentId == 0) return;
+	const auto documentId = m_activeDocumentId;
+	RDocumentPreviewSession session;
+	session.activation = m_activeActivation;
+	session.has_baseline = m_hasActiveBaseline;
+	session.dynamic_timeline = std::move(m_dynamicTimeline);
+	session.dynamic_static_progress_index = m_dynamicStaticProgressIndex;
+	session.dynamic_playback_range = m_dynamicPlaybackRange;
+	session.dynamic_playback_speed = m_dynamicPlaybackSession.speed();
+	StopDynamicPlayback(false);
+	session.state = std::move(m_state);
+	session.preview_session = std::move(m_previewSession);
+	session.last_preview_input = std::move(m_lastPreviewInput);
+	session.last_editor_tree_snapshot = std::move(m_lastEditorTreeSnapshot);
+	session.has_editor_tree_snapshot = m_hasEditorTreeSnapshot;
+	session.cached_scene_resolution = std::move(m_cachedSceneResolution);
+	session.cached_scene_resolution_valid = m_cachedSceneResolutionValid;
+	session.cached_free_r_prefix_plan = std::move(m_cachedFreeRPrefixPlan);
+	session.cached_free_r_prefix_valid = m_cachedFreeRPrefixValid;
+	session.debug_info.assign(m_debugInfo.GetString(), m_debugInfo.GetLength());
+	session.internalization_fallback_active = m_internalizationFallbackActive;
+	session.condition_button_visible = m_conditionButtonVisible;
+	session.activation_button_visible = m_activationButtonVisible;
+	session.condition_pane_visible = m_conditionPaneVisible;
+	session.variable_button_visible = m_variableButtonVisible;
+	session.variable_pane_visible = m_variablePaneVisible;
+	session.playback_visible = m_playbackVisible;
+	session.selected_character_ids = std::move(m_selectedCharIDs);
+	session.primary_character_id = m_primaryCharID;
+	session.undo_stack = std::move(m_previewUndoStack);
+	m_documentSessions.insert_or_assign(documentId, std::move(session));
+
+	m_pendingPreviewRequest.clear();
+	m_previewRefreshState.Invalidate();
+	++m_previewTreeGeneration;
+	if ((m_bPlaceMode || m_bPortraitPlaceMode || m_bPortraitMoveMode) &&
+		::GetCapture() == GetSafeHwnd()) {
+		ReleaseCapture();
+	}
+	m_bPlaceMode = false;
+	m_bMoveMode = false;
+	m_bMultiMoveMode = false;
+	m_bPointMoveMode = false;
+	m_bAdjustMode = false;
+	m_bPortraitAdjustMode = false;
+	m_bPortraitPlaceMode = false;
+	m_bPortraitMoveMode = false;
+	m_selectedCharID = -1;
+	m_hitCharID = -1;
+	m_moveCharID = -1;
+	m_adjustCharID = -1;
+	m_adjustPortraitPersonID = -1;
+	m_pTreeCtrl = nullptr;
+	m_hCurItem = nullptr;
+	m_previewSession = {};
+	m_state = {};
+	m_lastPreviewInput = {};
+	m_lastEditorTreeSnapshot = {};
+	m_hasEditorTreeSnapshot = false;
+	m_cachedSceneResolution = {};
+	m_cachedSceneResolutionValid = false;
+	m_cachedFreeRPrefixPlan = {};
+	m_cachedFreeRPrefixValid = false;
+	m_previewUndoStack.clear();
+	m_activeDocumentId = 0;
+	m_activeActivation = {};
+	m_hasActiveBaseline = false;
+}
+
+bool CRScenePreviewPage::PrepareForTreeRebuild(CcczEditor2Doc& document)
+{
+	InvalidateDocumentPreview(document.GetPreviewDocumentId());
+	return m_activeDocumentId == document.GetPreviewDocumentId();
+}
+
+bool CRScenePreviewPage::EditorTreeDestroyed(
+	HWND treeWindow, CcczEditor2Doc& document)
+{
+	const auto documentId = document.GetPreviewDocumentId();
+	// This callback is the owning document view's destruction boundary. Even
+	// when the cached handle no longer matches after a failed tree rebuild, the
+	// document session must not retain tree-backed state.
+	m_documentSessions.erase(documentId);
+	if (m_activeDocumentId != documentId ||
+		m_activeActivation.tree_window !=
+			reinterpret_cast<std::uintptr_t>(treeWindow)) {
+		return false;
+	}
+	InvalidateDocumentPreview(documentId);
+	m_activeDocumentId = 0;
+	m_activeActivation = {};
+	m_hasActiveBaseline = false;
+	return true;
+}
+
+bool CRScenePreviewPage::CloseDocument(
+	ccz::editor_preview::PreviewDocumentId documentId)
+{
+	m_documentSessions.erase(documentId);
+	if (m_activeDocumentId != documentId) return false;
+	InvalidateDocumentPreview(documentId);
+	m_activeDocumentId = 0;
+	m_activeActivation = {};
+	m_hasActiveBaseline = false;
+	return true;
+}
+
+void CRScenePreviewPage::InvalidateDocumentPreview(
+	ccz::editor_preview::PreviewDocumentId documentId)
+{
+	m_documentSessions.erase(documentId);
+	if (m_activeDocumentId != documentId) return;
+	StopDynamicPlayback(false);
+	m_pendingPreviewRequest.clear();
+	m_previewRefreshState.Invalidate();
+	++m_previewTreeGeneration;
+	ClearNativePreviewState();
+	m_previewSession = {};
+	m_activeActivation = {};
+	m_hasActiveBaseline = false;
 }
 
 void CRScenePreviewPage::ClearNativePreviewState()
@@ -347,24 +629,8 @@ void CRScenePreviewPage::ClearNativePreviewState()
 	m_state.Clear();
 	m_visibleDialogueOverlay = {};
 	m_internalizationFallbackActive = false;
-	if (m_pMapBitmap) {
-		delete m_pMapBitmap;
-		m_pMapBitmap = nullptr;
-	}
+	m_pMapBitmap = nullptr;
 	m_cachedMapID = -1;
-	for (auto& pair : m_spriteCache) {
-		delete pair.second;
-	}
-	m_spriteCache.clear();
-	m_spriteDataLoaded = false;
-	memset(m_charImageIDs, 0, sizeof(m_charImageIDs));
-	for (auto& pair : m_portraitCache) {
-		delete pair.second;
-	}
-	m_portraitCache.clear();
-	m_portraitFaceIndices.clear();
-	m_portraitDataLoaded = false;
-	m_modPath.Empty();
 	m_debugInfo.Empty();
 	m_pTreeCtrl = nullptr;
 	m_hCurItem = nullptr;
@@ -395,6 +661,22 @@ void CRScenePreviewPage::ClearNativePreviewState()
 	if (GetSafeHwnd() != nullptr) {
 		Invalidate(FALSE);
 	}
+}
+
+void CRScenePreviewPage::ClearRBitmapCaches()
+{
+	for (auto& entry : m_mapBitmapCache) delete entry.second;
+	m_mapBitmapCache.clear();
+	m_pMapBitmap = nullptr;
+	m_cachedMapID = -1;
+	for (auto& entry : m_spriteCache) delete entry.second;
+	m_spriteCache.clear();
+	m_spriteDataLoaded = false;
+	memset(m_charImageIDs, 0, sizeof(m_charImageIDs));
+	for (auto& entry : m_portraitCache) delete entry.second;
+	m_portraitCache.clear();
+	m_portraitFaceIndices.clear();
+	m_portraitDataLoaded = false;
 }
 
 bool CRScenePreviewPage::BuildFreeRPrefixPlan(
@@ -654,10 +936,7 @@ bool CRScenePreviewPage::ApplyFreeRPrefixOnly(CTreeCtrl& tree)
 	// dynamic actor commands enabled so 0x31/0x32/0x33/0x34 settle the same
 	// final state as the source Scene instead of leaving a stale snapshot.
 	m_limitedFreeRReplay = false;
-	if (m_pMapBitmap != nullptr) {
-		delete m_pMapBitmap;
-		m_pMapBitmap = nullptr;
-	}
+	m_pMapBitmap = nullptr;
 	m_cachedMapID = -1;
 	for (const ResolvedNativeReplayItem& entry : resolved) {
 		ProcessInstruction(entry.data, entry.item);
@@ -734,10 +1013,7 @@ NativePlanApplyResult CRScenePreviewPage::ApplyNativeReplayPlan(
 	// limited mode skipped those commands and was the source of stale actors.
 	m_limitedFreeRReplay = false;
 	m_state.Clear();
-	if (m_pMapBitmap != nullptr) {
-		delete m_pMapBitmap;
-		m_pMapBitmap = nullptr;
-	}
+	m_pMapBitmap = nullptr;
 	m_cachedMapID = -1;
 	// A valid native plan represents only the current Section.  Special
 	// adjacent Scene pairs still need their bounded initial-Scene prefix, but
@@ -1163,10 +1439,16 @@ CTreeCtrl* CRScenePreviewPage::ResolvePreviewTree(
 
 	CcczEditor2View* view = GetActiveEditorView();
 	if (!view || !view->GetDocument()) return nullptr;
+	CcczEditor2Doc* document = view->GetDocument();
 	CTreeCtrl& tree = view->GetTreeCtrl();
 	if (tree.GetSafeHwnd() != request.treeWindow) return nullptr;
-	const CString currentPath = view->GetDocument()->pathName;
+	const CString currentPath = document->pathName;
 	if (currentPath.CompareNoCase(request.documentPath) != 0) return nullptr;
+	if (document->GetPreviewDocumentId() != request.activation.document_id ||
+		document->GetPreviewContentEpoch() != request.activation.content_epoch ||
+		document->GetPreviewTreeGeneration() !=
+			request.activation.tree_generation ||
+		tree.GetSelectedItem() != request.selectedItem) return nullptr;
 
 	// HTREEITEM is only an opaque value.  Validate it against the current
 	// TreeView before passing it to MFC or the native replay adapter.
@@ -1185,6 +1467,10 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 	StopDynamicPlayback(false);
 	CTreeCtrl* requestTree = ResolvePreviewTree(request);
 	const std::wstring documentPath(request.documentPath.GetString());
+	if (requestTree != nullptr) {
+		m_pTreeCtrl = requestTree;
+		m_hCurItem = request.selectedItem;
+	}
 	if (documentPath.empty()) {
 		m_previewAssetCache.Clear();
 	} else {
@@ -1197,7 +1483,7 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 	// built-in fallback for a missing/invalid package file, then merge a valid
 	// catalog so custom instruction names are not silently reduced to the
 	// standard subset.
-	m_previewCatalog = MakeEditorPreviewCatalog();
+	m_previewCatalog = ccz::editor_preview::MakeEditorPreviewCatalog();
 	const auto& documentCatalog = m_previewAssetCache.instruction_catalog();
 	if (documentCatalog.valid) {
 		for (const auto& entry : documentCatalog.names) {
@@ -1206,6 +1492,7 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 		m_previewCatalog.valid = true;
 	}
 	if (!requestTree) {
+		m_hasActiveBaseline = false;
 		m_previewSession.ResetForDocument(documentPath);
 		ClearNativePreviewState();
 		return;
@@ -1230,16 +1517,23 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 		const auto action = ccz::editor_preview::DecidePreviewRefreshAction(
 			result.status, result.frame_changed, true);
 		if (action == ccz::editor_preview::PreviewRefreshAction::ClearAndRepaint) {
+			m_hasActiveBaseline = false;
 			m_previewSession.ResetForDocument(documentPath);
 			ClearNativePreviewState();
 			return;
 		}
 		if (action == ccz::editor_preview::PreviewRefreshAction::SkipRepaint) {
+			m_activeActivation = request.activation;
+			m_activeDocumentId = request.activation.document_id;
+			m_hasActiveBaseline = true;
 			return;
 		}
 	} else {
 		// Idle/root selections and failed captures must not leave the prior
 		// document frame visible in the shared session.
+		m_hasActiveBaseline = capture.ok && capture.idle;
+		m_activeActivation = request.activation;
+		m_activeDocumentId = request.activation.document_id;
 		m_previewSession.ResetForDocument(documentPath);
 		ClearNativePreviewState();
 		return;
@@ -1254,6 +1548,9 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 	RefreshDynamicTimelineForCurrentTarget();
 	m_playbackVisible = m_previewSession.frame().model != nullptr;
 	UpdatePlaybackControls();
+	m_activeActivation = request.activation;
+	m_activeDocumentId = request.activation.document_id;
+	m_hasActiveBaseline = true;
 }
 
 void CRScenePreviewPage::ExecutePendingPreviewRefresh(
@@ -1266,14 +1563,24 @@ void CRScenePreviewPage::ExecutePendingPreviewRefresh(
 }
 
 void CRScenePreviewPage::RequestPreviewRefresh(
-	CTreeCtrl& tree, HTREEITEM selected_item, const wchar_t* document_path)
+	CTreeCtrl& tree, HTREEITEM selected_item, CcczEditor2Doc& document)
 {
 	const HWND treeWindow = tree.GetSafeHwnd();
 	if (treeWindow == nullptr || !::IsWindow(treeWindow)) return;
+	if (m_activeDocumentId != document.GetPreviewDocumentId()) {
+		bool reusedSession = false;
+		if (!ActivateDocument(tree, selected_item, document, reusedSession)) return;
+	}
+	const auto activation = MakeRActivationSnapshot(
+		document, tree, selected_item);
 	m_pendingPreviewRequest.treeWindow = treeWindow;
 	m_pendingPreviewRequest.selectedItem = selected_item;
-	m_pendingPreviewRequest.documentPath = document_path ? document_path : L"";
+	m_pendingPreviewRequest.documentPath = document.pathName ? document.pathName : L"";
+	m_pendingPreviewRequest.activation = activation;
 	m_pendingPreviewRequest.treeGeneration = m_previewTreeGeneration;
+	m_activeDocumentId = activation.document_id;
+	m_activeActivation = activation;
+	m_hasActiveBaseline = false;
 
 	const auto requestKey = ++m_previewRefreshSequence;
 	const ccz::editor_preview::PreviewRefreshStateMachine::Request stateRequest{
@@ -1286,6 +1593,16 @@ void CRScenePreviewPage::RequestPreviewRefresh(
 		[this]() {
 			return PostMessage(kPreviewRefreshMessage, 0, 0) != FALSE;
 		});
+}
+
+void CRScenePreviewPage::RequestPreviewRefreshForCurrentDocument(
+	CTreeCtrl& tree, HTREEITEM selectedItem)
+{
+	CcczEditor2View* view = GetActiveEditorView();
+	if (view != nullptr && view->GetDocument() != nullptr &&
+		view->GetTreeCtrl().GetSafeHwnd() == tree.GetSafeHwnd()) {
+		RequestPreviewRefresh(tree, selectedItem, *view->GetDocument());
+	}
 }
 
 LRESULT CRScenePreviewPage::OnPreviewRefreshMessage(WPARAM, LPARAM)
@@ -1313,8 +1630,7 @@ void CRScenePreviewPage::RequestConditionActionRefresh()
 {
 	if (m_pTreeCtrl != nullptr && m_pTreeCtrl->GetSafeHwnd() != nullptr &&
 		m_hCurItem != nullptr) {
-		RequestPreviewRefresh(*m_pTreeCtrl, m_hCurItem,
-			m_modPath.IsEmpty() ? nullptr : (LPCWSTR)m_modPath);
+		RequestPreviewRefreshForCurrentDocument(*m_pTreeCtrl, m_hCurItem);
 	}
 }
 
@@ -1322,8 +1638,7 @@ void CRScenePreviewPage::RequestVariableActionRefresh()
 {
 	if (m_pTreeCtrl != nullptr && m_pTreeCtrl->GetSafeHwnd() != nullptr &&
 		m_hCurItem != nullptr) {
-		RequestPreviewRefresh(*m_pTreeCtrl, m_hCurItem,
-			m_modPath.IsEmpty() ? nullptr : (LPCWSTR)m_modPath);
+		RequestPreviewRefreshForCurrentDocument(*m_pTreeCtrl, m_hCurItem);
 	}
 }
 
@@ -1926,10 +2241,7 @@ bool CRScenePreviewPage::StartDynamicPlayback(
 	} else {
 		m_state.Clear();
 		m_visibleDialogueOverlay = {};
-		if (m_pMapBitmap != nullptr) {
-			delete m_pMapBitmap;
-			m_pMapBitmap = nullptr;
-		}
+		m_pMapBitmap = nullptr;
 		m_cachedMapID = -1;
 	}
 	m_dynamicInitialState = m_state;
@@ -2094,11 +2406,9 @@ void CRScenePreviewPage::OnPlaybackStopClicked()
 		StopDynamicPlayback(true);
 		return;
 	}
-	const CString documentPath = m_modPath;
 	StopDynamicPlayback(false);
 	if (m_pTreeCtrl != nullptr && m_hCurItem != nullptr) {
-		RequestPreviewRefresh(*m_pTreeCtrl, m_hCurItem,
-			documentPath.IsEmpty() ? nullptr : documentPath.GetString());
+		RequestPreviewRefreshForCurrentDocument(*m_pTreeCtrl, m_hCurItem);
 	}
 }
 
@@ -2360,13 +2670,14 @@ bool CRScenePreviewPage::CommitCharacterStates(
 		}
 	}
 
+	if (!undoEntries.empty())
+		pView->GetDocument()->MarkEditorContentChanged();
 	pView->GetDocument()->SetModifiedFlag(TRUE);
 	if (!undoEntries.empty()) {
 		RecordCoordinateUndo(undoLabel ? undoLabel : L"调整位置",
 			std::move(undoEntries), pView->cur_item);
 	}
-	RequestPreviewRefresh(*m_pTreeCtrl, m_hCurItem,
-		m_modPath.IsEmpty() ? nullptr : (LPCWSTR)m_modPath);
+	RequestPreviewRefreshForCurrentDocument(*m_pTreeCtrl, m_hCurItem);
 	return true;
 }
 
@@ -2396,14 +2707,15 @@ bool CRScenePreviewPage::CommitMapPortraitPosition(int personID, int x, int y)
 	data->int_data[source.source.xIndex] = x;
 	data->int_data[source.source.yIndex] = y;
 	pView->UpdateShow(source.item);
+	if (oldX != x || oldY != y)
+		pView->GetDocument()->MarkEditorContentChanged();
 	pView->GetDocument()->SetModifiedFlag(TRUE);
 	if (oldX != x || oldY != y) {
 		RecordCoordinateUndo(L"地图头像调整位置",
 			{{source.item, source.source, oldX, oldY, x, y}},
 			pView->cur_item);
 	}
-	RequestPreviewRefresh(*m_pTreeCtrl, m_hCurItem,
-		m_modPath.IsEmpty() ? nullptr : (LPCWSTR)m_modPath);
+	RequestPreviewRefreshForCurrentDocument(*m_pTreeCtrl, m_hCurItem);
 	return true;
 }
 
@@ -2535,13 +2847,13 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 		pView->cur_item = restoreSelection;
 		m_hCurItem = restoreSelection;
 	}
+	pView->GetDocument()->MarkEditorContentChanged();
 	pView->GetDocument()->SetModifiedFlag(TRUE);
 	UpdateUndoButton();
 	const HTREEITEM refreshItem = restoreSelection != nullptr
 		? restoreSelection : m_hCurItem;
 	if (refreshItem != nullptr) {
-		RequestPreviewRefresh(tree, refreshItem,
-			m_modPath.IsEmpty() ? nullptr : (LPCWSTR)m_modPath);
+		RequestPreviewRefreshForCurrentDocument(tree, refreshItem);
 	}
 	return true;
 }
@@ -3255,11 +3567,13 @@ bool CRScenePreviewPage::LoadMapImage(int mapID, const wchar_t* modPath)
 {
 	if (mapID < 0) { m_debugInfo = _T("mapID < 0"); return false; }
 	if (mapID == m_cachedMapID && m_pMapBitmap) return true;
-
-	if (m_pMapBitmap) {
-		delete m_pMapBitmap;
-		m_pMapBitmap = nullptr;
+	const auto cached = m_mapBitmapCache.find(mapID);
+	if (cached != m_mapBitmapCache.end() && cached->second != nullptr) {
+		m_pMapBitmap = cached->second;
+		m_cachedMapID = mapID;
+		return true;
 	}
+	m_pMapBitmap = nullptr;
 	m_cachedMapID = -1;
 
 	CString rootPath = GetRootPath(modPath);
@@ -3269,6 +3583,7 @@ bool CRScenePreviewPage::LoadMapImage(int mapID, const wchar_t* modPath)
 	m_pMapBitmap = LoadBitmapFromE5(e5Path, mapID, m_debugInfo);
 	if (m_pMapBitmap) {
 		m_cachedMapID = mapID;
+		m_mapBitmapCache.emplace(mapID, m_pMapBitmap);
 		return true;
 	}
 	return false;
@@ -3668,27 +3983,7 @@ void CRScenePreviewPage::UpdatePreview(CTreeCtrl& tree, HTREEITEM hSelectedItem,
 		// asset/cache refresh can publish the new document.
 		ClearPreviewUndo();
 
-		// mod根目录变了，清除地图缓存
-		if (m_pMapBitmap) {
-			delete m_pMapBitmap;
-			m_pMapBitmap = nullptr;
-		}
-		m_cachedMapID = -1;
-
-		// 清除精灵缓存
-		for (auto& pair : m_spriteCache) {
-			delete pair.second;
-		}
-		m_spriteCache.clear();
-		m_spriteDataLoaded = false;
-		memset(m_charImageIDs, 0, sizeof(m_charImageIDs));
-
-		for (auto& pair : m_portraitCache) {
-			delete pair.second;
-		}
-		m_portraitCache.clear();
-		m_portraitFaceIndices.clear();
-		m_portraitDataLoaded = false;
+		ClearRBitmapCaches();
 	}
 
 	m_modPath = newModPath;
@@ -5095,8 +5390,8 @@ void CRScenePreviewPage::RestoreAfterBatchFailure(
 		m_hCurItem = restoreSelection;
 	}
 	pView->GetDocument()->SetModifiedFlag(wasModified);
-	RequestPreviewRefresh(tree, restoreSelection ? restoreSelection : m_hCurItem,
-		m_modPath.IsEmpty() ? nullptr : (LPCWSTR)m_modPath);
+	RequestPreviewRefreshForCurrentDocument(
+		tree, restoreSelection ? restoreSelection : m_hCurItem);
 }
 
 void CRScenePreviewPage::BeginMultiMove()

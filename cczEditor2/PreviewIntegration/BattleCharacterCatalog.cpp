@@ -12,10 +12,11 @@ namespace {
 
 constexpr std::size_t kDataHeader = 396;
 constexpr std::size_t kDataRecordStride = 32;
-constexpr std::size_t kNameFieldWidth = 12;
+constexpr std::size_t kNameFieldWidth = 8;
 constexpr std::size_t kArmsOffset = 26;
 constexpr std::size_t kSmallRecordCount = 512;
 constexpr std::size_t kLargeRecordCount = 1024;
+constexpr std::size_t kLargeCatalogThreshold = 46000;
 
 bool decode_cp936_name(const std::uint8_t* bytes, std::size_t size,
                        std::wstring& result) {
@@ -39,9 +40,7 @@ bool decode_cp936_name(const std::uint8_t* bytes, std::size_t size,
 }
 
 std::size_t record_count_for_size(std::size_t size) {
-    const std::size_t large_end =
-        kDataHeader + kLargeRecordCount * kDataRecordStride;
-    if (size >= large_end) return kLargeRecordCount;
+    if (size >= kLargeCatalogThreshold) return kLargeRecordCount;
     const std::size_t small_end =
         kDataHeader + kSmallRecordCount * kDataRecordStride;
     if (size >= small_end) return kSmallRecordCount;
@@ -52,7 +51,7 @@ void append_brush_run(const std::vector<BattleCharacterEntry>& characters,
                       std::size_t begin, std::size_t end,
                       const std::wstring& normalized,
                       std::vector<BattleMinionBrush>& brushes) {
-    if (normalized.empty() || end - begin < 3) return;
+    if (normalized.empty() || end - begin < 2) return;
     brushes.push_back(BattleMinionBrush{
         normalized,
         characters[begin].data_id,
@@ -134,7 +133,9 @@ BattleCharacterCatalog ParseBattleCharacterCatalog(
         entry.appearance = -1;
         entry.default_direction = 0;
         entry.level = 0;
-        entry.unit_type = data_e5[offset + kArmsOffset];
+        // Pro's brush arm_kind is an independent selection value and defaults
+        // to zero. Data.e5's arms byte belongs to the asset mapping table.
+        entry.unit_type = 0;
         entry.reinforcement = false;
         entry.ai_policy = -1;
         result.characters.push_back(std::move(entry));

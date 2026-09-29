@@ -142,6 +142,12 @@ struct BattleEditorState {
     bool document_modified{};
 };
 
+struct BattleEditorDraftRebaseResult {
+    bool ok{};
+    BattleEditorState state;
+    std::vector<std::wstring> conflicts;
+};
+
 struct BattleUnitPatch {
     std::optional<int> data_id;
     std::optional<ccz::preview::BattleCoord> position;
@@ -195,6 +201,7 @@ public:
     // Sets the unified deployment brush independently of any existing EEX node.
     BattleEditorResult SetDeploymentInstruction(std::uint16_t instruction_id);
     BattleEditorResult SetMode(BattleEditorMode mode);
+    BattleEditorResult CancelPlacementBrush();
 
     BattleEditorResult SetDirectionLock(bool enabled);
     BattleEditorResult CycleDirection(int delta);
@@ -249,7 +256,7 @@ private:
     static int WrappedDirection(int value);
     static bool CompleteTerrain(const BattleEditorState& state);
     int NextAvailableBrushDataId(const BattleMinionBrush& brush) const;
-    void RefreshSelectedBrushDataId();
+    bool RefreshSelectedBrushDataId(bool reset_direction = false);
     static BattleWritebackMemoryState ToMemoryState(
         const BattleEditorState& state);
     static void ApplyMemoryState(BattleEditorState& state,
@@ -268,5 +275,12 @@ private:
                          std::size_t& target_index,
                          std::wstring& diagnostic) const;
 };
+
+// Rebase only user-edited preview values onto a fresh source parse. Clean
+// source rows always come from the fresh parse; overlapping edits are reported
+// with their logical source identity so callers can preserve the old draft.
+BattleEditorDraftRebaseResult RebaseBattleEditorDraft(
+    const BattleEditorState& draft,
+    const BattleEditorState& fresh_baseline);
 
 }  // namespace ccz::editor_preview

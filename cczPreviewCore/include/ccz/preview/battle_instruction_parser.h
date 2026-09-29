@@ -15,6 +15,11 @@ struct BattleParseOptions {
     bool require_complete_field_table{true};
     bool reject_unknown_instruction{true};
     LogicalNodeKey scope_root_key;
+    // When enabled, only these S deployment instructions contribute units.
+    // Map and initialization records remain Section-scoped.  An empty list is
+    // a valid branch with no reachable deployments.
+    bool filter_deployment_nodes{};
+    std::vector<LogicalNodeKey> reachable_deployment_keys;
 };
 
 struct BattleParseResult {

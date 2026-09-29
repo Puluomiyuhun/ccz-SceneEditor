@@ -241,6 +241,8 @@ public:
 public:
 	virtual void OnDraw(CDC* pDC);  // 重写以绘制该视图
 	virtual BOOL PreCreateWindow(CREATESTRUCT& cs);
+	virtual void OnActivateView(BOOL activate, CView* activate_view,
+		CView* deactivate_view) override;
 protected:
 	virtual void OnInitialUpdate(); // 构造后第一次调用
 	virtual BOOL OnPreparePrinting(CPrintInfo* pInfo);
@@ -273,7 +275,7 @@ public:
 	HTREEITEM CreateItem(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
 	HTREEITEM InsertInstructionAt(int id, HTREEITEM hAfter, const int* intData, int dataCount);
 	HTREEITEM InsertBattleInstructionAt(int instructionId, HTREEITEM parent,
-		HTREEITEM hInsertAfter, const std::vector<int>& intData);
+		HTREEITEM hInsertAfter, std::vector<int> intData);
 	HTREEITEM CreateZsj(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateScene(HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateSection(HTREEITEM parent, HTREEITEM hInsertAfter);
@@ -312,7 +314,7 @@ public:
 	afx_msg void OnMoveUp();
 	afx_msg void OnMoveDown();
 	afx_msg void OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult);
-	void RefreshScenePreview();
+	bool RefreshScenePreview();
 	void SelectPlaybackItem(HTREEITEM item, bool suppress_preview_refresh);
 	afx_msg void OnEditDuplicate();
 	afx_msg void OnEditBatch();

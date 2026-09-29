@@ -58,7 +58,8 @@ Assert-Text $opsSource 'ClearUndo' 'temporary reset can clear the undo stack'
 Assert-Text $opsHeader 'BattlePageCount' 'Battle record page count is separate from character pages'
 Assert-Text $opsHeader 'SetBattlePage' 'Battle record page switch API is declared'
 Assert-Text $opsSource 'IsBattleFixedEmptySlot' 'fixed-slot sentinel gate is used'
-Assert-Text $opsSource 'ClearBattleFixedEmptySlot' 'fixed-slot delete clears in place'
+Assert-Text $opsSource 'editor_pending_delete\s*=\s*true' `
+    'fixed-slot delete remains staged as a tombstone for writeback and undo'
 Assert-Text $opsSource 'state\.placement_defaults = BattlePlacementDefaults\{\}' `
     'character scope changes reset all placement defaults'
 Assert-Text $opsSource 'state\.direction_locked = direction_locked' `
@@ -76,22 +77,24 @@ Assert-Text $battlePageSource 'fields_decoded' `
     'S page renders only fully decoded units'
 Assert-Text $battlePageSource 'm_assets\.ResolveUnitSprite' `
     'S page resolves Unit_mov sprites and direction independently'
-Assert-Text $battlePageSource 'm_editorState\.battle\.units\.size\(\)' `
-	'S page renders the complete unit set instead of paging'
+Assert-Text $battlePageSource 'ActiveSession\(\)\.editor_state\.battle\.units\.size\(\)' `
+	'S page renders the complete unit set from its active document session instead of paging'
 Assert-Text $battlePageSource 'm_editorOps->SelectMinionBrush|SelectMinionBrush\(' `
 	'S page binds the S-only minion brush through its battle editor model'
 Assert-Text $battlePageSource 'm_editorOps->SelectCharacter|SelectCharacter\(' `
 	'S page binds the S-only role list through its battle editor model'
-Assert-Text $battlePageSource 'm_editorOps->SetPlacementContext|SetPlacementContext\(' `
-	'S page selects a concrete 0x46/0x47 placement source'
+Assert-Text $battlePageSource 'm_editorOps->SetDeploymentInstruction|SetDeploymentInstruction\(' `
+	'S page selects and binds a concrete 0x46/0x47 placement instruction'
 Assert-Text $battlePageSource 'OnLButtonDown[\s\S]*?StampAt\(' `
 	'S page routes left-button placement into brush stamping'
 Assert-Text $battlePageSource 'OnRButtonDown[\s\S]*?DeleteAt\(' `
 	'S page routes right-button removal into a temporary delete transaction'
 Assert-Text $battlePageSource 'WS_HSCROLL \| WS_VSCROLL' `
     'S page owns map scrolling styles'
-Assert-NotText $battlePageSource 'm_pPer2|InitCharList|PopulateBattleCharacterCatalog|RCharacter|RRole|RPreviewSession|RResourceCache|BattleWritebackAdapter|BuildBattleWriteback|WriteBattle|SetBattlePage|BattlePageCount|ClearBattleFixedEmptySlot' `
-	'S page has no R role/resource/session leak or document writeback bridge'
+Assert-NotText $battlePageSource 'm_pPer2|InitCharList|PopulateBattleCharacterCatalog|RCharacter|RRole|RPreviewSession|RResourceCache|SetBattlePage|BattlePageCount|ClearBattleFixedEmptySlot' `
+	'S page has no R role/resource/session leak or legacy R battle paging'
+Assert-Text $battlePageSource 'm_nativeWritebackTransaction|BuildBattleWritebackNativeBatch' `
+	'S-only QA writeback remains on the independent battle page'
 Assert-Text $hostSource 'PageForPath|fileName\.rfind\(L"S[_-]"' `
     'host routes S documents by filename prefix'
 Assert-Text $hostSource 'm_sPage\.RequestPreviewRefresh' `
@@ -128,8 +131,8 @@ Assert-Text $opsTests 'battle_editor_painters_filter_cell_and_scope' `
     'six painter all-unit-cell/scope test exists'
 Assert-Text $opsTests 'battle_editor_wheel_direction_and_lock_only_sync_current_defaults' `
     'wheel direction/lock test exists'
-Assert-Text $opsTests 'battle_editor_fixed_47_delete_clears_80_slot_and_undo_restores_build' `
-    '0x47 complete 80-slot delete/undo/build test exists'
+Assert-Text $opsTests 'battle_editor_fixed_47_delete_stages_tombstone_and_undo_restores_row' `
+	'0x47 complete 80-slot delete/undo/build test exists'
 Assert-Text $opsTests 'battle_editor_partial_47_delete_undo_and_build_rejects_missing_row' `
     '0x47 partial-group delete/undo/build rejection test exists'
 Assert-Text $opsTests 'battle_editor_appearance_is_visual_only_and_undo_restores_without_raw_output' `
@@ -179,10 +182,10 @@ $expectedBattleEditorTests = @(
     'battle_editor_pan_is_clamped_to_proven_map_bounds',
     'battle_editor_rejects_unknown_or_cross_battle_scope_records',
     'battle_editor_fixed_slots_choose_first_middle_last_and_preserve_framing',
-    'battle_editor_fixed_delete_clears_slot_and_undo_restores_exact_row',
+    'battle_editor_fixed_delete_stages_tombstone_and_undo_restores_row',
     'battle_editor_appearance_is_visual_only_and_undo_restores_without_raw_output',
     'battle_editor_shows_all_battle_record_groups_without_visible_paging',
-    'battle_editor_fixed_47_delete_clears_80_slot_and_undo_restores_build',
+    'battle_editor_fixed_47_delete_stages_tombstone_and_undo_restores_row',
     'battle_editor_partial_47_delete_undo_and_build_rejects_missing_row',
     'battle_editor_character_search_clears_selected_minion_brush'
 )

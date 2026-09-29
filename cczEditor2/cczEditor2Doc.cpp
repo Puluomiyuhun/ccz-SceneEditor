@@ -14,6 +14,7 @@
 #include "LongCharData.h"
 
 #include <propkey.h>
+#include <atomic>
 #include <string>
 
 #ifdef _DEBUG
@@ -27,6 +28,19 @@
 #include "httplib.h"
 #include "json.hpp"
 using json = nlohmann::json;
+
+static std::atomic<std::uint64_t> s_nextSPreviewDocumentId{ 1 };
+
+static std::uint64_t AllocateSPreviewDocumentId() noexcept
+{
+	std::uint64_t documentId = s_nextSPreviewDocumentId.fetch_add(
+		1, std::memory_order_relaxed);
+	if (documentId == 0) {
+		documentId = s_nextSPreviewDocumentId.fetch_add(
+			1, std::memory_order_relaxed);
+	}
+	return documentId;
+}
 
 // CcczEditor2Doc
 
@@ -43,6 +57,7 @@ END_MESSAGE_MAP()
 // CcczEditor2Doc 构造/析构
 
 CcczEditor2Doc::CcczEditor2Doc() noexcept
+	: m_sPreviewDocumentId(AllocateSPreviewDocumentId())
 {
 	// TODO: 在此添加一次性构造代码
 
@@ -132,10 +147,13 @@ BOOL CcczEditor2Doc::OnSaveDocument(LPCTSTR lpszPathName)
 	if (savePath.Find(L"\\AppData\\Local\\") != -1) {
 		return CDocument::OnSaveDocument(lpszPathName);
 	}
+	const CString previousPath(pathName != nullptr ? pathName : L"");
 	pathName = new wchar_t[512];
 	wcscpy_s((wchar_t*)pathName, 512, lpszPathName);
 	if (!CDocument::OnSaveDocument(lpszPathName))
 		return FALSE;
+	if (previousPath.CompareNoCase(lpszPathName) != 0)
+		MarkEditorContentChanged();
 	POSITION p = GetFirstViewPosition();
 	CcczEditor2View* pView = (CcczEditor2View*)GetNextView(p);
 	CTreeCtrl& m_TreeCtrl = pView->GetTreeCtrl();
@@ -289,15 +307,22 @@ BOOL CcczEditor2Doc::OnSaveDocument(LPCTSTR lpszPathName)
 	pView->cur_code_ord = 0;
 	recur_refresh(root, m_TreeCtrl);
 
+	bool jumpTargetsChanged = false;
 	for (int i = 0; i < pView->jmp_list.size(); i++)
 	{
 		ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->jmp_list[i]);
-		data->int_data[0] = pView->new_ord[data->int_data[0]];
+		const int updatedTarget = pView->new_ord[data->int_data[0]];
+		if (updatedTarget != data->int_data[0]) {
+			data->int_data[0] = updatedTarget;
+			jumpTargetsChanged = true;
+		}
 		pView->UpdateShow(pView->jmp_list[i]);
 	}
 	pView->jmp_list.clear();
 
 	f.Close();
+	if (jumpTargetsChanged)
+		MarkEditorContentChanged();
 	OnModified(FALSE);
 
 	return TRUE;
@@ -324,11 +349,28 @@ void CcczEditor2Doc::recur_close(HTREEITEM cur,CTreeCtrl & tree, bool del)
 void CcczEditor2Doc::OnCloseDocument()
 {
 	POSITION p = GetFirstViewPosition();
-	CcczEditor2View* pView = (CcczEditor2View*)GetNextView(p);
-	CTreeCtrl& m_TreeCtrl = pView->GetTreeCtrl();
-	if (m_TreeCtrl) {
-		HTREEITEM root = m_TreeCtrl.GetRootItem();
-		recur_close(root, m_TreeCtrl, false);
+	CcczEditor2View* pView = p != nullptr
+		? DYNAMIC_DOWNCAST(CcczEditor2View, GetNextView(p)) : nullptr;
+	if (pView != nullptr) {
+		CTreeCtrl& tree = pView->GetTreeCtrl();
+		CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
+		if (frame != nullptr && tree.GetSafeHwnd() != nullptr) {
+			// CDocument may close while its MDI view is retained/reused. Clear the
+			// current page binding before releasing ItemData or destroying the
+			// TreeView. Tree destruction parks state; only this actual document
+			// close evicts the session.
+			frame->m_wndScenePreview.EditorTreeDestroyed(
+				tree.GetSafeHwnd(), *this);
+		}
+		if (tree.GetSafeHwnd() != nullptr) {
+			HTREEITEM root = tree.GetRootItem();
+			recur_close(root, tree, false);
+		}
+	}
+	if (CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd())) {
+		frame->m_wndScenePreview.CloseSBattleDocument(
+			GetSPreviewDocumentId());
+		frame->m_wndScenePreview.CloseRDocument(GetPreviewDocumentId());
 	}
 	CDocument::OnCloseDocument();
 }
@@ -464,25 +506,49 @@ void CcczEditor2Doc::Dump(CDumpContext& dc) const
 
 BOOL CcczEditor2Doc::SaveModified()
 {
-	// TODO: 在此添加专用代码和/或调用基类
-	if (modified == false)
-		return CDocument::SaveModified();
-	else {
+	CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
+	const auto documentId = GetSPreviewDocumentId();
+	if (frame != nullptr &&
+		!frame->m_wndScenePreview.CanCloseDocument(documentId)) return FALSE;
+
+	BOOL closeAccepted = FALSE;
+	if (modified == false) {
+		closeAccepted = CDocument::SaveModified();
+	} else {
+		// Reset this legacy dialog result for every close attempt. The previous
+		// value must never override a canceled SaveModified call.
+		can_close = false;
 		Dialog_Exit dialog;
 		dialog.cur_doc = this;
 		dialog.DoModal();
-		if (can_close)return CDocument::SaveModified();
-		else return FALSE;
+		if (can_close) closeAccepted = CDocument::SaveModified();
 	}
+	if (!closeAccepted && frame != nullptr)
+		frame->m_wndScenePreview.CancelDocumentClose(documentId);
+	return closeAccepted;
 }
 
 void CcczEditor2Doc::OnModified(BOOL m)
 {
 	modified = m;
+	if (m == TRUE) {
+		MarkEditorContentChanged();
+	}
 	wchar_t show[100];
 	wcscpy_s(show, title);
 	if (m == TRUE)wcscat_s(show, L" *");
 	this->SetTitle(show);
+}
+
+void CcczEditor2Doc::MarkEditorContentChanged() noexcept
+{
+	++m_previewContentEpoch;
+}
+
+void CcczEditor2Doc::MarkEditorTreeRebuilt() noexcept
+{
+	++m_previewTreeGeneration;
+	++m_previewContentEpoch;
 }
 
 

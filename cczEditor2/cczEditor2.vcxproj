@@ -113,9 +113,9 @@
       <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32' And '$(CCZSBattleWritebackQa)'=='true'">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32' And '$(CCZSBattlePreviewPerf)'=='true'">
     <ClCompile>
-      <PreprocessorDefinitions>CCZ_S_BATTLE_WRITEBACK_QA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>CCZ_S_BATTLE_PREVIEW_PERF;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -235,11 +235,16 @@
     <ClInclude Include="PreviewIntegration\EditorTreeSnapshot.h" />
     <ClInclude Include="PreviewIntegration\EditorPreviewAdapter.h" />
     <ClInclude Include="PreviewIntegration\BattlePreviewAdapter.h" />
+    <ClInclude Include="PreviewIntegration\BattleQuickModeResolver.h" />
+    <ClInclude Include="PreviewIntegration\BattleConditionTreeAdapter.h" />
+    <ClInclude Include="PreviewIntegration\EditorPreviewCatalog.h" />
     <ClInclude Include="PreviewIntegration\BattlePreviewPredicates.h" />
     <ClInclude Include="PreviewIntegration\BattleWritebackAdapter.h" />
     <ClInclude Include="PreviewIntegration\BattleEditorOps.h" />
     <ClInclude Include="PreviewIntegration\BattleCharacterCatalog.h" />
     <ClInclude Include="PreviewIntegration\BattleAssetCache.h" />
+    <ClInclude Include="PreviewIntegration\BattleBitmapCachePolicy.h" />
+    <ClInclude Include="PreviewIntegration\BattlePreviewSession.h" />
     <ClInclude Include="PreviewIntegration\E5ImageLoader.h" />
     <ClInclude Include="PreviewIntegration\FreeRPreviewResolver.h" />
     <ClInclude Include="PreviewIntegration\FreeRReplayComposer.h" />
@@ -283,6 +288,15 @@
     <ClCompile Include="PreviewIntegration\BattlePreviewAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleQuickModeResolver.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleConditionTreeAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\EditorPreviewCatalog.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="PreviewIntegration\BattleWritebackAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -293,6 +307,12 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="PreviewIntegration\BattleAssetCache.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleBitmapCachePolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattlePreviewSession.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="PreviewIntegration\FreeRPreviewResolver.cpp">

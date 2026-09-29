@@ -114,6 +114,43 @@ CCZ_TEST(battle_state_marks_imported_0x4b_slots_without_character_identity) {
     CCZ_REQUIRE(!ccz::preview::is_battle_deployment_slot_marker(imported));
 }
 
+CCZ_TEST(battle_visual_arm_kind_uses_deployment_faction_not_unit_type) {
+    ccz::preview::BattleUnit own;
+    own.source_instruction = 0x4b;
+    own.unit_type = 2;
+    CCZ_REQUIRE(ccz::preview::battle_visual_arm_kind(own).has_value());
+    CCZ_REQUIRE_EQ(*ccz::preview::battle_visual_arm_kind(own), 0);
+
+    ccz::preview::BattleUnit ally;
+    ally.source_instruction = 0x46;
+    ally.unit_type = 0;
+    CCZ_REQUIRE(ccz::preview::battle_visual_arm_kind(ally).has_value());
+    CCZ_REQUIRE_EQ(*ccz::preview::battle_visual_arm_kind(ally), 1);
+
+    ccz::preview::BattleUnit enemy;
+    enemy.source_instruction = 0x47;
+    enemy.unit_type = 1;
+    CCZ_REQUIRE(ccz::preview::battle_visual_arm_kind(enemy).has_value());
+    CCZ_REQUIRE_EQ(*ccz::preview::battle_visual_arm_kind(enemy), 2);
+}
+
+CCZ_TEST(battle_visual_arm_kind_prefers_staged_deployment_and_rejects_unknown) {
+    ccz::preview::BattleUnit staged;
+    staged.source_instruction = 0x46;
+    staged.editor_deployment_instruction = 0x47;
+    staged.data_id = 88;
+    staged.editor_staged_new = true;
+    CCZ_REQUIRE(ccz::preview::battle_visual_arm_kind(staged).has_value());
+    CCZ_REQUIRE_EQ(*ccz::preview::battle_visual_arm_kind(staged), 2);
+
+    staged.editor_deployment_instruction = 0xffff;
+    CCZ_REQUIRE(ccz::preview::battle_visual_arm_kind(staged).has_value());
+    CCZ_REQUIRE_EQ(*ccz::preview::battle_visual_arm_kind(staged), 1);
+
+    staged.source_instruction = 0x44;
+    CCZ_REQUIRE(!ccz::preview::battle_visual_arm_kind(staged).has_value());
+}
+
 CCZ_TEST(battle_hexzmap_decodes_selected_large_offset_grid_for_placement) {
     const auto archive = make_hexzmap_fixture();
     std::vector<std::uint8_t> terrain;

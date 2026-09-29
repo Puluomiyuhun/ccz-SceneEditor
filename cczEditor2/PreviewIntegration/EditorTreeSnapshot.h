@@ -63,6 +63,21 @@ EditorPreviewCapture CaptureEditorPreviewInput(
     ::CTreeCtrl& tree, EditorTreeItemHandle selected_item,
     const std::wstring& document_path);
 
+// Capture the complete value-owned document tree without requiring a selected
+// Section. Quick-mode resolution uses this on document open and navigation.
+bool CaptureEditorDocumentSnapshot(
+    ::CTreeCtrl& tree, const std::wstring& document_path,
+    CapturedEditorTree& snapshot, std::wstring& diagnostic);
+
+// Capture only a previously pinned Section and validate its exact path. Used
+// by quick mode to check whether Scene1 changed without copying the full EEX
+// TreeView on every selection or activation.
+bool CaptureEditorPinnedSectionSnapshot(
+    ::CTreeCtrl& tree, EditorTreeItemHandle section_item,
+    const std::vector<std::uint32_t>& expected_section_path,
+    const std::wstring& document_path, CapturedEditorTree& snapshot,
+    std::wstring& diagnostic);
+
 // Capture the value-owned document/Section snapshot without converting it to
 // the replay-core representation.  The native editor preview uses this same
 // bounded snapshot to resolve free-R Section pairs, so the lookup never walks

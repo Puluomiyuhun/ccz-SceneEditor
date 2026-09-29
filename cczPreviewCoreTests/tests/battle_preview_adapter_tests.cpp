@@ -81,6 +81,39 @@ CCZ_TEST(battle_adapter_preserves_full_document_snapshot_and_revision) {
                    result.input.document_revision);
 }
 
+CCZ_TEST(battle_adapter_document_revision_tracks_full_document_content) {
+    auto make_snapshot = [] {
+        ccz::editor_preview::CapturedEditorTree snapshot;
+        snapshot.document_path = L"F:/mod/RS/S_00.eex";
+        snapshot.section_path = {0};
+        snapshot.section_root = section(
+            10, {node(11, 0x44, {17, 3}), node(12, 0)});
+        snapshot.document_roots = {document_root({
+            section(10, {node(11, 0x44, {17, 3}), node(12, 0)}),
+            section(20, {node(21, 0x44, {19, 4}), node(22, 0)})})};
+        return snapshot;
+    };
+
+    auto baseline_snapshot = make_snapshot();
+    const auto baseline =
+        ccz::editor_preview::BuildBattlePreviewInput(
+            std::move(baseline_snapshot));
+
+    auto changed_snapshot = make_snapshot();
+    changed_snapshot.document_roots[0].children[1].children[0].int_data[0] =
+        99;
+    const auto changed =
+        ccz::editor_preview::BuildBattlePreviewInput(
+            std::move(changed_snapshot));
+
+    CCZ_REQUIRE(baseline.ok);
+    CCZ_REQUIRE(changed.ok);
+    CCZ_REQUIRE_EQ(changed.input.section_revision,
+                   baseline.input.section_revision);
+    CCZ_REQUIRE(changed.input.document_revision !=
+                baseline.input.document_revision);
+}
+
 CCZ_TEST(battle_adapter_rejects_idle_snapshot_without_section) {
     ccz::editor_preview::CapturedEditorTree snapshot;
     snapshot.document_path = L"F:/mod/RS/S_00.eex";

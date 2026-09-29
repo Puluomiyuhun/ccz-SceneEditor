@@ -129,6 +129,20 @@ void parse_node(const RawReplayNode& node, const BattleParseOptions& options,
     const bool selected = in_scope(node, options.scope_root_key);
     if (selected) {
         scope_seen = true;
+        const bool is_deployment = node.instruction_id == 0x4b ||
+            node.instruction_id == 0x46 || node.instruction_id == 0x47;
+        const bool deployment_reachable = !is_deployment ||
+            !options.filter_deployment_nodes ||
+            std::find(options.reachable_deployment_keys.begin(),
+                      options.reachable_deployment_keys.end(),
+                      node.logical_key) !=
+                options.reachable_deployment_keys.end();
+        if (!deployment_reachable) {
+            for (const RawReplayNode& child : node.children) {
+                parse_node(child, options, result, scope_seen, page_counters);
+            }
+            return;
+        }
         switch (node.instruction_id) {
         case kContainerInstruction:
             break;

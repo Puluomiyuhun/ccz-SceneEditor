@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cwctype>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <utility>
 
@@ -139,6 +140,91 @@ void clear_character_dependent_state(BattleEditorState& state) {
     state.direction_locked = direction_locked;
     state.selection.reset();
     state.hover.reset();
+}
+
+bool same_source_row(const BattleUnit& left, const BattleUnit& right) {
+    return !left.editor_staged_new && !right.editor_staged_new &&
+        left.source_key == right.source_key &&
+        left.source_instruction == right.source_instruction &&
+        left.record_index == right.record_index && left.page == right.page;
+}
+
+int unit_role_value(const BattleUnit& unit, BattleFieldRole role) {
+    switch (role) {
+    case BattleFieldRole::DataId: return unit.data_id;
+    case BattleFieldRole::DeploymentIndex: return unit.deployment_index;
+    case BattleFieldRole::Reinforcement: return unit.reinforcement ? 1 : 0;
+    case BattleFieldRole::Hidden: return unit.hidden ? 1 : 0;
+    case BattleFieldRole::X: return unit.position.x;
+    case BattleFieldRole::Y: return unit.position.y;
+    case BattleFieldRole::Direction: return unit.direction;
+    case BattleFieldRole::Level: return unit.level;
+    case BattleFieldRole::UnitType: return unit.unit_type;
+    case BattleFieldRole::AiPolicy: return unit.ai_policy;
+    case BattleFieldRole::TargetDataId: return unit.target;
+    case BattleFieldRole::TargetX: return unit.target_x;
+    case BattleFieldRole::TargetY: return unit.target_y;
+    }
+    return 0;
+}
+
+void copy_unit_role(const BattleUnit& source, BattleUnit& target,
+                    BattleFieldRole role) {
+    switch (role) {
+    case BattleFieldRole::DataId: target.data_id = source.data_id; break;
+    case BattleFieldRole::DeploymentIndex:
+        target.deployment_index = source.deployment_index; break;
+    case BattleFieldRole::Reinforcement:
+        target.reinforcement = source.reinforcement; break;
+    case BattleFieldRole::Hidden: target.hidden = source.hidden; break;
+    case BattleFieldRole::X: target.position.x = source.position.x; break;
+    case BattleFieldRole::Y: target.position.y = source.position.y; break;
+    case BattleFieldRole::Direction: target.direction = source.direction; break;
+    case BattleFieldRole::Level: target.level = source.level; break;
+    case BattleFieldRole::UnitType: target.unit_type = source.unit_type; break;
+    case BattleFieldRole::AiPolicy: target.ai_policy = source.ai_policy; break;
+    case BattleFieldRole::TargetDataId: target.target = source.target; break;
+    case BattleFieldRole::TargetX: target.target_x = source.target_x; break;
+    case BattleFieldRole::TargetY: target.target_y = source.target_y; break;
+    }
+}
+
+const wchar_t* role_label(BattleFieldRole role) {
+    switch (role) {
+    case BattleFieldRole::DataId: return L"Data号";
+    case BattleFieldRole::DeploymentIndex: return L"出场槽";
+    case BattleFieldRole::Reinforcement: return L"援军标记";
+    case BattleFieldRole::Hidden: return L"隐藏";
+    case BattleFieldRole::X: return L"X坐标";
+    case BattleFieldRole::Y: return L"Y坐标";
+    case BattleFieldRole::Direction: return L"方向";
+    case BattleFieldRole::Level: return L"等级";
+    case BattleFieldRole::UnitType: return L"单位类型";
+    case BattleFieldRole::AiPolicy: return L"AI策略";
+    case BattleFieldRole::TargetDataId: return L"目标Data号";
+    case BattleFieldRole::TargetX: return L"目标X坐标";
+    case BattleFieldRole::TargetY: return L"目标Y坐标";
+    }
+    return L"未知字段";
+}
+
+bool has_manual_appearance_override(const BattleEditorState& state,
+                                    const BattleUnit& unit) {
+    const auto character = std::find_if(
+        state.characters.entries.begin(), state.characters.entries.end(),
+        [&unit](const BattleCharacterEntry& entry) {
+            return entry.data_id == unit.data_id;
+        });
+    return character != state.characters.entries.end() &&
+        character->appearance != unit.appearance;
+}
+
+std::wstring source_row_label(const BattleUnit& unit) {
+    std::wostringstream stream;
+    stream << L"来源 " << unit.source_key << L" / 指令 0x" << std::hex
+           << std::uppercase << unit.source_instruction << std::dec
+           << L" / 记录 " << unit.record_index + 1;
+    return stream.str();
 }
 
 }  // namespace
@@ -282,12 +368,67 @@ int BattleEditorOps::NextAvailableBrushDataId(
     return -1;
 }
 
-void BattleEditorOps::RefreshSelectedBrushDataId() {
-    if (state_ == nullptr || !state_->selected_minion_brush.has_value()) return;
-    const int data_id = NextAvailableBrushDataId(*state_->selected_minion_brush);
+bool BattleEditorOps::RefreshSelectedBrushDataId(bool reset_direction) {
+    if (state_ == nullptr || !state_->selected_minion_brush.has_value())
+        return false;
+
+    const int retained_direction = state_->mouse_direction;
+    const BattleMinionBrush brush = *state_->selected_minion_brush;
+    int data_id = -1;
+    int batch_first_id = -1;
+    std::size_t batch_count = 0;
+    bool batch_metadata_valid = true;
+    bool close_batch = false;
+    for (const BattleUnit& unit : state_->battle.units) {
+        if (!unit.editor_staged_new ||
+            unit.editor_minion_brush_batch_id !=
+                state_->selected_minion_brush_batch_id) continue;
+        if (unit.editor_minion_brush_first_id < 0 ||
+            (batch_first_id >= 0 &&
+             unit.editor_minion_brush_first_id != batch_first_id)) {
+            batch_metadata_valid = false;
+            break;
+        }
+        batch_first_id = unit.editor_minion_brush_first_id;
+        ++batch_count;
+    }
+
+    if (batch_metadata_valid && batch_count == 0) {
+        // A newly selected brush starts at the lowest available Data ID.
+        data_id = NextAvailableBrushDataId(brush);
+    } else if (batch_metadata_valid && batch_first_id >= 0) {
+        const long long next_id = static_cast<long long>(batch_first_id) +
+            static_cast<long long>(batch_count);
+        if (next_id >= brush.first_data_id && next_id <= brush.last_data_id) {
+            const int candidate = static_cast<int>(next_id);
+            const bool occupied = std::any_of(
+                state_->battle.units.begin(), state_->battle.units.end(),
+                [this, candidate](const BattleUnit& unit) {
+                    return IsCurrentUnit(*state_, unit) &&
+                           unit.data_id == candidate;
+                });
+            if (!occupied) {
+                data_id = candidate;
+            } else {
+                close_batch = true;
+            }
+        } else if (next_id < brush.first_data_id) {
+            close_batch = true;
+        }
+    }
+
+    if (!batch_metadata_valid) close_batch = true;
+    if (close_batch) {
+        // A batch cannot jump over an occupied Data ID. Close it so that an
+        // explicit reselection starts a new contiguous batch at the next free
+        // run, which the writeback planner can represent safely.
+        state_->selected_minion_brush.reset();
+        state_->selected_minion_brush_batch_id = 0;
+        state_->mode = BattleEditorMode::Select;
+    }
     state_->placement_defaults.data_id = data_id;
     state_->characters.selected_data_id = data_id;
-    if (data_id < 0) return;
+    if (data_id < 0) return false;
     const auto entry = std::find_if(
         state_->characters.entries.begin(), state_->characters.entries.end(),
         [data_id](const BattleCharacterEntry& character) {
@@ -296,15 +437,21 @@ void BattleEditorOps::RefreshSelectedBrushDataId() {
     if (entry == state_->characters.entries.end()) {
         state_->placement_defaults.data_id = -1;
         state_->characters.selected_data_id = -1;
-        return;
+        state_->selected_minion_brush.reset();
+        state_->selected_minion_brush_batch_id = 0;
+        state_->mode = BattleEditorMode::Select;
+        return false;
     }
     state_->placement_defaults.appearance = entry->appearance;
-    state_->placement_defaults.direction = WrappedDirection(entry->default_direction);
+    state_->placement_defaults.direction = reset_direction
+        ? WrappedDirection(entry->default_direction)
+        : WrappedDirection(retained_direction);
     state_->placement_defaults.level = entry->level;
     state_->placement_defaults.unit_type = entry->unit_type;
     state_->placement_defaults.reinforcement = entry->reinforcement;
     state_->placement_defaults.ai_policy = entry->ai_policy;
     state_->mouse_direction = state_->placement_defaults.direction;
+    return true;
 }
 
 BattleEditorResult BattleEditorOps::SelectMinionBrush(int first_data_id) {
@@ -331,7 +478,7 @@ BattleEditorResult BattleEditorOps::SelectMinionBrush(int first_data_id) {
     }
     state_->characters.selected_data_id = -1;
     state_->mode = BattleEditorMode::Place;
-    RefreshSelectedBrushDataId();
+    RefreshSelectedBrushDataId(true);
     return state_->placement_defaults.data_id < 0
         ? success(L"小兵笔刷已选中，但组内 Data 号已耗尽")
         : success(L"小兵笔刷已选中，从组内最小可用 Data 号开始");
@@ -396,6 +543,22 @@ BattleEditorResult BattleEditorOps::SetMode(BattleEditorMode mode) {
     }
     state_->mode = mode;
     return success(L"战场编辑模式已切换");
+}
+
+BattleEditorResult BattleEditorOps::CancelPlacementBrush() {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    if (state_->mode != BattleEditorMode::Place) {
+        return failure(L"当前没有活动的战场布置笔刷");
+    }
+    state_->selected_minion_brush.reset();
+    state_->selected_minion_brush_batch_id = 0;
+    state_->characters.selected_data_id = -1;
+    state_->placement_defaults = BattlePlacementDefaults{};
+    state_->mode = BattleEditorMode::Select;
+    state_->mode_before_position_adjustment = BattleEditorMode::Select;
+    state_->adjusting_cache_id = 0;
+    state_->hover.reset();
+    return success(L"战场布置笔刷已取消");
 }
 
 BattleEditorResult BattleEditorOps::SetDirectionLock(bool enabled) {
@@ -682,7 +845,10 @@ BattleEditorResult BattleEditorOps::Place(
         ? BattleEditorMode::Place : BattleEditorMode::Modify;
     BattleEditorResult result = CommitMutation(proposed, 1,
         L"战场单位已临时放置（仍在缓存，尚未写入剧本）");
-    if (result.ok) RefreshSelectedBrushDataId();
+    if (result.ok && !RefreshSelectedBrushDataId() &&
+        !state_->selected_minion_brush.has_value()) {
+        result.diagnostic = L"战场单位已临时放置；当前小兵笔刷批次因连续 Data 号被占用或耗尽而结束，请重新选择笔刷开启新批次";
+    }
     return result;
 }
 
@@ -1195,5 +1361,182 @@ BattleEditorResult BattleEditorOps::Undo() {
 }
 
 void BattleEditorOps::ClearUndo() noexcept { undo_stack_.clear(); }
+
+BattleEditorDraftRebaseResult RebaseBattleEditorDraft(
+    const BattleEditorState& draft,
+    const BattleEditorState& fresh_baseline) {
+    BattleEditorDraftRebaseResult result;
+    result.state = fresh_baseline;
+    BattleEditorState& rebased = result.state;
+
+    // Keep editor choices and transient tools, while all map/source data comes
+    // from the fresh parse below.
+    rebased.characters = draft.characters;
+    rebased.minion_brushes = draft.minion_brushes;
+    rebased.selected_minion_brush = draft.selected_minion_brush;
+    rebased.next_minion_brush_batch_id = draft.next_minion_brush_batch_id;
+    rebased.selected_minion_brush_batch_id =
+        draft.selected_minion_brush_batch_id;
+    rebased.placement = draft.placement;
+    rebased.placement_defaults = draft.placement_defaults;
+    rebased.mode = draft.mode == BattleEditorMode::AdjustPosition
+        ? draft.mode_before_position_adjustment : draft.mode;
+    rebased.mode_before_position_adjustment = rebased.mode;
+    rebased.viewport = draft.viewport;
+    rebased.direction_locked = draft.direction_locked;
+    rebased.mouse_direction = draft.mouse_direction;
+    rebased.document_modified = draft.document_modified;
+    rebased.adjusting_cache_id = 0;
+    rebased.hover.reset();
+
+    std::map<std::uint64_t, std::uint64_t> cache_id_remap;
+    for (const BattleUnit& old_unit : draft.battle.units) {
+        if (old_unit.editor_staged_new) {
+            BattleUnit staged = old_unit;
+            if (staged.editor_pending_delete) continue;
+            if (rebased.next_cache_id == 0 ||
+                rebased.next_cache_id ==
+                    (std::numeric_limits<std::uint64_t>::max)()) {
+                result.conflicts.push_back(
+                    L"新增单位缓存 ID 已耗尽，无法安全保留该布置");
+                continue;
+            }
+            staged.editor_cache_id = rebased.next_cache_id++;
+            if (staged.editor_cache_id != old_unit.editor_cache_id)
+                cache_id_remap[old_unit.editor_cache_id] =
+                    staged.editor_cache_id;
+            const bool overlaps = std::any_of(
+                rebased.battle.units.begin(), rebased.battle.units.end(),
+                [&staged](const BattleUnit& candidate) {
+                    return !candidate.editor_pending_delete &&
+                        candidate.position == staged.position;
+                });
+            if (overlaps) {
+                result.conflicts.push_back(source_row_label(old_unit) +
+                    L"：新来源已有单位占据临时新增单位的格子");
+                continue;
+            }
+            rebased.battle.units.push_back(std::move(staged));
+            continue;
+        }
+
+        const bool manual_appearance =
+            has_manual_appearance_override(draft, old_unit);
+        const bool edited = old_unit.editor_pending_delete ||
+            !old_unit.dirty_fields.empty() || manual_appearance;
+        std::vector<std::size_t> matches;
+        for (std::size_t index = 0; index < rebased.battle.units.size(); ++index) {
+            if (same_source_row(old_unit, rebased.battle.units[index]))
+                matches.push_back(index);
+        }
+        if (matches.empty()) {
+            if (old_unit.editor_pending_delete) continue;
+            if (edited) {
+                result.conflicts.push_back(source_row_label(old_unit) +
+                    L"：新来源中已找不到对应单位");
+            }
+            continue;
+        }
+        if (matches.size() != 1) {
+            if (edited) {
+                result.conflicts.push_back(source_row_label(old_unit) +
+                    L"：新来源映射到多个单位");
+            }
+            continue;
+        }
+
+        BattleUnit& fresh_unit = rebased.battle.units[matches.front()];
+        if (old_unit.editor_cache_id != 0)
+            cache_id_remap[old_unit.editor_cache_id] =
+                fresh_unit.editor_cache_id;
+        if (old_unit.editor_pending_delete) {
+            fresh_unit.editor_pending_delete = true;
+            continue;
+        }
+        if (old_unit.dirty_fields.empty()) {
+            // Appearance has no proven EEX field, but an explicit painter
+            // choice is still part of the preview draft.
+            if (manual_appearance)
+                fresh_unit.appearance = old_unit.appearance;
+            continue;
+        }
+
+        const BattleFieldSpec* spec =
+            ccz::preview::get_battle_field_spec(old_unit.source_instruction);
+        if (spec == nullptr || !spec->semantic_complete ||
+            old_unit.editor_origin_fields.size() != spec->record_stride ||
+            fresh_unit.raw_fields.size() != spec->record_stride ||
+            spec->field_roles.size() != spec->record_stride) {
+            result.conflicts.push_back(source_row_label(old_unit) +
+                L"：字段基线不完整，无法合并临时修改");
+            continue;
+        }
+
+        for (const BattleFieldRole role : old_unit.dirty_fields) {
+            bool role_found = false;
+            bool local_value_needed = false;
+            const int local_value = unit_role_value(old_unit, role);
+            for (std::size_t field = 0; field < spec->record_stride; ++field) {
+                if (spec->field_roles[field] != role) continue;
+                role_found = true;
+                const int old_value = old_unit.editor_origin_fields[field];
+                const int fresh_value = fresh_unit.raw_fields[field];
+                if (fresh_value != old_value && fresh_value != local_value) {
+                    result.conflicts.push_back(source_row_label(old_unit) +
+                        L"：" + role_label(role) + L"也被剧本来源修改");
+                    local_value_needed = false;
+                    break;
+                }
+                if (fresh_value != local_value) local_value_needed = true;
+            }
+            if (!role_found) {
+                result.conflicts.push_back(source_row_label(old_unit) +
+                    L"：字段表中找不到" + role_label(role));
+                continue;
+            }
+            if (local_value_needed) {
+                copy_unit_role(old_unit, fresh_unit, role);
+                ccz::preview::mark_battle_field_dirty(fresh_unit, role);
+            }
+        }
+        if (manual_appearance) {
+            fresh_unit.appearance = old_unit.appearance;
+        }
+    }
+
+    if (!result.conflicts.empty()) {
+        result.state = draft;
+        return result;
+    }
+
+    if (draft.selection.has_value()) {
+        BattleSelection selection = *draft.selection;
+        const auto mapped = cache_id_remap.find(selection.cache_id);
+        if (mapped != cache_id_remap.end()) {
+            selection.cache_id = mapped->second;
+            rebased.selection = selection;
+        } else {
+            const auto source = std::find_if(
+                rebased.battle.units.begin(), rebased.battle.units.end(),
+                [&selection](const BattleUnit& unit) {
+                    return unit.source_key == selection.source_key &&
+                        unit.record_index == selection.record_index &&
+                        unit.page == static_cast<int>(selection.page) &&
+                        !unit.editor_pending_delete;
+                });
+            if (source == rebased.battle.units.end()) {
+                rebased.selection.reset();
+            } else {
+                selection.cache_id = source->editor_cache_id;
+                rebased.selection = selection;
+            }
+        }
+    } else {
+        rebased.selection.reset();
+    }
+
+    result.ok = true;
+    return result;
+}
 
 }  // namespace ccz::editor_preview

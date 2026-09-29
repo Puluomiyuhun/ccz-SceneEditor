@@ -137,6 +137,7 @@
     <ClInclude Include="include\ccz\preview\battle_instruction_parser.h" />
     <ClInclude Include="include\ccz\preview\battle_field_spec.h" />
     <ClInclude Include="include\ccz\preview\battle_interaction.h" />
+    <ClInclude Include="include\ccz\preview\r_document_session.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\dialogue_profile.cpp" />
@@ -160,6 +161,7 @@
     <ClCompile Include="src\battle_instruction_parser.cpp" />
     <ClCompile Include="src\battle_field_spec.cpp" />
     <ClCompile Include="src\battle_interaction.cpp" />
+    <ClCompile Include="src\r_document_session.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

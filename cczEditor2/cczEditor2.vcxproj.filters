@@ -141,6 +141,15 @@
     <ClInclude Include="PreviewIntegration\BattlePreviewAdapter.h">
       <Filter>PreviewIntegration</Filter>
     </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleQuickModeResolver.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleConditionTreeAdapter.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\EditorPreviewCatalog.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
     <ClInclude Include="PreviewIntegration\BattlePreviewPredicates.h">
       <Filter>PreviewIntegration</Filter>
     </ClInclude>
@@ -154,6 +163,12 @@
       <Filter>PreviewIntegration</Filter>
     </ClInclude>
     <ClInclude Include="PreviewIntegration\BattleAssetCache.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleBitmapCachePolicy.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattlePreviewSession.h">
       <Filter>PreviewIntegration</Filter>
     </ClInclude>
     <ClInclude Include="PreviewIntegration\E5ImageLoader.h">
@@ -278,6 +293,15 @@
     <ClCompile Include="PreviewIntegration\BattlePreviewAdapter.cpp">
       <Filter>PreviewIntegration</Filter>
     </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleQuickModeResolver.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleConditionTreeAdapter.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\EditorPreviewCatalog.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
     <ClCompile Include="PreviewIntegration\BattleWritebackAdapter.cpp">
       <Filter>PreviewIntegration</Filter>
     </ClCompile>
@@ -288,6 +312,12 @@
       <Filter>PreviewIntegration</Filter>
     </ClCompile>
     <ClCompile Include="PreviewIntegration\BattleAssetCache.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleBitmapCachePolicy.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattlePreviewSession.cpp">
       <Filter>PreviewIntegration</Filter>
     </ClCompile>
     <ClCompile Include="PreviewIntegration\FreeRPreviewResolver.cpp">

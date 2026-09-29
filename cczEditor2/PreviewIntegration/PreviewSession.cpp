@@ -504,6 +504,17 @@ void append_replay_diagnostics(PreviewFrame& frame,
 
 }  // namespace
 
+bool ApplyConditionTreeActionToOptions(
+    ccz::preview::ReplayOptions& options,
+    const ccz::preview::SectionExecutionModel& model,
+    const ccz::preview::LogicalNodeKey& node_key,
+    ccz::preview::ConditionTreeAction action,
+    std::int32_t integer_value,
+    std::wstring* diagnostic) {
+    return apply_condition_action_to_options(options, model, node_key, action,
+                                             integer_value, diagnostic);
+}
+
 PreviewFrame BuildPreviewFrame(
     const EditorPreviewInput& input, const SectionExecutionModel& model,
     const ReplayOptions& options,
@@ -744,8 +755,8 @@ bool PreviewSession::ApplyConditionAction(
         return false;
     }
     ReplayOptions candidate = options_;
-    if (!apply_condition_action_to_options(candidate, *frame_.model, node_key,
-                                           action, integer_value, diagnostic)) {
+    if (!ApplyConditionTreeActionToOptions(candidate, *frame_.model, node_key,
+            action, integer_value, diagnostic)) {
         return false;
     }
     options_ = std::move(candidate);

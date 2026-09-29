@@ -900,9 +900,13 @@ CCZ_TEST(battle_editor_brush_uses_smallest_free_id_and_advances_only_after_place
     CCZ_REQUIRE(second != state.battle.units.end());
     CCZ_REQUIRE_EQ(second->data_id, 401);
     CCZ_REQUIRE_EQ(state.placement_defaults.data_id, -1);
+    CCZ_REQUIRE(!state.selected_minion_brush.has_value());
     CCZ_REQUIRE(!ops.PreviewPlacement({1, 0}).valid);
 
     CCZ_REQUIRE(ops.DeleteAt({0, 1}).ok);
+    CCZ_REQUIRE_EQ(state.placement_defaults.data_id, -1);
+    CCZ_REQUIRE(!state.selected_minion_brush.has_value());
+    CCZ_REQUIRE(ops.SelectMinionBrush(400).ok);
     CCZ_REQUIRE_EQ(state.placement_defaults.data_id, 401);
     const auto survivor400 = std::find_if(state.battle.units.begin(), state.battle.units.end(),
         [](const BattleUnit& candidate) { return candidate.position == ccz::preview::BattleCoord{0, 0}; });
@@ -937,6 +941,41 @@ CCZ_TEST(battle_editor_character_search_clears_selected_minion_brush) {
     CCZ_REQUIRE_EQ(state.placement_defaults.data_id, -1);
 }
 
+CCZ_TEST(battle_editor_cancel_placement_brush_preserves_battle_scope) {
+    auto state = fixture();
+    state.characters.entries.insert(state.characters.entries.end(), {
+        {400, L"刀卫1", 0, 0, 0, 3, false, -1},
+        {401, L"刀卫2", 0, 0, 0, 3, false, -1},
+    });
+    state.minion_brushes.push_back({L"刀卫", 400, 401});
+    BattleEditorOps ops(state);
+
+    CCZ_REQUIRE(ops.SetDeploymentInstruction(0x46).ok);
+    const auto originalUnitCount = state.battle.units.size();
+    CCZ_REQUIRE(ops.SelectMinionBrush(400).ok);
+    CCZ_REQUIRE(state.selected_minion_brush.has_value());
+    CCZ_REQUIRE_EQ(state.placement_defaults.data_id, 400);
+
+    const auto canceled = ops.CancelPlacementBrush();
+    CCZ_REQUIRE(canceled.ok);
+    CCZ_REQUIRE(!state.selected_minion_brush.has_value());
+    CCZ_REQUIRE_EQ(state.selected_minion_brush_batch_id, std::uint64_t(0));
+    CCZ_REQUIRE_EQ(state.characters.selected_data_id, -1);
+    CCZ_REQUIRE_EQ(state.placement_defaults.data_id, -1);
+    CCZ_REQUIRE_EQ(state.mode, BattleEditorMode::Select);
+    CCZ_REQUIRE_EQ(state.placement.instruction_id, std::uint16_t(0x46));
+    CCZ_REQUIRE_EQ(state.battle.units.size(), originalUnitCount);
+    CCZ_REQUIRE(!ops.CanUndo());
+
+    CCZ_REQUIRE(ops.SelectCharacter(100).ok);
+    CCZ_REQUIRE_EQ(state.mode, BattleEditorMode::Place);
+    CCZ_REQUIRE(ops.CancelPlacementBrush().ok);
+    CCZ_REQUIRE_EQ(state.mode, BattleEditorMode::Select);
+    CCZ_REQUIRE_EQ(state.characters.selected_data_id, -1);
+    CCZ_REQUIRE_EQ(state.placement_defaults.data_id, -1);
+    CCZ_REQUIRE_EQ(state.placement.instruction_id, std::uint16_t(0x46));
+}
+
 CCZ_TEST(battle_editor_prevents_duplicate_character_data_id_placement) {
     auto state = fixture();
     BattleEditorOps ops(state);
@@ -945,4 +984,64 @@ CCZ_TEST(battle_editor_prevents_duplicate_character_data_id_placement) {
     CCZ_REQUIRE(!preview.valid);
     CCZ_REQUIRE(preview.diagnostic.find(L"Data") != std::wstring::npos);
     CCZ_REQUIRE_EQ(state.placement_defaults.data_id, 100);
+}
+
+CCZ_TEST(battle_editor_rebases_preview_draft_onto_changed_source_fields) {
+    auto baseline = fixture();
+    auto source = unit(0x4b, 0, 0, 100, 1, 2);
+    source.editor_cache_id = 1;
+    source.fields_decoded = true;
+    write_semantic_fields(source);
+    source.editor_origin_fields = source.raw_fields;
+    baseline.battle.units = {source};
+
+    auto draft = baseline;
+    draft.battle.units[0].position.x = 9;
+    ccz::preview::mark_battle_field_dirty(
+        draft.battle.units[0], ccz::preview::BattleFieldRole::X);
+
+    auto fresh = baseline;
+    fresh.battle.units[0].position.y = 7;
+    write_semantic_fields(fresh.battle.units[0]);
+    fresh.battle.units[0].editor_origin_fields =
+        fresh.battle.units[0].raw_fields;
+
+    const auto rebased = ccz::editor_preview::RebaseBattleEditorDraft(
+        draft, fresh);
+    CCZ_REQUIRE(rebased.ok);
+    CCZ_REQUIRE_EQ(rebased.state.battle.units.size(), std::size_t{1});
+    CCZ_REQUIRE_EQ(rebased.state.battle.units[0].position,
+                   (ccz::preview::BattleCoord{9, 7}));
+    CCZ_REQUIRE_EQ(rebased.state.battle.units[0].editor_origin_fields,
+                   fresh.battle.units[0].raw_fields);
+    CCZ_REQUIRE(ccz::preview::is_battle_field_dirty(
+        rebased.state.battle.units[0], ccz::preview::BattleFieldRole::X));
+}
+
+CCZ_TEST(battle_editor_reports_conflict_when_source_and_preview_change_same_field) {
+    auto baseline = fixture();
+    auto source = unit(0x4b, 0, 0, 100, 1, 2);
+    source.editor_cache_id = 1;
+    source.fields_decoded = true;
+    write_semantic_fields(source);
+    source.editor_origin_fields = source.raw_fields;
+    baseline.battle.units = {source};
+
+    auto draft = baseline;
+    draft.battle.units[0].position.x = 9;
+    ccz::preview::mark_battle_field_dirty(
+        draft.battle.units[0], ccz::preview::BattleFieldRole::X);
+
+    auto fresh = baseline;
+    fresh.battle.units[0].position.x = 3;
+    write_semantic_fields(fresh.battle.units[0]);
+    fresh.battle.units[0].editor_origin_fields =
+        fresh.battle.units[0].raw_fields;
+
+    const auto rebased = ccz::editor_preview::RebaseBattleEditorDraft(
+        draft, fresh);
+    CCZ_REQUIRE(!rebased.ok);
+    CCZ_REQUIRE(!rebased.conflicts.empty());
+    CCZ_REQUIRE(rebased.conflicts[0].find(L"node:46") != std::wstring::npos);
+    CCZ_REQUIRE_EQ(draft.battle.units[0].position.x, 9);
 }

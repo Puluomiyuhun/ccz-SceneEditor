@@ -161,8 +161,20 @@ ccz::preview::LogicalNodeKey ScopePrefix(
 
 }  // namespace
 
+std::uint64_t ComputeBattleSectionRevision(
+    const std::wstring& document_path,
+    const CapturedEditorNode& section_root) {
+    const std::wstring normalized_path =
+        NormalizeDocumentPath(document_path);
+    if (normalized_path.empty()) return 0;
+    RevisionHasher section_revision;
+    section_revision.AddString(normalized_path);
+    HashCapturedNode(section_revision, section_root);
+    return section_revision.Value();
+}
+
 BattlePreviewCapture BuildBattlePreviewInput(
-    const CapturedEditorTree& document_snapshot) {
+    CapturedEditorTree document_snapshot) {
     BattlePreviewCapture result;
     const std::wstring document_path =
         NormalizeDocumentPath(document_snapshot.document_path);
@@ -174,22 +186,23 @@ BattlePreviewCapture BuildBattlePreviewInput(
         result.diagnostic = L"战场预览需要选中一个 Section 以建立作用域";
         return result;
     }
-    result.snapshot = document_snapshot;
-    if (document_snapshot.document_roots.empty()) {
+    result.snapshot = std::move(document_snapshot);
+    const CapturedEditorTree& snapshot = result.snapshot;
+    if (snapshot.document_roots.empty()) {
         result.diagnostic = L"战场预览快照没有文档节点";
         return result;
     }
 
     result.input.document_key = document_path + L"|document";
     result.input.document_path = document_path;
-    if (!ConvertRoots(document_snapshot.document_roots,
+    if (!ConvertRoots(snapshot.document_roots,
                       result.input.document_key, result.input.nodes,
                       result.diagnostic)) {
         return result;
     }
 
     const auto* section_node = FindNodeByHandle(
-        result.input.nodes, document_snapshot.section_root.runtime_handle);
+        result.input.nodes, snapshot.section_root.runtime_handle);
     if (section_node == nullptr) {
         result.diagnostic = L"战场预览快照找不到当前 Section 作用域";
         return result;
@@ -200,6 +213,17 @@ BattlePreviewCapture BuildBattlePreviewInput(
         return result;
     }
 
+    RevisionHasher revision;
+    revision.AddString(document_path);
+    // The revision protects document-content undo, not the view's current
+    // selection.  section_path and selected_path are navigation state; moving
+    // to another Section must not stale a native writeback undo record.
+    HashCapturedRoots(revision, snapshot.document_roots);
+    result.input.document_revision = revision.Value();
+
+    result.input.section_revision = ComputeBattleSectionRevision(
+        document_path, snapshot.section_root);
+
     result.mode = ccz::preview::classify_preview_mode(
         result.input.document_path, result.input.nodes);
     if (result.mode.mode != ccz::preview::PreviewMode::Battle) {
@@ -208,14 +232,6 @@ BattlePreviewCapture BuildBattlePreviewInput(
             : result.mode.diagnostic;
         return result;
     }
-
-    RevisionHasher revision;
-    revision.AddString(document_path);
-    // The revision protects document-content undo, not the view's current
-    // selection.  section_path and selected_path are navigation state; moving
-    // to another Section must not stale a native writeback undo record.
-    HashCapturedRoots(revision, document_snapshot.document_roots);
-    result.input.document_revision = revision.Value();
 
     result.ok = true;
     return result;

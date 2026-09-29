@@ -58,9 +58,27 @@ struct BattleWritebackSourceInstruction {
 
 struct BattleWritebackSectionSnapshot {
     ccz::preview::LogicalNodeKey scope_key;
+    // Legacy/default target used only when the active branch has no reachable
+    // deployment source from which to infer a type-specific child event.
     ccz::preview::LogicalNodeKey insert_parent_key;
     ccz::preview::LogicalNodeKey insert_before_key;
+    std::vector<BattleDeploymentInsertionAnchor> insertion_anchors;
     std::vector<BattleWritebackSourceInstruction> instructions;
+};
+
+struct BattleWritebackReachabilityScope {
+    // When true, source deployments are limited to this complete, current
+    // condition-tree projection. An empty key list is a valid empty branch.
+    bool filter_deployments{};
+    std::vector<ccz::preview::LogicalNodeKey> reachable_deployment_keys;
+    ccz::preview::LogicalNodeKey insert_parent_key;
+    ccz::preview::LogicalNodeKey insert_before_key;
+    std::vector<BattleDeploymentInsertionAnchor> insertion_anchors;
+};
+
+enum class BattleWritebackRevisionScope {
+    WholeDocument,
+    PinnedSection,
 };
 
 struct BattleWritebackChange {
@@ -142,8 +160,8 @@ struct BattleWritebackNativeDocumentState {
     int next_ordinal{};
     bool custom_modified{};
     bool framework_modified{};
-    // Content-only revision. The MFC bridge derives it from the full document
-    // capture so stale one-step undo cannot clear later unrelated edits.
+    // Content-only revision for transaction and one-step undo safety. The MFC
+    // bridge derives it from the full document so undo cannot clear later edits.
     std::uint64_t document_revision{};
 };
 
@@ -186,7 +204,7 @@ public:
         const std::vector<BattleWritebackNativeHandleMapping>& remapped_handles) = 0;
 };
 
-// One S-only native document transaction and one independent undo record.
+// S-only native document transactions with a LIFO undo record per commit.
 // It accepts only a fully pre-resolved batch; no logical lookup happens after
 // the first mutation starts.
 class BattleWritebackNativeTransaction {
@@ -195,7 +213,7 @@ public:
         BattleWritebackNativeHost& host, std::wstring& diagnostic);
     bool Undo(BattleWritebackNativeHost& host, std::wstring& diagnostic);
     void Clear() noexcept;
-    bool undo_available() const noexcept { return undo_available_; }
+    bool undo_available() const noexcept { return !undo_stack_.empty(); }
 
 private:
     struct AppliedOperation {
@@ -217,8 +235,7 @@ private:
         std::vector<AppliedOperation> operations;
     };
 
-    bool undo_available_{};
-    UndoRecord undo_;
+    std::vector<UndoRecord> undo_stack_;
 };
 
 // Create an immutable, value-owned Section delta.  The supplied source
@@ -237,7 +254,10 @@ bool BuildBattleWritebackSectionSnapshot(
     const BattlePreviewCapture& baseline,
     const BattlePreviewCapture& current,
     BattleWritebackSectionSnapshot& output,
-    std::wstring& diagnostic);
+    std::wstring& diagnostic,
+    BattleWritebackRevisionScope revision_scope =
+        BattleWritebackRevisionScope::WholeDocument,
+    const BattleWritebackReachabilityScope* reachability_scope = nullptr);
 
 // Build a value-owned, inspectable representation of the supported battle
 // records.  It refuses incomplete evidence and never mutates an editor

@@ -211,7 +211,82 @@ bool BuildSelectedPath(CTreeCtrl& tree, HTREEITEM boundary,
     return true;
 }
 
+bool CaptureDocumentRoot(CTreeCtrl& tree, HTREEITEM root,
+                         CaptureBudget& capture_budget,
+                         CapturedEditorNode& document_root,
+                         std::wstring& diagnostic) {
+    CaptureContext context{tree, capture_budget};
+    if (!CaptureNode(context, root, 0, document_root, true)) {
+        diagnostic = context.diagnostic;
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
+
+bool CaptureEditorDocumentSnapshot(
+    CTreeCtrl& tree, const std::wstring& document_path,
+    CapturedEditorTree& snapshot, std::wstring& diagnostic) {
+    snapshot = {};
+    snapshot.document_path = document_path;
+    diagnostic.clear();
+    const HTREEITEM root = tree.GetRootItem();
+    if (root == nullptr) {
+        diagnostic = L"剧本文档树为空";
+        return false;
+    }
+
+    CaptureBudget capture_budget;
+    CapturedEditorNode document_root;
+    if (!CaptureDocumentRoot(tree, root, capture_budget, document_root,
+                             diagnostic)) {
+        return false;
+    }
+    snapshot.document_roots.push_back(std::move(document_root));
+    return true;
+}
+
+bool CaptureEditorPinnedSectionSnapshot(
+    CTreeCtrl& tree, EditorTreeItemHandle section_item,
+    const std::vector<std::uint32_t>& expected_section_path,
+    const std::wstring& document_path, CapturedEditorTree& snapshot,
+    std::wstring& diagnostic) {
+    snapshot = {};
+    snapshot.document_path = document_path;
+    diagnostic.clear();
+    if (section_item == nullptr || tree.GetSafeHwnd() == nullptr) {
+        diagnostic = L"快速模式绑定的 Scene1 Section 句柄无效";
+        return false;
+    }
+    const HTREEITEM root = tree.GetRootItem();
+    auto* data = reinterpret_cast<ItemData*>(tree.GetItemData(section_item));
+    if (root == nullptr || data == nullptr || data->id != -2) {
+        diagnostic = L"快速模式绑定节点已不再是剧本 Section";
+        return false;
+    }
+
+    std::vector<std::uint32_t> actual_path;
+    if (!BuildSectionPath(tree, root, section_item, actual_path, diagnostic))
+        return false;
+    if (actual_path != expected_section_path) {
+        diagnostic = L"快速模式绑定的 Scene1 Section 路径已变化";
+        return false;
+    }
+
+    CaptureBudget capture_budget;
+    CaptureContext context{tree, capture_budget};
+    if (!CaptureNode(context, section_item, 0, snapshot.section_root)) {
+        diagnostic = context.diagnostic.empty()
+            ? L"快速模式无法读取固定的 Scene1 Section"
+            : context.diagnostic;
+        snapshot = {};
+        return false;
+    }
+    snapshot.section_root.instruction_id = -2;
+    snapshot.section_path = std::move(actual_path);
+    return true;
+}
 
 bool CaptureEditorTreeSnapshot(
     CTreeCtrl& tree, EditorTreeItemHandle selected_item,
@@ -248,11 +323,9 @@ bool CaptureEditorTreeSnapshot(
     }
 
     CaptureBudget capture_budget;
-    CaptureContext document_context{tree, capture_budget};
     CapturedEditorNode document_root;
-    if (!CaptureNode(document_context, root, 0, document_root,
-                     true)) {
-        diagnostic = document_context.diagnostic;
+    if (!CaptureDocumentRoot(tree, root, capture_budget, document_root,
+                             diagnostic)) {
         return false;
     }
     snapshot.document_roots.push_back(std::move(document_root));

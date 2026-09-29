@@ -5,6 +5,7 @@
 #include <thread>
 #include <string>
 #include <cstddef>
+#include <cstdint>
 #pragma once
 
 // 前向声明
@@ -51,6 +52,12 @@ public:
 	virtual void Serialize(CArchive& ar);
 	virtual BOOL SaveModified();
 	void OnModified(BOOL m);
+	std::uint64_t GetPreviewDocumentId() const noexcept { return m_sPreviewDocumentId; }
+	std::uint64_t GetSPreviewDocumentId() const noexcept { return GetPreviewDocumentId(); }
+	std::uint64_t GetPreviewContentEpoch() const noexcept { return m_previewContentEpoch; }
+	std::uint64_t GetPreviewTreeGeneration() const noexcept { return m_previewTreeGeneration; }
+	void MarkEditorContentChanged() noexcept;
+	void MarkEditorTreeRebuilt() noexcept;
 	bool modified = false;
 	bool can_close = false;
 
@@ -128,6 +135,9 @@ protected:
 #endif // SHARED_HANDLERS
 
 private:
+	std::uint64_t m_sPreviewDocumentId{};
+	std::uint64_t m_previewContentEpoch{1};
+	std::uint64_t m_previewTreeGeneration{1};
 	httplib::Server* m_httpServer = nullptr;
 	std::thread* m_serverThread = nullptr;
 	int m_serverPort = 8080;

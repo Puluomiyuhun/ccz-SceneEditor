@@ -495,9 +495,11 @@ void CMainFrame::OnAllFileClose()
 			CDocument* pDoc = p->GetNextDoc(posdoc);
 			if (pDoc != NULL)
 			{
-				((CcczEditor2Doc*)pDoc)->SaveModified();
-				if (((CcczEditor2Doc*)pDoc)->can_close || !((CcczEditor2Doc*)pDoc)->modified)
-					((CcczEditor2Doc*)pDoc)->OnCloseDocument();
+				CcczEditor2Doc* document = DYNAMIC_DOWNCAST(CcczEditor2Doc, pDoc);
+				if (document != nullptr) {
+					const BOOL canClose = document->SaveModified();
+					if (canClose) document->OnCloseDocument();
+				}
 			}
 		}
 	}

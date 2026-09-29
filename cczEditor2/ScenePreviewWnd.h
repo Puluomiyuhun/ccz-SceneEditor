@@ -13,15 +13,18 @@
 #include "PreviewIntegration/PreviewRefreshStateMachine.h"
 #include "PreviewIntegration/PreviewRefreshDecision.h"
 #include "PreviewIntegration/PreviewSession.h"
+#include "PreviewIntegration/EditorTreeSnapshot.h"
 #include "PreviewIntegration/PreviewAssetCache.h"
 #include "PreviewIntegration/FreeRPreviewResolver.h"
 #include "PreviewIntegration/ConditionTreePane.h"
 #include "PreviewIntegration/VariableControlPane.h"
 #include "PreviewIntegration/DynamicPlaybackSession.h"
 #include "PreviewIntegration/PlaybackInterpolation.h"
+#include <ccz/preview/r_document_session.h>
 #pragma comment(lib, "gdiplus.lib")
 
 struct ItemData;
+class CcczEditor2Doc;
 
 struct PositionWritebackSource {
 	ccz::scene_preview::PositionSource source;
@@ -78,7 +81,19 @@ public:
 	BOOL CreatePage(CWnd* parent, UINT control_id);
 
 	void RequestPreviewRefresh(CTreeCtrl& tree, HTREEITEM selected_item,
-		const wchar_t* document_path);
+		CcczEditor2Doc& document);
+	bool ActivateDocument(CTreeCtrl& tree, HTREEITEM selected_item,
+		CcczEditor2Doc& document, bool& reused_session);
+	void ParkActiveDocument();
+	bool PrepareForTreeRebuild(CcczEditor2Doc& document);
+	bool EditorTreeDestroyed(HWND tree_window, CcczEditor2Doc& document);
+	bool CloseDocument(ccz::editor_preview::PreviewDocumentId document_id);
+	void InvalidateDocumentPreview(
+		ccz::editor_preview::PreviewDocumentId document_id);
+	ccz::editor_preview::PreviewDocumentId ActiveDocumentId() const noexcept
+	{
+		return m_activeDocumentId;
+	}
 	void InvalidatePendingPreviewRefresh();
 	void UpdatePreview(CTreeCtrl& tree, HTREEITEM hSelectedItem, const wchar_t* modPath);
 	NativePlanApplyResult ApplyNativeReplayPlan(
@@ -120,6 +135,7 @@ private:
 	SceneState m_state;
 	Gdiplus::Bitmap* m_pMapBitmap = nullptr;
 	int m_cachedMapID = -1;
+	std::map<int, Gdiplus::Bitmap*> m_mapBitmapCache;
 	CString m_modPath;
 	CString m_debugInfo;
 
@@ -270,6 +286,7 @@ private:
 		HWND treeWindow = nullptr;
 		HTREEITEM selectedItem = nullptr;
 		CString documentPath;
+		ccz::editor_preview::RDocumentActivationSnapshot activation;
 		std::uint64_t treeGeneration = 0;
 
 		bool valid() const noexcept
@@ -281,6 +298,7 @@ private:
 			treeWindow = nullptr;
 			selectedItem = nullptr;
 			documentPath.Empty();
+			activation = {};
 			treeGeneration = 0;
 		}
 	} m_pendingPreviewRequest;
@@ -302,6 +320,8 @@ private:
 	void EvaluateToItem(CTreeCtrl& tree, HTREEITEM hItem);
 	void ExecutePendingPreviewRefresh(
 		const ccz::editor_preview::PreviewRefreshStateMachine::Request& request);
+	void RequestPreviewRefreshForCurrentDocument(
+		CTreeCtrl& tree, HTREEITEM selected_item);
 	enum class SpecialScenePrefixResult {
 		NotSpecial,
 		SpecialUnresolved,
@@ -441,12 +461,47 @@ private:
 		HTREEITEM restoreSelection = nullptr;
 		std::uint64_t treeGeneration = 0;
 	};
+	struct RDocumentPreviewSession {
+		ccz::editor_preview::RDocumentActivationSnapshot activation;
+		bool has_baseline{};
+		SceneState state;
+		ccz::editor_preview::PreviewSession preview_session;
+		ccz::editor_preview::EditorPreviewInput last_preview_input;
+		ccz::editor_preview::CapturedEditorTree last_editor_tree_snapshot;
+		bool has_editor_tree_snapshot{};
+		ccz::editor_preview::ScenePreviewResolution cached_scene_resolution;
+		bool cached_scene_resolution_valid{};
+		ccz::preview::NativeReplayPlan cached_free_r_prefix_plan;
+		bool cached_free_r_prefix_valid{};
+		std::wstring debug_info;
+		bool internalization_fallback_active{};
+		bool condition_button_visible{};
+		bool activation_button_visible{};
+		bool condition_pane_visible{};
+		bool variable_button_visible{};
+		bool variable_pane_visible{};
+		bool playback_visible{};
+		std::vector<int> selected_character_ids;
+		int primary_character_id{-1};
+		std::vector<PreviewUndoTransaction> undo_stack;
+		ccz::preview::PlaybackTimeline dynamic_timeline;
+		std::size_t dynamic_static_progress_index{};
+		ccz::preview::PlaybackRange dynamic_playback_range =
+			ccz::preview::PlaybackRange::StartToTarget;
+		double dynamic_playback_speed{1.0};
+	};
+	std::map<ccz::editor_preview::PreviewDocumentId, RDocumentPreviewSession>
+		m_documentSessions;
+	ccz::editor_preview::PreviewDocumentId m_activeDocumentId{};
+	ccz::editor_preview::RDocumentActivationSnapshot m_activeActivation;
+	bool m_hasActiveBaseline{};
 	std::vector<PreviewUndoTransaction> m_previewUndoStack;
 	void RecordCoordinateUndo(const wchar_t* label,
 		std::vector<CoordinateUndoEntry> entries, HTREEITEM restoreSelection);
 	void RecordInsertedUndo(const wchar_t* label,
 		std::vector<HTREEITEM> items, HTREEITEM restoreSelection);
 	void ClearPreviewUndo();
+	void ClearRBitmapCaches();
 	void UpdateUndoButton();
 	bool UndoLastPreviewOperation();
 

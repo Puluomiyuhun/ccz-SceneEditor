@@ -142,6 +142,17 @@
     <ClCompile Include="tests\free_r_preview_tests.cpp" />
     <ClCompile Include="tests\free_r_replay_composer_tests.cpp" />
     <ClCompile Include="tests\battle_mode_classifier_tests.cpp" />
+    <ClCompile Include="tests\battle_quick_mode_tests.cpp" />
+    <ClCompile Include="tests\battle_preview_session_tests.cpp" />
+    <ClCompile Include="tests\battle_bitmap_cache_policy_tests.cpp" />
+    <ClCompile Include="tests\r_document_session_tests.cpp" />
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleBitmapCachePolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="tests\battle_condition_tree_tests.cpp" />
     <ClCompile Include="tests\battle_preview_adapter_tests.cpp" />
     <ClCompile Include="tests\battle_coordinate_tests.cpp" />
     <ClCompile Include="tests\battle_instruction_parser_tests.cpp" />
@@ -155,6 +166,12 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleQuickModeResolver.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleConditionTreeAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleWritebackAdapter.cpp">

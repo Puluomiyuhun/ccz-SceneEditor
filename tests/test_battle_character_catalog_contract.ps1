@@ -23,7 +23,7 @@ foreach ($contract in @('kDataHeader', 'kDataRecordStride', 'kNameFieldWidth', '
         throw "Missing Data.e5 parsing contract: $contract"
     }
 }
-if ($source -notmatch 'kNameFieldWidth\s*=\s*12\s*;') {
-    throw 'Data.e5 character name width must match the editor source: 12 bytes'
+if ($source -notmatch 'kNameFieldWidth\s*=\s*8\s*;') {
+    throw 'Data.e5 brush names must match Pro: 8 bytes'
 }
 Write-Output 'S Battle character catalog contract: PASS'

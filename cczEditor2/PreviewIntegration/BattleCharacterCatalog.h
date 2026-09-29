@@ -15,8 +15,8 @@ struct BattleCharacterCatalog {
     std::wstring diagnostic;
 };
 
-// Parse the Pro-compatible S Mod Data.e5 layout. Names are fixed-width
-// CP936/NUL fields; no R character table is consulted.
+// Parse the Pro-compatible S Mod Data.e5 layout. Brush names use an 8-byte
+// CP936/NUL field; no R character table is consulted.
 BattleCharacterCatalog ParseBattleCharacterCatalog(
     const std::vector<std::uint8_t>& data_e5);
 

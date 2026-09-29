@@ -91,6 +91,7 @@ BattlePreviewCapture writeback_capture(std::uint64_t revision) {
     capture.input.document_path = L"S_10.eex";
     capture.input.scope_key = kScope;
     capture.input.document_revision = revision;
+    capture.input.section_revision = 88;
     capture.input.nodes.push_back(std::move(raw_section));
     capture.snapshot.document_path = capture.input.document_path;
     capture.snapshot.section_path = {0, 0};
@@ -233,6 +234,106 @@ CCZ_TEST(battle_writeback_capture_collects_each_deployment_kind_in_scope) {
                    static_cast<std::size_t>(1000));
 }
 
+CCZ_TEST(battle_writeback_capture_limits_nodes_and_anchor_to_active_child_event) {
+    auto add_condition_event = [](BattlePreviewCapture& capture) {
+        constexpr std::uintptr_t kConditionHandle = 110;
+        constexpr std::uintptr_t kUnitHandle = 111;
+        constexpr std::uintptr_t kTerminalHandle = 112;
+        const std::wstring condition_key =
+            L"S|scene:0|section:0|instruction:0/1|instruction:54";
+        const std::wstring unit_key = condition_key + L"/0|instruction:70";
+        const std::wstring terminal_key = condition_key + L"/1|instruction:0";
+
+        CapturedEditorNode unit;
+        unit.runtime_handle = kUnitHandle;
+        unit.instruction_id = 0x46;
+        unit.ordinal = 20;
+        unit.int_data.assign(1000, 0);
+        CapturedEditorNode terminal;
+        terminal.runtime_handle = kTerminalHandle;
+        terminal.instruction_id = 0;
+        terminal.ordinal = 21;
+        CapturedEditorNode condition;
+        condition.runtime_handle = kConditionHandle;
+        condition.instruction_id = 0x36;
+        condition.ordinal = 19;
+        condition.children = {unit, terminal};
+        auto& captured_children =
+            capture.snapshot.section_root.children[0].children;
+        captured_children.insert(captured_children.end() - 1,
+                                 std::move(condition));
+
+        RawReplayNode raw_unit;
+        raw_unit.runtime_handle = kUnitHandle;
+        raw_unit.logical_key = unit_key;
+        raw_unit.instruction_id = 0x46;
+        raw_unit.command.instruction_id = 0x46;
+        raw_unit.command.int_data.assign(1000, 0);
+        RawReplayNode raw_terminal;
+        raw_terminal.runtime_handle = kTerminalHandle;
+        raw_terminal.logical_key = terminal_key;
+        raw_terminal.instruction_id = 0;
+        raw_terminal.command.instruction_id = 0;
+        RawReplayNode raw_condition;
+        raw_condition.runtime_handle = kConditionHandle;
+        raw_condition.logical_key = condition_key;
+        raw_condition.instruction_id = 0x36;
+        raw_condition.command.instruction_id = 0x36;
+        raw_condition.children = {std::move(raw_unit), std::move(raw_terminal)};
+        auto& raw_children = capture.input.nodes[0].children[0].children;
+        raw_children.insert(raw_children.end() - 1, std::move(raw_condition));
+    };
+    auto baseline = writeback_capture(77);
+    auto current = writeback_capture(77);
+    add_condition_event(baseline);
+    add_condition_event(current);
+
+    ccz::editor_preview::BattleWritebackReachabilityScope active_scope;
+    active_scope.filter_deployments = true;
+    active_scope.reachable_deployment_keys = {
+        L"S|scene:0|section:0|instruction:0/1|instruction:54/0|instruction:70"};
+    active_scope.insertion_anchors.push_back({0x46,
+        L"S|scene:0|section:0|instruction:0/1|instruction:54",
+        L"S|scene:0|section:0|instruction:0/1|instruction:54/1|instruction:0",
+        true, {}});
+
+    BattleWritebackSectionSnapshot snapshot;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
+        baseline, current, snapshot, diagnostic,
+        ccz::editor_preview::BattleWritebackRevisionScope::PinnedSection,
+        &active_scope));
+    CCZ_REQUIRE_EQ(snapshot.instructions.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(snapshot.instructions[0].instruction_id, 0x46);
+    CCZ_REQUIRE_EQ(snapshot.instructions[0].logical_key,
+                   active_scope.reachable_deployment_keys[0]);
+    CCZ_REQUIRE(snapshot.insert_parent_key.empty());
+    CCZ_REQUIRE(snapshot.insert_before_key.empty());
+    CCZ_REQUIRE_EQ(snapshot.insertion_anchors.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(snapshot.insertion_anchors[0].instruction_id, 0x46);
+    CCZ_REQUIRE(snapshot.insertion_anchors[0].resolved);
+    CCZ_REQUIRE_EQ(snapshot.insertion_anchors[0].parent_key,
+                   active_scope.insertion_anchors[0].parent_key);
+    CCZ_REQUIRE_EQ(snapshot.insertion_anchors[0].before_key,
+                   active_scope.insertion_anchors[0].before_key);
+
+    ccz::editor_preview::BattleWritebackPlanBuild plan;
+    plan.ok = true;
+    ccz::editor_preview::BattleWritebackChange insert;
+    insert.kind = BattleWritebackChangeKind::InsertInstruction;
+    insert.instruction_id = 0x46;
+    insert.insert_parent_key = snapshot.insertion_anchors[0].parent_key;
+    insert.insert_before_key = snapshot.insertion_anchors[0].before_key;
+    insert.source_ordinal = -1;
+    insert.int_data.assign(1000, 0);
+    plan.changes.push_back(std::move(insert));
+    const auto native_batch = ccz::editor_preview::BuildBattleWritebackNativeBatch(
+        plan, current, current.input.scope_key);
+    CCZ_REQUIRE(native_batch.ok);
+    CCZ_REQUIRE_EQ(native_batch.changes[0].parent_handle,
+                   std::uintptr_t(110));
+}
+
 CCZ_TEST(battle_writeback_capture_leaves_unknown_insert_layout_unanchored) {
     auto baseline = writeback_capture(77);
     auto current = writeback_capture(77);
@@ -262,10 +363,34 @@ CCZ_TEST(battle_writeback_capture_rejects_stale_or_cross_scope_snapshot) {
     CCZ_REQUIRE(snapshot.scope_key.empty());
 
     current = writeback_capture(77);
+    current.input.section_revision = 99;
+    CCZ_REQUIRE(!ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
+        baseline, current, snapshot, diagnostic));
+    CCZ_REQUIRE(snapshot.instructions.empty());
+
+    current = writeback_capture(77);
     current.input.scope_key = L"S|scene:1|section:0";
     CCZ_REQUIRE(!ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
         baseline, current, snapshot, diagnostic));
     CCZ_REQUIRE(snapshot.instructions.empty());
+}
+
+CCZ_TEST(battle_writeback_capture_allows_changes_outside_pinned_section) {
+    auto baseline = writeback_capture(77);
+    auto current = writeback_capture(78);
+    BattleWritebackSectionSnapshot snapshot;
+    std::wstring diagnostic;
+
+    CCZ_REQUIRE(!ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
+        baseline, current, snapshot, diagnostic));
+    CCZ_REQUIRE(snapshot.instructions.empty());
+
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
+        baseline, current, snapshot, diagnostic,
+        ccz::editor_preview::BattleWritebackRevisionScope::PinnedSection));
+    CCZ_REQUIRE_EQ(snapshot.instructions.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(snapshot.instructions[0].origin_int_data[0], 42);
+    CCZ_REQUIRE_EQ(snapshot.instructions[0].current_int_data[0], 42);
 }
 
 CCZ_TEST(battle_writeback_native_batch_resolves_all_handles_before_mutation) {
@@ -497,6 +622,9 @@ public:
         ccz::editor_preview::BattleWritebackNativeHandleMapping;
 
     FakeBattleWritebackNativeHost() {
+        // Handle 1 models the selectable document-root TreeView item. It has
+        // no ItemData, unlike the script nodes below.
+        selectable_non_node_tree_item = 1;
         state.selected_handle = 12;
         state.next_ordinal = 30;
         state.custom_modified = false;
@@ -510,6 +638,7 @@ public:
     }
 
     bool CaptureDocumentState(DocumentState& output) const override {
+        ++capture_document_state_calls;
         output = state;
         output.document_revision = Revision();
         return true;
@@ -519,6 +648,7 @@ public:
         const auto found = nodes.find(handle);
         if (found == nodes.end()) return false;
         output = found->second;
+        output.has_children = children.find(handle) != children.end();
         const auto siblings = children.find(output.parent_handle);
         if (siblings != children.end()) {
             const auto position = std::find(siblings->second.begin(),
@@ -536,6 +666,14 @@ public:
         return nodes.find(handle) != nodes.end();
     }
 
+    bool TreeItemExists(std::uintptr_t handle) const {
+        return handle == selectable_non_node_tree_item || NodeExists(handle);
+    }
+
+    std::uintptr_t SelectableNonNodeTreeItem() const {
+        return selectable_non_node_tree_item;
+    }
+
     bool SwapNodeIntDataAndRefresh(
         std::uintptr_t handle,
         std::vector<std::int32_t>& int_data) override {
@@ -544,6 +682,10 @@ public:
         if (found == nodes.end() || found->second.int_data.size() != int_data.size())
             return false;
         found->second.int_data.swap(int_data);
+        if (corrupt_next_swap && !found->second.int_data.empty()) {
+            corrupt_next_swap = false;
+            found->second.int_data.back() ^= 1;
+        }
         RefreshRevision();
         return true;
     }
@@ -555,7 +697,7 @@ public:
         if (FailOnce(L"insert")) return false;
         const auto parent = nodes.find(parent_handle);
         const std::size_t expected = instruction_id == 0x4b ? 20U : 1000U;
-        if (parent == nodes.end() || parent->second.instruction_id != 0 ||
+        if (parent == nodes.end() || children.find(parent_handle) == children.end() ||
             int_data.size() != expected ||
             (instruction_id != 0x4b && instruction_id != 0x46 &&
              instruction_id != 0x47)) return false;
@@ -635,7 +777,8 @@ public:
             if (state.selected_handle == mapping.old_handle)
                 state.selected_handle = mapping.new_handle;
         }
-        if (state.selected_handle != 0 && !NodeExists(state.selected_handle))
+        if (state.selected_handle != 0 &&
+            !TreeItemExists(state.selected_handle))
             return false;
         RefreshRevision();
         return true;
@@ -652,6 +795,8 @@ public:
         failure_consumed = false;
         failure_countdown = (std::max)(1, attempt);
     }
+
+    void CorruptNextSwap() { corrupt_next_swap = true; }
 
     void ExternalChange(std::uintptr_t handle, std::int32_t value) {
         auto found = nodes.find(handle);
@@ -685,7 +830,16 @@ public:
             ? 0 : found->second.int_data.front();
     }
 
+    void AddNestedEvent() {
+        AddNode(20, 10, 0x36, 28, 0, 0, {});
+        AddNode(21, 20, 0, 29, 0, 0, {});
+        children[10].insert(children[10].end() - 1, 20);
+        children[20] = {21};
+        RefreshRevision();
+    }
+
     DocumentState state;
+    mutable int capture_document_state_calls{};
 
 private:
     void AddNode(std::uintptr_t handle, std::uintptr_t parent,
@@ -743,6 +897,8 @@ private:
     std::wstring fail_operation;
     bool failure_consumed{};
     int failure_countdown{1};
+    bool corrupt_next_swap{};
+    std::uintptr_t selectable_non_node_tree_item{};
 };
 
 ccz::editor_preview::BattleWritebackNativeBatch native_batch_for_transaction() {
@@ -866,6 +1022,7 @@ CCZ_TEST(battle_writeback_native_transaction_applies_and_undoes_one_atomic_batch
 
     if (!transaction.Apply(native_batch_for_transaction(), host, diagnostic))
         throw std::runtime_error("native transaction rejected the batch");
+    CCZ_REQUIRE_EQ(host.capture_document_state_calls, 2);
     CCZ_REQUIRE(transaction.undo_available());
     CCZ_REQUIRE_EQ(host.Children(10).size(), static_cast<std::size_t>(4));
     const auto after_apply = host.Children(10);
@@ -893,6 +1050,139 @@ CCZ_TEST(battle_writeback_native_transaction_applies_and_undoes_one_atomic_batch
     CCZ_REQUIRE(!host.state.custom_modified);
     CCZ_REQUIRE(host.state.framework_modified);
     CCZ_REQUIRE_EQ(host.state.document_revision, initial_revision);
+}
+
+CCZ_TEST(battle_writeback_native_transaction_preserves_large_insert_batch_order) {
+    using namespace ccz::editor_preview;
+    constexpr std::size_t insert_count = 96;
+    FakeBattleWritebackNativeHost host;
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    batch.changes.reserve(insert_count);
+    for (std::size_t index = 0; index < insert_count; ++index) {
+        BattleWritebackNativeChange insertion;
+        insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+        insertion.instruction_id = static_cast<std::uint16_t>(
+            index % 2 == 0 ? 0x46 : 0x47);
+        insertion.parent_handle = 10;
+        insertion.insert_after_handle = 12;
+        insertion.insert_before_handle = 13;
+        insertion.source_ordinal = -1;
+        insertion.int_data.assign(1000, static_cast<std::int32_t>(index));
+        batch.changes.push_back(std::move(insertion));
+    }
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    const auto children = host.Children(10);
+    CCZ_REQUIRE_EQ(children.size(), insert_count + 3);
+    CCZ_REQUIRE_EQ(children.front(), std::uintptr_t(11));
+    CCZ_REQUIRE_EQ(children.back(), std::uintptr_t(13));
+    CCZ_REQUIRE_EQ(host.state.next_ordinal,
+        static_cast<int>(30 + insert_count));
+    CCZ_REQUIRE_EQ(host.capture_document_state_calls, 2);
+    for (std::size_t index = 0; index < insert_count; ++index) {
+        const auto handle = children[index + 2];
+        const auto data = host.Data(handle);
+        if (data.empty() || data.front() != static_cast<std::int32_t>(index)) {
+            throw std::runtime_error("large insert order mismatch at " +
+                std::to_string(index) + ": got " +
+                (data.empty() ? std::string("empty") :
+                    std::to_string(data.front())));
+        }
+    }
+}
+
+CCZ_TEST(battle_writeback_native_transaction_allows_sequential_commits_and_lifo_undo) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+
+    const auto update_to = [](std::int32_t before, std::int32_t after) {
+        BattleWritebackNativeBatch batch;
+        batch.ok = true;
+        BattleWritebackNativeChange update;
+        update.kind = BattleWritebackChangeKind::UpdateInstruction;
+        update.instruction_id = 0x4b;
+        update.item_handle = 11;
+        update.source_ordinal = 10;
+        update.original_int_data.assign(20, before);
+        update.int_data.assign(20, after);
+        batch.changes.push_back(std::move(update));
+        return batch;
+    };
+
+    CCZ_REQUIRE(transaction.Apply(update_to(1, 3), host, diagnostic));
+    CCZ_REQUIRE(transaction.Apply(update_to(3, 5), host, diagnostic));
+    CCZ_REQUIRE_EQ(host.FirstInt(11), 5);
+    CCZ_REQUIRE(transaction.undo_available());
+
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.FirstInt(11), 3);
+    CCZ_REQUIRE(transaction.undo_available());
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.FirstInt(11), 1);
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_preserves_non_node_document_root_selection) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.state.selected_handle = host.SelectableNonNodeTreeItem();
+    CCZ_REQUIRE(!host.NodeExists(host.state.selected_handle));
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange update;
+    update.kind = BattleWritebackChangeKind::UpdateInstruction;
+    update.instruction_id = 0x4b;
+    update.item_handle = 11;
+    update.source_ordinal = 10;
+    update.original_int_data.assign(20, 1);
+    update.int_data.assign(20, 3);
+    batch.changes.push_back(std::move(update));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE_EQ(host.state.selected_handle,
+                   host.SelectableNonNodeTreeItem());
+    CCZ_REQUIRE_EQ(host.FirstInt(11), 3);
+    CCZ_REQUIRE(host.state.custom_modified);
+    CCZ_REQUIRE(host.state.framework_modified);
+
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.state.selected_handle,
+                   host.SelectableNonNodeTreeItem());
+    CCZ_REQUIRE_EQ(host.FirstInt(11), 1);
+    CCZ_REQUIRE(!host.state.custom_modified);
+    CCZ_REQUIRE(host.state.framework_modified);
+}
+
+CCZ_TEST(battle_writeback_native_transaction_rejects_miswritten_update) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.CorruptNextSwap();
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange update;
+    update.kind = BattleWritebackChangeKind::UpdateInstruction;
+    update.instruction_id = 0x4b;
+    update.item_handle = 11;
+    update.source_ordinal = 10;
+    update.original_int_data.assign(20, 1);
+    update.int_data.assign(20, 3);
+    batch.changes.push_back(std::move(update));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE(!transaction.undo_available());
+    CCZ_REQUIRE_EQ(host.Data(11), std::vector<std::int32_t>(20, 1));
+    CCZ_REQUIRE(diagnostic.find(L"回读") != std::wstring::npos);
 }
 
 CCZ_TEST(battle_writeback_native_delete_policy_supports_every_deployment_type) {
@@ -1012,6 +1302,81 @@ CCZ_TEST(battle_writeback_native_transaction_rolls_back_when_a_late_insert_fails
     CCZ_REQUIRE(host.state.framework_modified);
     CCZ_REQUIRE_EQ(host.state.document_revision, initial_revision);
     CCZ_REQUIRE(diagnostic.find(L"回滚") != std::wstring::npos);
+}
+
+CCZ_TEST(battle_writeback_native_transaction_inserts_under_nested_condition_event) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.AddNestedEvent();
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x4b;
+    insertion.parent_handle = 20;
+    insertion.insert_before_handle = 21;
+    insertion.source_ordinal = -1;
+    insertion.int_data.assign(20, 7);
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(20).size(), std::size_t(2));
+    const auto inserted = host.Child(20, 0);
+    CCZ_REQUIRE_EQ(host.FirstInt(inserted), 7);
+    CCZ_REQUIRE_EQ(host.Child(20, 1), std::uintptr_t(21));
+
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(20).size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(host.Child(20, 0), std::uintptr_t(21));
+}
+
+CCZ_TEST(battle_writeback_native_transaction_inserts_all_three_new_unit_types) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    for (const std::uint16_t instruction : {
+             std::uint16_t(0x4b), std::uint16_t(0x46),
+             std::uint16_t(0x47)}) {
+        BattleWritebackNativeChange insertion;
+        insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+        insertion.instruction_id = instruction;
+        insertion.parent_handle = 10;
+        insertion.insert_after_handle = 12;
+        insertion.insert_before_handle = 13;
+        insertion.source_ordinal = -1;
+        insertion.int_data.assign(instruction == 0x4b ? 20U : 1000U,
+                                  instruction);
+        batch.changes.push_back(std::move(insertion));
+    }
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    const auto committed_children = host.Children(10);
+    CCZ_REQUIRE_EQ(committed_children.size(), std::size_t(6));
+    for (const std::uint16_t instruction : {
+             std::uint16_t(0x4b), std::uint16_t(0x46),
+             std::uint16_t(0x47)}) {
+        const auto inserted = std::find_if(
+            committed_children.begin(), committed_children.end(),
+            [&host, instruction](std::uintptr_t handle) {
+                FakeBattleWritebackNativeHost::NodeSnapshot node;
+                return host.CaptureNode(handle, node) &&
+                       node.instruction_id == instruction;
+            });
+        CCZ_REQUIRE(inserted != committed_children.end());
+        const auto data = host.Data(*inserted);
+        CCZ_REQUIRE_EQ(data.size(), instruction == 0x4b
+            ? std::size_t(20) : std::size_t(1000));
+    }
+
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10).size(), std::size_t(3));
+    CCZ_REQUIRE(!transaction.undo_available());
 }
 
 CCZ_TEST(battle_writeback_native_transaction_rolls_back_after_first_insert_when_second_fails) {
@@ -1287,6 +1652,49 @@ CCZ_TEST(battle_writeback_plan_updates_existing_position_without_losing_other_fi
     CCZ_REQUIRE_EQ(plan.changes[0].int_data[15], 777);
 }
 
+CCZ_TEST(battle_writeback_position_adjustment_reaches_native_instruction_plan) {
+    using ccz::preview::BattleFieldRole;
+
+    BattleEditorState editor;
+    editor.scope_root = L"scope";
+    editor.battle.map.valid = true;
+    editor.battle.map.width = 16;
+    editor.battle.map.height = 16;
+    editor.battle.terrain.assign(16 * 16, 0);
+
+    BattleUnit unit = existing_four_b(L"scope|unit-4b");
+    unit.position = {3, 4};
+    unit.raw_fields = {0, 3, 4, 1, 0};
+    unit.editor_origin_fields = unit.raw_fields;
+    editor.battle.units.push_back(unit);
+
+    BattleEditorOps operations(editor);
+    CCZ_REQUIRE(operations.BeginPositionAdjustment(unit.editor_cache_id).ok);
+    CCZ_REQUIRE(operations.ConfirmPositionAdjustment({8, 9}).ok);
+    CCZ_REQUIRE(ccz::preview::is_battle_field_dirty(
+        editor.battle.units[0], BattleFieldRole::X));
+    CCZ_REQUIRE(ccz::preview::is_battle_field_dirty(
+        editor.battle.units[0], BattleFieldRole::Y));
+
+    auto snapshot = section_snapshot();
+    auto source = four_b_source(L"scope|unit-4b", 10);
+    source.origin_int_data[0] = source.current_int_data[0] = 0;
+    source.origin_int_data[1] = source.current_int_data[1] = 3;
+    source.origin_int_data[2] = source.current_int_data[2] = 4;
+    source.origin_int_data[3] = source.current_int_data[3] = 1;
+    source.origin_int_data[4] = source.current_int_data[4] = 0;
+    snapshot.instructions.push_back(std::move(source));
+
+    const auto plan = ccz::editor_preview::BuildBattleWritebackPlan(
+        editor.battle, L"scope", snapshot);
+    CCZ_REQUIRE(plan.ok);
+    CCZ_REQUIRE_EQ(plan.changes.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(plan.changes[0].kind,
+                   BattleWritebackChangeKind::UpdateInstruction);
+    CCZ_REQUIRE_EQ(plan.changes[0].int_data[1], 8);
+    CCZ_REQUIRE_EQ(plan.changes[0].int_data[2], 9);
+}
+
 CCZ_TEST(battle_writeback_plan_creates_missing_categories_from_source_less_cache) {
     BattlePreviewState state;
     state.units.push_back(staged_unit(0x4b, 20, 1, 2, 1));
@@ -1318,6 +1726,63 @@ CCZ_TEST(battle_writeback_plan_creates_missing_categories_from_source_less_cache
     CCZ_REQUIRE_EQ(plan.changes[0].insert_before_key,
                    std::wstring(L"scope|event-end"));
     CCZ_REQUIRE_EQ(plan.changes[0].source_ordinal, -1);
+}
+
+CCZ_TEST(battle_writeback_plan_routes_new_instruction_types_to_distinct_child_events) {
+    BattlePreviewState state;
+    state.units.push_back(staged_unit(0x4b, 30, 1, 2, 1));
+    state.units.push_back(staged_unit(0x46, 31, 3, 4, 2));
+    state.units.push_back(staged_unit(0x47, 32, 5, 6, 3));
+
+    auto snapshot = section_snapshot();
+    snapshot.insert_parent_key.clear();
+    snapshot.insert_before_key.clear();
+    snapshot.insertion_anchors = {
+        {0x4b, L"scope|event-4b", L"scope|end-4b", true, {}},
+        {0x46, L"scope|event-46", L"scope|end-46", true, {}},
+        {0x47, L"scope|event-47", L"scope|end-47", true, {}},
+    };
+
+    const auto plan = ccz::editor_preview::BuildBattleWritebackPlan(
+        state, L"scope", snapshot);
+    CCZ_REQUIRE(plan.ok);
+    CCZ_REQUIRE_EQ(plan.changes.size(), std::size_t(3));
+    for (const auto& change : plan.changes) {
+        const std::wstring suffix = change.instruction_id == 0x4b
+            ? L"4b" : change.instruction_id == 0x46 ? L"46" : L"47";
+        CCZ_REQUIRE_EQ(change.kind,
+                       BattleWritebackChangeKind::InsertInstruction);
+        CCZ_REQUIRE_EQ(change.insert_parent_key,
+                       L"scope|event-" + suffix);
+        CCZ_REQUIRE_EQ(change.insert_before_key,
+                       L"scope|end-" + suffix);
+    }
+}
+
+CCZ_TEST(battle_writeback_plan_rejects_only_matching_unresolved_type_anchor) {
+    auto snapshot = section_snapshot();
+    snapshot.insert_parent_key.clear();
+    snapshot.insert_before_key.clear();
+    snapshot.insertion_anchors = {
+        {0x4b, L"scope|event-4b", L"scope|end-4b", true, {}},
+        {0x46, {}, {}, false, L"0x46 出场指令属于多个子事件，无法唯一选择新增目标"},
+    };
+
+    BattlePreviewState four_b_state;
+    four_b_state.units.push_back(staged_unit(0x4b, 40, 1, 2, 1));
+    const auto four_b_plan = ccz::editor_preview::BuildBattleWritebackPlan(
+        four_b_state, L"scope", snapshot);
+    CCZ_REQUIRE(four_b_plan.ok);
+    CCZ_REQUIRE_EQ(four_b_plan.changes.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(four_b_plan.changes[0].instruction_id, 0x4b);
+
+    BattlePreviewState four_six_state;
+    four_six_state.units.push_back(staged_unit(0x46, 41, 3, 4, 2));
+    const auto four_six_plan = ccz::editor_preview::BuildBattleWritebackPlan(
+        four_six_state, L"scope", snapshot);
+    CCZ_REQUIRE(!four_six_plan.ok);
+    CCZ_REQUIRE(four_six_plan.changes.empty());
+    CCZ_REQUIRE(four_six_plan.diagnostic.find(L"0x46") != std::wstring::npos);
 }
 
 CCZ_TEST(battle_writeback_plan_compacts_4b_slots_after_delete_and_appends_new_slots) {
@@ -1683,6 +2148,104 @@ CCZ_TEST(battle_editor_brush_batch_start_uses_first_available_id) {
     CCZ_REQUIRE_EQ(placed.data_id, 359);
     CCZ_REQUIRE_EQ(placed.editor_minion_brush_first_id, 359);
     CCZ_REQUIRE(placed.editor_minion_brush_batch_id != 0);
+}
+
+CCZ_TEST(battle_editor_minion_brush_keeps_wheel_direction_for_every_stamp) {
+    BattleEditorState state = brush_placement_state();
+    BattleEditorOps ops(state);
+
+    CCZ_REQUIRE(ops.SelectMinionBrush(358).ok);
+    CCZ_REQUIRE(ops.CycleDirection(1).ok);
+    CCZ_REQUIRE_EQ(state.mouse_direction, 3);
+    CCZ_REQUIRE(ops.Place({0, 0}).ok);
+    CCZ_REQUIRE(ops.Place({1, 0}).ok);
+
+    const auto first = std::find_if(state.battle.units.begin(),
+        state.battle.units.end(), [](const BattleUnit& unit) {
+            return unit.position == ccz::preview::BattleCoord{0, 0};
+        });
+    const auto second = std::find_if(state.battle.units.begin(),
+        state.battle.units.end(), [](const BattleUnit& unit) {
+            return unit.position == ccz::preview::BattleCoord{1, 0};
+        });
+    CCZ_REQUIRE(first != state.battle.units.end());
+    CCZ_REQUIRE(second != state.battle.units.end());
+    CCZ_REQUIRE_EQ(first->direction, 3);
+    CCZ_REQUIRE_EQ(second->direction, 3);
+    CCZ_REQUIRE_EQ(state.mouse_direction, 3);
+}
+
+CCZ_TEST(battle_editor_position_adjustment_can_change_direction_before_drop) {
+    BattleEditorState state = brush_placement_state();
+    BattleEditorOps ops(state);
+    const auto existing = std::find_if(state.battle.units.begin(),
+        state.battle.units.end(), [](const BattleUnit& unit) {
+            return !unit.editor_staged_new;
+        });
+    CCZ_REQUIRE(existing != state.battle.units.end());
+    const std::uint64_t cache_id = existing->editor_cache_id;
+    const int original_direction = existing->direction;
+
+    CCZ_REQUIRE(ops.BeginPositionAdjustment(cache_id).ok);
+    CCZ_REQUIRE_EQ(state.mode, ccz::editor_preview::BattleEditorMode::AdjustPosition);
+    CCZ_REQUIRE(ops.CycleDirection(1).ok);
+    CCZ_REQUIRE_EQ(state.mode, ccz::editor_preview::BattleEditorMode::AdjustPosition);
+    CCZ_REQUIRE_EQ(ops.FindUnitByCacheId(cache_id)->direction,
+                   (original_direction + 1) % 4);
+    CCZ_REQUIRE(ops.ConfirmPositionAdjustment({6, 6}).ok);
+
+    const BattleUnit* moved = ops.FindUnitByCacheId(cache_id);
+    CCZ_REQUIRE(moved != nullptr);
+    CCZ_REQUIRE_EQ(moved->position, (ccz::preview::BattleCoord{6, 6}));
+    CCZ_REQUIRE_EQ(moved->direction, (original_direction + 1) % 4);
+}
+
+CCZ_TEST(battle_editor_brush_stops_at_occupied_batch_boundary) {
+    BattleEditorState state = brush_placement_state();
+    BattleUnit occupied_gap = existing_four_b(L"scope|occupied-360");
+    occupied_gap.data_id = 360;
+    occupied_gap.position = {6, 7};
+    occupied_gap.raw_fields = {360, 6, 7, 1, 0};
+    occupied_gap.editor_origin_fields = occupied_gap.raw_fields;
+    state.battle.units.push_back(std::move(occupied_gap));
+    BattleEditorOps ops(state);
+
+    CCZ_REQUIRE(ops.SelectMinionBrush(358).ok);
+    CCZ_REQUIRE(ops.Place({0, 0}).ok);
+    const auto first_batch = std::find_if(
+        state.battle.units.begin(), state.battle.units.end(),
+        [](const BattleUnit& unit) { return unit.position == ccz::preview::BattleCoord{0, 0}; });
+    CCZ_REQUIRE(first_batch != state.battle.units.end());
+    CCZ_REQUIRE_EQ(first_batch->data_id, 359);
+    const auto first_batch_id = first_batch->editor_minion_brush_batch_id;
+
+    // The next ID belongs to an imported unit. The editor must close this
+    // contiguous batch instead of silently skipping to 361 under the same ID.
+    CCZ_REQUIRE(!state.selected_minion_brush.has_value());
+    CCZ_REQUIRE_EQ(state.selected_minion_brush_batch_id, 0u);
+    CCZ_REQUIRE(!ops.Place({1, 0}).ok);
+
+    CCZ_REQUIRE(ops.SelectMinionBrush(358).ok);
+    CCZ_REQUIRE_EQ(state.placement_defaults.data_id, 361);
+    CCZ_REQUIRE(ops.Place({2, 0}).ok);
+    const auto next_batch = std::find_if(
+        state.battle.units.begin(), state.battle.units.end(),
+        [](const BattleUnit& unit) { return unit.position == ccz::preview::BattleCoord{2, 0}; });
+    CCZ_REQUIRE(next_batch != state.battle.units.end());
+    CCZ_REQUIRE_EQ(next_batch->data_id, 361);
+    CCZ_REQUIRE_EQ(next_batch->editor_minion_brush_first_id, 361);
+    CCZ_REQUIRE(next_batch->editor_minion_brush_batch_id != first_batch_id);
+    const auto next_batch_id = next_batch->editor_minion_brush_batch_id;
+
+    CCZ_REQUIRE(ops.Place({3, 0}).ok);
+    const auto next_batch_second = std::find_if(
+        state.battle.units.begin(), state.battle.units.end(),
+        [](const BattleUnit& unit) { return unit.position == ccz::preview::BattleCoord{3, 0}; });
+    CCZ_REQUIRE(next_batch_second != state.battle.units.end());
+    CCZ_REQUIRE_EQ(next_batch_second->data_id, 362);
+    CCZ_REQUIRE_EQ(next_batch_second->editor_minion_brush_first_id, 361);
+    CCZ_REQUIRE_EQ(next_batch_second->editor_minion_brush_batch_id,
+                   next_batch_id);
 }
 
 CCZ_TEST(battle_editor_brush_delete_compacts_only_its_selection_batch) {

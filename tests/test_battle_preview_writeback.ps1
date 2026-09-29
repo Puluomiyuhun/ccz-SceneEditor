@@ -12,8 +12,10 @@ $ops = Join-Path $root 'cczEditor2\PreviewIntegration\BattleEditorOps.cpp'
 $view = Join-Path $root 'cczEditor2\cczEditor2View.cpp'
 $page = Join-Path $root 'cczEditor2\BattlePreviewPage.cpp'
 $pageHeader = Join-Path $root 'cczEditor2\BattlePreviewPage.h'
+$document = Join-Path $root 'cczEditor2\cczEditor2Doc.cpp'
 $test = Join-Path $root 'cczPreviewCoreTests\tests\battle_writeback_tests.cpp'
 $qaBoundary = Join-Path $PSScriptRoot 'test_battle_writeback_qa_boundary.ps1'
+$conditionTreeIntegration = Join-Path $PSScriptRoot 'test_battle_condition_tree.ps1'
 $fixture = Join-Path $root 'tests\fixtures\battle_preview\writeback-manifest.json'
 
 function Assert-Text($path, $pattern, $label) {
@@ -22,12 +24,13 @@ function Assert-Text($path, $pattern, $label) {
     Write-Output "[PASS] $label"
 }
 
-foreach ($path in @($adapter, $header, $qaGate, $ops, $test, $qaBoundary, $fixture)) {
+foreach ($path in @($adapter, $header, $qaGate, $ops, $test, $qaBoundary, $document,
+        $conditionTreeIntegration, $fixture)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "BATTLE_WRITEBACK_FAIL: missing $path" }
 }
 Assert-Text $adapter 'native_reload_verified' 'native reload gate is enforced'
 Assert-Text $adapter 'kind300_external_acceptance_verified' 'kind300 gate is enforced'
-Assert-Text $adapter 'product_writeback_allowed = false' 'adapter never enables product writeback'
+Assert-Text $adapter 'product_writeback_allowed = false' 'pure-value serialization remains inert until the native MFC transaction commits it'
 Assert-Text $adapter 'CommitToMemory' 'memory transaction has explicit commit'
 Assert-Text $adapter 'Rollback' 'memory transaction has explicit rollback'
 Assert-Text $adapter 'raw_fields' 'builder starts from raw fields for preservation'
@@ -35,35 +38,84 @@ Assert-Text $adapter 'editor_minion_brush_batch_id' 'planner validates independe
 Assert-Text $adapter 'BuildBattleWritebackSectionSnapshot' 'baseline and live Section captures are bridged by a value snapshot'
 Assert-Text $ops 'next_minion_brush_batch_id' 'brush selections receive unique cache batches'
 Assert-Text $ops 'editor_minion_brush_batch_id' 'deletion compacts only its batch'
-Assert-Text $ops '战场单位已临时放置（仍在缓存，尚未写入剧本）' 'temporary placement does not claim the QA writeback gate is closed'
-Assert-Text (Join-Path $root 'cczEditor2\BattlePreviewPage.cpp') 'm_writebackBaselineCapture = capture' 'S page retains the cache-load baseline capture'
-Assert-Text $page 'QA 写回成功' 'successful QA writeback replaces stale placement diagnostics'
+$stagedPlacementStatus = -join @(
+    [char]0x6218, [char]0x573A, [char]0x5355, [char]0x4F4D,
+    [char]0x5DF2, [char]0x4E34, [char]0x65F6, [char]0x653E,
+    [char]0x7F6E, [char]0xFF08, [char]0x4ECD, [char]0x5728,
+    [char]0x7F13, [char]0x5B58, [char]0xFF0C, [char]0x5C1A,
+    [char]0x672A, [char]0x5199, [char]0x5165, [char]0x5267,
+    [char]0x672C, [char]0xFF09
+)
+Assert-Text $ops ([regex]::Escape($stagedPlacementStatus)) 'temporary placement reports that its changes remain staged'
+Assert-Text (Join-Path $root 'cczEditor2\BattlePreviewPage.cpp') 'ActiveSession\(\)\.baseline_capture = std::move\(capture\)' 'S document session retains the cache-load baseline capture without copying it'
+Assert-Text $page '\u0053\u0020\u6218\u573A\u5B57\u6BB5\u5DF2\u5199\u5165\u539F\u751F\u5267\u672C\u6811\u5E76\u9010\u6761\u8BFB\u56DE\u786E\u8BA4' 'successful native writeback reports verified instruction fields'
+Assert-Text $page 'describe_native_writeback\(batch\)' 'writeback status shows instruction-level field changes'
+Assert-Text $page 'RevealNativeWritebackInstruction' 'successful native writeback reveals a changed instruction in the editor tree'
+Assert-Text $page 'RevealNativeWritebackInstruction\(\s*view,\s*batch,\s*host\.first_inserted_handle\(\)\)' 'native transaction passes the committed insert handle to the reveal step'
+Assert-Text $page 'tree\.EnsureVisible\(item\)' 'revealed instruction expands its collapsed parent events'
+Assert-Text $page 'tree\.SelectItem\(item\)' 'revealed instruction remains selected for visual inspection'
+Assert-Text $page 'data->int_data\.swap\(int_data\)' 'writeback mutates the native ItemData vector used by the editor tree'
+Assert-Text $page 'bool TreeItemExists\(std::uintptr_t handle\) const' 'document root selection is validated as a TreeView item, not as a script node'
+Assert-Text $page 'if \(selected != 0 && !TreeItemExists\(selected\)\)' 'selection restore accepts valid tree items whose lParam is zero'
+Assert-Text $document 'data->int_data\[k - long_char_sum\]' 'EEX save serializes native fields from the same TreeView ItemData vector'
+Assert-Text $document 'f\.Write\(int2ch\(data->int_data\[k - long_char_sum\], 4\), 4\)' 'EEX save emits the 0x4B coordinate fields as native four-byte values'
 Assert-Text $view 'InsertBattleInstructionAt' 'native battle insertion API is separate from generic insertion'
 Assert-Text $view 'intData.size\(\) != expectedSize' 'native battle insertion rejects truncated field vectors'
 Assert-Text $view 'instructionId != 0x46' 'native battle insertion is restricted to deployment commands'
 Assert-Text $view 'fileName.Left\(2\).*L"S_"' 'native battle insertion rejects non-S scripts'
 Assert-Text $view 'fileName.Left\(2\).*L"S-"' 'native battle insertion accepts only explicit S script prefixes'
+Assert-Text $view 'wcscpy_s\(show, code\[id\]\)' 'tree items retain their native instruction label'
+Assert-Text $view 'data->int_data = std::move\(intData\)' 'new deployment fields move into native tree data without a second full-vector copy'
+if ($view -match 'wcscat_s\(show, L"槽位:"\)') {
+    throw 'BATTLE_WRITEBACK_FAIL: 0x4B display label must not be rewritten with placement fields'
+}
 Assert-Text $page 'DeleteBattleNode[\s\S]{0,600}CanDeleteBattleWritebackNativeNode' 'MFC transaction bridge shares the 0x4B/0x46/0x47 delete policy used by rollback and undo'
 Assert-Text $page 'RestoreBattleNodeBefore[\s\S]{0,500}CanDeleteBattleWritebackNativeNode[\s\S]{0,1000}make_unique<ItemData>[\s\S]{0,120}node\.int_data\.size\(\)' 'MFC transaction rollback restores each deployment type using its full native vector'
 Assert-Text $pageHeader 'BuildPendingWritebackPlan' 'S page exposes a value-only writeback preflight'
-Assert-Text $pageHeader '(?s)private:.*?bool ApplyPendingNativeWritebackForEvidence' 'native writeback evidence entry remains private'
+Assert-Text $pageHeader '(?s)private:.*?bool ApplyPendingNativeWritebackForCurrentSection' 'the S page exposes its current Section through a private native writeback entry'
 Assert-Text $page 'BuildBattleWritebackSectionSnapshot' 'preflight revalidates baseline against a fresh capture'
 Assert-Text $page 'BuildBattleWritebackPlan' 'preflight compiles the cache into a Section delta'
 Assert-Text $page 'BuildBattleWritebackNativeBatch' 'preflight resolves the complete native batch before mutation'
 Assert-Text $page 'ValidateBattleWritebackNextOrdinal' 'native insert counter is checked against all document instructions'
+Assert-Text $page 'ValidateBattleWritebackNextOrdinal\(\s*capture\.snapshot\s*,' 'native insert ordinal validation reads the retained preflight snapshot'
+Assert-Text $adapter 'last_inserted_by_anchor' 'native insert predecessor chains are indexed instead of rescanned for every unit'
+$adapterText = Get-Content -LiteralPath $adapter -Raw -Encoding UTF8
+if ($adapterText -match 'count_if\(\s*prepared\.begin\(') {
+    throw 'BATTLE_WRITEBACK_FAIL: native insert ordinals must be assigned in one linear pass'
+}
+Write-Output '[PASS] native insert ordinal assignment does not rescan the prepared batch'
+Assert-Text $page 'preflight_state\.document_revision\s*=\s*capture\.input\.document_revision' 'transaction baseline reuses the already validated preflight document revision'
+Assert-Text $page 'SWritebackPerf;capture_us=' 'opt-in Debug diagnostics record capture, plan, transaction, and rebase timings'
+Assert-Text $page 'TakeCommittedBattleCapture' 'successful native transactions expose the committed preview capture for reuse'
+Assert-Text $page 'committed_capture_pointer' 'writeback passes its validated committed capture into the rebase step'
+Assert-Text $page 'last_captured_battle_ = std::move\(capture\)' 'native host retains the exact preview capture used for the committed revision'
+Assert-Text $page 'GetPreviewContentEpoch\(\) != last_capture_content_epoch_' 'rebase only reuses the captured preview while its document content version is current'
+Assert-Text $page 'last_capture_content_epoch_ = document_->GetPreviewContentEpoch\(\)' 'dirty-state restoration accounts for its known content-epoch bump without recapturing nodes'
+if ((Get-Content -LiteralPath $page -Raw -Encoding UTF8) -match 'UpdateQuickModeObservedSectionRevision') {
+    throw 'BATTLE_WRITEBACK_FAIL: quick-mode revision must reuse the rebased capture, not recapture its pinned section'
+}
+if ((Get-Content -LiteralPath $pageHeader -Raw -Encoding UTF8) -match 'UpdateQuickModeObservedSectionRevision') {
+    throw 'BATTLE_WRITEBACK_FAIL: obsolete quick-mode section recapture declaration remains'
+}
+Write-Output '[PASS] quick-mode rebase reuses its captured section revision'
 Assert-Text $adapter 'insert_before_handle' 'native batch translates the terminal anchor to the TreeView sibling contract'
 Assert-Text $adapter 'original_int_data' 'native batch carries source preimages for stale-target rejection'
 $nativeWritebackEntrypointReferences = @(
     Get-ChildItem -LiteralPath (Join-Path $root 'cczEditor2') -Recurse -File |
         Where-Object { $_.Extension -eq '.cpp' -or $_.Extension -eq '.h' } |
-        Select-String -SimpleMatch 'ApplyPendingNativeWritebackForEvidence'
+        Select-String -SimpleMatch 'ApplyPendingNativeWritebackForCurrentSection'
 )
-if ($nativeWritebackEntrypointReferences.Count -ne 2) {
-    throw 'BATTLE_WRITEBACK_FAIL: native evidence-gated writeback entry must remain unconnected to product controls'
+if ($nativeWritebackEntrypointReferences.Count -ne 3) {
+    throw 'BATTLE_WRITEBACK_FAIL: the standard writeback entry must have one declaration, definition, and product-control caller'
 }
-Write-Output '[PASS] evidence-gated native writeback has no product-control caller'
+Write-Output '[PASS] product control reaches the validated native Section transaction'
 Assert-Text $test 'battle_writeback_rejects_each_unclosed_gate' 'gate rejection test exists'
 Assert-Text $test 'battle_writeback_transaction_rolls_back' 'rollback snapshot test exists'
+Assert-Text $test 'battle_writeback_native_transaction_rejects_miswritten_update' 'native updates must be read back before success'
+Assert-Text $test 'battle_writeback_native_transaction_preserves_non_node_document_root_selection' 'writeback preserves the valid document-root selection across commit and undo'
+Assert-Text $test 'capture_document_state_calls, 2' 'successful writeback uses only the baseline and committed document captures'
+Assert-Text $test 'battle_writeback_native_transaction_preserves_large_insert_batch_order' 'large insertion batches preserve instruction order'
+Assert-Text $test 'battle_writeback_position_adjustment_reaches_native_instruction_plan' 'position adjustment reaches instruction fields through the real editor operation'
 Assert-Text $test 'group_order_verified = false' 'group-order gate test exists'
 Assert-Text $test 'battle_writeback_preserves_first_seen_group_order' 'first-seen output order test exists'
 Assert-Text $test 'battle_writeback_rejects_multiple_4b_rows_from_one_source' '0x4B framing test exists'
@@ -72,13 +124,16 @@ Assert-Text $test 'battle_writeback_plan_rejects_duplicate_source_ordinals' 'sou
 Assert-Text $test 'battle_writeback_native_batch_resolves_all_handles_before_mutation' 'native source and insertion handles resolve before mutation'
 Assert-Text $test 'battle_writeback_native_batch_rejects_stale_or_duplicate_nodes_atomically' 'stale or duplicate source nodes reject the complete batch'
 Assert-Text $test 'battle_writeback_native_batch_rejects_nonterminal_insert_anchor' 'only the terminal event anchor may receive insertions'
+Assert-Text $test 'battle_writeback_native_transaction_inserts_under_nested_condition_event' 'native transaction inserts and undoes a deployment in a nested condition event'
 Assert-Text $test 'battle_editor_brush_delete_compacts_only_its_selection_batch' 'brush deletion isolates placement sessions'
 
-# The native MFC route is enabled only for a marked S QA copy in an explicit
-# Debug|Win32 build. Keep its UI, copy boundary, memory commit, and normal
-# save/reopen instructions in the same focused writeback gate.
+# The native MFC route is available in ordinary Debug and Release builds.
+# Keep the UI, active S document boundary, in-memory commit, and normal editor
+# save contract in the same focused writeback gate.
 & $qaBoundary
-Write-Output '[PASS] Debug-only S QA-copy writeback boundary'
+Write-Output '[PASS] unrestricted S battle writeback boundary'
+& $conditionTreeIntegration
+Write-Output '[PASS] S condition-tree preview and child-event writeback integration'
 
 # Source checks are only the boundary contract.  If a built focused runner is
 # available, execute the behavioral tests as well; a missing runner is a hard
@@ -97,6 +152,7 @@ if (-not [string]::IsNullOrWhiteSpace($runnerOverride)) {
     $runner = (Resolve-Path -LiteralPath $runnerOverride).Path
 } else {
     $runnerCandidates = @(
+        (Join-Path $root 'cczEditor2\.tmp-s-battle\multi-document-sessions\debug\bin\cczPreviewCoreTests.exe'),
         (Join-Path $root 'cczPreviewCoreTests\Debug\cczPreviewCoreTests.exe'),
         (Join-Path $root 'cczPreviewCoreTests\Release\cczPreviewCoreTests.exe')
     )
@@ -144,19 +200,27 @@ $outputText = ($output -join [Environment]::NewLine)
 $expectedTests = @(
     'battle_writeback_capture_builds_scoped_snapshot_and_insert_anchors',
     'battle_writeback_capture_collects_each_deployment_kind_in_scope',
+    'battle_writeback_capture_limits_nodes_and_anchor_to_active_child_event',
     'battle_writeback_capture_leaves_unknown_insert_layout_unanchored',
     'battle_writeback_capture_rejects_stale_or_cross_scope_snapshot',
+    'battle_writeback_capture_allows_changes_outside_pinned_section',
     'battle_writeback_native_batch_resolves_all_handles_before_mutation',
     'battle_writeback_native_batch_rejects_stale_or_duplicate_nodes_atomically',
     'battle_writeback_native_batch_rejects_nonterminal_insert_anchor',
     'battle_writeback_qa_gate_only_allows_marked_s_script_copies',
     'battle_writeback_qa_copy_root_is_fixed_next_to_executable',
     'battle_writeback_native_transaction_applies_and_undoes_one_atomic_batch',
+    'battle_writeback_native_transaction_preserves_large_insert_batch_order',
+    'battle_writeback_native_transaction_allows_sequential_commits_and_lifo_undo',
+    'battle_writeback_native_transaction_preserves_non_node_document_root_selection',
+    'battle_writeback_native_transaction_rejects_miswritten_update',
     'battle_writeback_native_delete_policy_supports_every_deployment_type',
     'battle_writeback_next_ordinal_allows_gaps_beyond_document_maximum',
     'battle_writeback_next_ordinal_rejects_stale_or_colliding_counter',
     'battle_writeback_next_ordinal_rejects_missing_existing_ordinal',
     'battle_writeback_native_transaction_rolls_back_when_a_late_insert_fails',
+    'battle_writeback_native_transaction_inserts_under_nested_condition_event',
+    'battle_writeback_native_transaction_inserts_all_three_new_unit_types',
     'battle_writeback_native_transaction_rolls_back_after_first_insert_when_second_fails',
     'battle_writeback_native_transaction_rejects_stale_undo_without_mutating',
     'battle_writeback_native_transaction_rolls_back_a_partial_undo',
@@ -169,7 +233,10 @@ $expectedTests = @(
     'battle_writeback_transaction_rolls_back_battle_modified_and_selection',
     'battle_writeback_transaction_rejects_invalid_states_and_undoes_commit',
     'battle_writeback_plan_updates_existing_position_without_losing_other_fields',
+    'battle_writeback_position_adjustment_reaches_native_instruction_plan',
     'battle_writeback_plan_creates_missing_categories_from_source_less_cache',
+    'battle_writeback_plan_routes_new_instruction_types_to_distinct_child_events',
+    'battle_writeback_plan_rejects_only_matching_unresolved_type_anchor',
     'battle_writeback_plan_compacts_4b_slots_after_delete_and_appends_new_slots',
     'battle_writeback_plan_fills_first_fixed_empty_row_before_adding_page',
     'battle_writeback_plan_reuses_empty_data_id_slot_with_stale_payload',
@@ -207,6 +274,7 @@ if ($LASTEXITCODE -ne 0) {
 $brushText = ($brushOutput -join [Environment]::NewLine)
 foreach ($name in @(
     'battle_editor_brush_batch_start_uses_first_available_id',
+    'battle_editor_brush_stops_at_occupied_batch_boundary',
     'battle_editor_brush_delete_compacts_only_its_selection_batch',
     'battle_editor_brush_uses_smallest_free_id_and_advances_only_after_place'
 )) {
@@ -219,6 +287,7 @@ $actualBrushTests = [regex]::Matches($brushText, '(?m)^\[PASS\] (battle_editor_b
     Sort-Object -Unique
 $expectedBrushTests = @(
     'battle_editor_brush_batch_start_uses_first_available_id',
+    'battle_editor_brush_stops_at_occupied_batch_boundary',
     'battle_editor_brush_delete_compacts_only_its_selection_batch',
     'battle_editor_brush_uses_smallest_free_id_and_advances_only_after_place'
 ) | Sort-Object -Unique

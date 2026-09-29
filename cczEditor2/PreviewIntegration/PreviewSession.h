@@ -55,6 +55,16 @@ struct RefreshResult {
     std::wstring diagnostic;
 };
 
+// Shared action semantics for R and S condition-tree projections. This
+// mutates only the supplied value-owned ReplayOptions object.
+bool ApplyConditionTreeActionToOptions(
+    ccz::preview::ReplayOptions& options,
+    const ccz::preview::SectionExecutionModel& model,
+    const ccz::preview::LogicalNodeKey& node_key,
+    ccz::preview::ConditionTreeAction action,
+    std::int32_t integer_value,
+    std::wstring* diagnostic);
+
 class PreviewSession {
 public:
     RefreshResult Refresh(

@@ -42,10 +42,12 @@ $viewHeaderPath = Join-Path $SourceRoot 'cczEditor2View.h'
 $viewSourcePath = Join-Path $SourceRoot 'cczEditor2View.cpp'
 $previewHeaderPath = Join-Path $SourceRoot 'ScenePreviewWnd.h'
 $previewSourcePath = Join-Path $SourceRoot 'ScenePreviewWnd.cpp'
+$hostSourcePath = Join-Path $SourceRoot 'ScenePreviewHost.cpp'
 $stateMachineHeaderPath = Join-Path $SourceRoot 'PreviewIntegration\PreviewRefreshStateMachine.h'
 $decisionHeaderPath = Join-Path $SourceRoot 'PreviewIntegration\PreviewRefreshDecision.h'
+$documentSourcePath = Join-Path $SourceRoot 'cczEditor2Doc.cpp'
 
-foreach ($path in @($viewHeaderPath, $viewSourcePath, $previewHeaderPath, $previewSourcePath, $stateMachineHeaderPath, $decisionHeaderPath)) {
+foreach ($path in @($viewHeaderPath, $viewSourcePath, $previewHeaderPath, $previewSourcePath, $hostSourcePath, $stateMachineHeaderPath, $decisionHeaderPath, $documentSourcePath)) {
     Assert-True (Test-Path -LiteralPath $path) "missing source file: $path"
 }
 
@@ -53,12 +55,14 @@ $viewHeader = Get-Content -LiteralPath $viewHeaderPath -Raw -Encoding UTF8
 $view = Get-Content -LiteralPath $viewSourcePath -Raw -Encoding UTF8
 $previewHeader = Get-Content -LiteralPath $previewHeaderPath -Raw -Encoding UTF8
 $preview = Get-Content -LiteralPath $previewSourcePath -Raw -Encoding UTF8
+$hostSource = Get-Content -LiteralPath $hostSourcePath -Raw -Encoding UTF8
 $stateMachine = Get-Content -LiteralPath $stateMachineHeaderPath -Raw -Encoding UTF8
 $decision = Get-Content -LiteralPath $decisionHeaderPath -Raw -Encoding UTF8
+$documentSource = Get-Content -LiteralPath $documentSourcePath -Raw -Encoding UTF8
 
-Assert-Contains $viewHeader 'void\s+RefreshScenePreview\s*\(\s*\)' `
+Assert-Contains $viewHeader 'bool\s+RefreshScenePreview\s*\(\s*\)' `
     'CcczEditor2View does not declare RefreshScenePreview'
-Assert-Contains $view 'void\s+CcczEditor2View::RefreshScenePreview\s*\(\s*\)' `
+Assert-Contains $view 'bool\s+CcczEditor2View::RefreshScenePreview\s*\(\s*\)' `
     'CcczEditor2View does not define RefreshScenePreview'
 Assert-Contains $previewHeader 'RequestPreviewRefresh\s*\(' `
     'CScenePreviewWnd does not declare RequestPreviewRefresh'
@@ -67,9 +71,21 @@ Assert-Contains $preview 'void\s+CRScenePreviewPage::RequestPreviewRefresh\s*\('
 
 $selectionBlock = Get-FunctionBlock $view 'void CcczEditor2View::OnTvnSelchanged('
 $editBlock = Get-FunctionBlock $view 'void CcczEditor2View::OnEditModify('
-$refreshBlock = Get-FunctionBlock $view 'void CcczEditor2View::RefreshScenePreview('
+$refreshBlock = Get-FunctionBlock $view 'bool CcczEditor2View::RefreshScenePreview('
 $createRootBlock = Get-FunctionBlock $view 'void CcczEditor2View::CreateRoot('
 $viewDestroyBlock = Get-FunctionBlock $view 'void CcczEditor2View::OnDestroy('
+$viewActivateBlock = Get-FunctionBlock $view 'void CcczEditor2View::OnActivateView('
+$treeDestroyedBlock = Get-FunctionBlock $hostSource 'void CScenePreviewWnd::EditorTreeDestroyed('
+$treeRebuildBlock = Get-FunctionBlock $hostSource 'void CScenePreviewWnd::PrepareForTreeRebuild('
+$scriptActivationBlock = Get-FunctionBlock $hostSource 'bool CScenePreviewWnd::ActivateScriptPreview('
+$invalidateBlock = Get-FunctionBlock $hostSource 'void CScenePreviewWnd::InvalidatePendingPreviewRefresh('
+$hostRefreshBlock = Get-FunctionBlock $hostSource 'bool CScenePreviewWnd::RequestPreviewRefresh('
+$sBattleRefreshStart = $hostRefreshBlock.IndexOf('if (page == Page::SBattle)')
+$sBattleRefreshEnd = $hostRefreshBlock.IndexOf('ParkActiveSBattleDocument();', $sBattleRefreshStart)
+Assert-True ($sBattleRefreshStart -ge 0 -and $sBattleRefreshEnd -gt $sBattleRefreshStart) `
+    'S battle activation branch could not be isolated for R/S routing checks'
+$sBattleRefreshBlock = $hostRefreshBlock.Substring(
+    $sBattleRefreshStart, $sBattleRefreshEnd - $sBattleRefreshStart)
 
 Assert-Contains $selectionBlock 'RefreshScenePreview\s*\(\s*\)' `
     'OnTvnSelchanged does not route through RefreshScenePreview'
@@ -87,10 +103,33 @@ Assert-NotContains $view 'EvaluateToItem\s*\(' `
     'CcczEditor2View directly calls EvaluateToItem'
 Assert-Contains $refreshBlock 'RequestPreviewRefresh\s*\(' `
     'RefreshScenePreview does not own the single preview request call'
-Assert-Contains $createRootBlock 'InvalidatePendingPreviewRefresh\s*\(' `
-    'tree rebuild does not invalidate delayed preview requests'
-Assert-Contains $viewDestroyBlock 'InvalidatePendingPreviewRefresh\s*\(' `
-    'view destruction does not invalidate delayed preview requests'
+Assert-Contains $viewActivateBlock 'ActivateScriptPreview\s*\(' `
+    'MDI page activation does not route through per-document preview sessions'
+Assert-NotContains $viewActivateBlock 'RefreshScenePreview\s*\(' `
+    'MDI activation still forces the full preview refresh path'
+Assert-Contains $scriptActivationBlock 'm_rPage\.ActivateDocument[\s\S]*!reusedUnchangedSession[\s\S]*m_rPage\.RequestPreviewRefresh' `
+    'R activation checks the document session before requesting a full refresh'
+Assert-NotContains $sBattleRefreshBlock 'm_rPage\.InvalidatePendingPreviewRefresh\s*\(' `
+    'S battle activation clears R preview state instead of preserving independent R state'
+Assert-Contains $sBattleRefreshBlock 'm_rPage\.ParkActiveDocument\s*\(' `
+    'S battle activation parks R into its document-owned session before switching pages'
+Assert-Contains $createRootBlock 'PrepareForTreeRebuild\s*\(\s*\*GetDocument\(\)\s*\)' `
+    'tree rebuild does not park S state while invalidating delayed preview requests'
+Assert-Contains $viewDestroyBlock 'EditorTreeDestroyed\s*\([^;]*\*GetDocument\(\)' `
+    'view destruction routes targeted S teardown and invalidates delayed preview requests'
+ $documentCloseBlock = Get-FunctionBlock $documentSource 'void CcczEditor2Doc::OnCloseDocument('
+Assert-Contains $documentCloseBlock 'EditorTreeDestroyed\s*\([^;]*\*this' `
+    'closing a script document explicitly clears its S preview session'
+Assert-Contains $documentCloseBlock 'CloseRDocument\s*\(\s*GetPreviewDocumentId\(\)\s*\)' `
+    'closing an R document evicts its own cached preview session'
+Assert-True ($documentCloseBlock.IndexOf('EditorTreeDestroyed') -lt $documentCloseBlock.IndexOf('recur_close')) `
+    'S preview cache is cleared before document-owned tree data is released'
+Assert-Contains $treeDestroyedBlock 'm_rPage\.EditorTreeDestroyed\(treeWindow,\s*document\)' `
+    'tree destruction evicts only the R session belonging to the destroyed document'
+Assert-Contains $treeRebuildBlock 'ownerPage\s*==\s*Page::RScene[\s\S]*m_rPage\.PrepareForTreeRebuild\(document\)' `
+    'R preview rebuild handling invalidates only the owning document session'
+Assert-NotContains $invalidateBlock 'm_rPage\.InvalidatePendingPreviewRefresh\(\)[\s\S]*m_sPage\.ClearDocument\(\)' `
+    'S content edits preserve the document-owned session instead of clearing it through the generic invalidation path'
 
 $requestCount = ([regex]::Matches($view, 'm_wndScenePreview\.RequestPreviewRefresh\s*\(')).Count
 Assert-True ($requestCount -eq 1) `

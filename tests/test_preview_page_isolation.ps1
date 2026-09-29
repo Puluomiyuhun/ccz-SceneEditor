@@ -51,7 +51,7 @@ Assert-Text $hostSource 'InitCharList' 'existing character list API remains forw
 Assert-NotText $hostSource 'm_sPage->InitCharList|m_sPage\.InitCharList' `
     'host never forwards the R character table to S'
 
-$battleOnlyDependencies = 'm_pPer2|InitCharList|PopulateBattleCharacterCatalog|IDC_SCENE_CHAR_LIST|CczString\.ini|PreviewAssetCache|PreviewSession|m_previewCatalog|DialogueProfile|DynamicPlayback'
+$battleOnlyDependencies = 'm_pPer2|InitCharList|PopulateBattleCharacterCatalog|IDC_SCENE_CHAR_LIST|CczString\.ini|PreviewAssetCache|(?<!Battle)PreviewSession|m_previewCatalog|DialogueProfile|DynamicPlayback'
 Assert-NotText $battleHeader $battleOnlyDependencies `
     'S page declaration has no R table, cache, session, catalog or playback state'
 Assert-NotText $battleSource $battleOnlyDependencies `

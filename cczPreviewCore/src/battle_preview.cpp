@@ -41,6 +41,23 @@ bool is_battle_deployment_slot_marker(const BattleUnit& unit) {
            unit.data_id < 0 && !unit.editor_staged_new;
 }
 
+std::optional<int> battle_visual_arm_kind(const BattleUnit& unit) noexcept {
+    const std::uint16_t instruction =
+        unit.editor_deployment_instruction != 0xffff
+            ? unit.editor_deployment_instruction
+            : unit.source_instruction;
+    switch (instruction) {
+    case 0x4b:  // Own faction.
+        return 0;
+    case 0x46:  // Ally.
+        return 1;
+    case 0x47:  // Enemy.
+        return 2;
+    default:
+        return std::nullopt;
+    }
+}
+
 BattleCoord world_to_battle_cell(float world_x, float world_y, int offset_x,
                                  int offset_y) {
     const int rounded_x = RoundBattleCoordinate(world_x);

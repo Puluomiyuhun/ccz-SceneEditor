@@ -88,8 +88,24 @@ void CcczEditor2View::OnDestroy()
 {
 	CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
 	if (frame != nullptr)
-		frame->m_wndScenePreview.InvalidatePendingPreviewRefresh();
+		frame->m_wndScenePreview.EditorTreeDestroyed(
+			GetTreeCtrl().GetSafeHwnd(), *GetDocument());
 	CTreeView::OnDestroy();
+}
+
+void CcczEditor2View::OnActivateView(BOOL activate, CView* activateView,
+	CView* deactivateView)
+{
+	CTreeView::OnActivateView(activate, activateView, deactivateView);
+	if (activate && GetSafeHwnd() != nullptr &&
+		GetTreeCtrl().GetSafeHwnd() != nullptr && GetDocument() != nullptr) {
+		CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
+		if (frame != nullptr) {
+			cur_item = GetTreeCtrl().GetSelectedItem();
+			frame->m_wndScenePreview.ActivateScriptPreview(
+				GetTreeCtrl(), cur_item, *GetDocument());
+		}
+	}
 }
 
 BOOL CcczEditor2View::PreCreateWindow(CREATESTRUCT& cs)
@@ -125,6 +141,8 @@ void CcczEditor2View::OnInitialUpdate()
 	else {
 		CreateNewTree();
 	}
+	cur_item = GetTreeCtrl().GetSelectedItem();
+	RefreshScenePreview();
 }
 void CcczEditor2View::ReadString()
 {
@@ -611,7 +629,7 @@ void CcczEditor2View::CreateRoot(LPWSTR root_name)
 {
 	CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
 	if (frame != nullptr)
-		frame->m_wndScenePreview.InvalidatePendingPreviewRefresh();
+		frame->m_wndScenePreview.PrepareForTreeRebuild(*GetDocument());
 	CTreeCtrl& m_TreeCtrl = GetTreeCtrl();
 	//m_TreeCtrl.ModifyStyle(0, TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS | TVS_SHOWSELALWAYS | TVS_CHECKBOXES);
 	m_TreeCtrl.ModifyStyle(TVS_CHECKBOXES, TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS | TVS_SHOWSELALWAYS );
@@ -645,6 +663,7 @@ void CcczEditor2View::CreateNewTree()
 	m_TreeCtrl.Expand(hRoot, TVE_EXPAND);
 	m_TreeCtrl.Expand(m_TreeCtrl.GetChildItem(hRoot), TVE_EXPAND);
 	m_TreeCtrl.Expand(m_TreeCtrl.GetChildItem(m_TreeCtrl.GetChildItem(hRoot)), TVE_EXPAND);
+	GetDocument()->MarkEditorTreeRebuilt();
 }
 
 void CcczEditor2View::CreateFileTree()
@@ -772,6 +791,7 @@ void CcczEditor2View::CreateFileTree()
 		}
 	}
 	jmp_list.clear();
+	GetDocument()->MarkEditorTreeRebuilt();
 }
 
 int CcczEditor2View::EditData(ItemData* me, unsigned char* c)
@@ -1923,12 +1943,13 @@ HTREEITEM CcczEditor2View::InsertInstructionAt(int id, HTREEITEM hAfter, const i
 	UpdateShow(hNew);
 	m_TreeCtrl.SelectItem(hNew);
 	GetDocument()->SetModifiedFlag(TRUE);
+	GetDocument()->MarkEditorContentChanged();
 	return hNew;
 }
 
 HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 	int instructionId, HTREEITEM parent, HTREEITEM hInsertAfter,
-	const std::vector<int>& intData)
+	std::vector<int> intData)
 {
 	// Battle records use editor instruction IDs 0x4B (20 native integers),
 	// 0x46/0x47 (1000 native integers each).  Do not route these through the
@@ -1956,7 +1977,21 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 
 	CTreeCtrl& tree = GetTreeCtrl();
 	ItemData* parentData = reinterpret_cast<ItemData*>(tree.GetItemData(parent));
-	if (parentData == nullptr || parentData->id != 0)
+	if (parentData == nullptr)
+		return nullptr;
+	// Nested S deployment events may be children of a predicate or else
+	// instruction. Accept those containers only when their final child is the
+	// native 0x00 event terminator.
+	HTREEITEM lastChild = tree.GetChildItem(parent);
+	if (lastChild == nullptr) return nullptr;
+	for (HTREEITEM sibling = tree.GetNextSiblingItem(lastChild);
+		sibling != nullptr; sibling = tree.GetNextSiblingItem(sibling)) {
+		lastChild = sibling;
+	}
+	ItemData* terminalData = reinterpret_cast<ItemData*>(
+		tree.GetItemData(lastChild));
+	if (terminalData == nullptr || terminalData->id != 0 ||
+		tree.GetChildItem(lastChild) != nullptr)
 		return nullptr;
 	// The value batch uses zero for the native tree's TVI_FIRST sentinel.
 	// Normalize that representation before sibling validation/insertion.
@@ -1970,7 +2005,7 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 		data = std::make_unique<ItemData>(static_cast<int>(expectedSize));
 		data->id = instructionId;
 		data->ord = cur_code_ord;
-		data->int_data = intData;
+		data->int_data = std::move(intData);
 	}
 	catch (...) {
 		return nullptr;
@@ -2488,7 +2523,8 @@ void CcczEditor2View::OnEditDelete()
 		// operation; invalidate any delayed preview before that boundary.
 		CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
 		if (frame != nullptr)
-			frame->m_wndScenePreview.InvalidatePendingPreviewRefresh();
+			frame->m_wndScenePreview.InvalidatePendingPreviewRefresh(
+				*GetDocument());
 		/*检查是否是删嵌套*/
 		HTREEITEM child = m_TreeCtrl.GetChildItem(cur_items);
 		if (child) {
@@ -6047,9 +6083,21 @@ BOOL Dialog_89::OnInitDialog()
 	combo3.SetCurSel(data->int_data[3] >= 0 ? data->int_data[3] : 255);
 	combo5.SetCurSel(data->int_data[5] >= 0 ? data->int_data[5] : 255);
 
-	if (data->int_data[2] < 0)data->int_data[2] = 0;
-	if (data->int_data[4] < 0)data->int_data[4] = 0;
-	if (data->int_data[6] < 0)data->int_data[6] = 0;
+	bool normalizedInstructionValues = false;
+	if (data->int_data[2] < 0) {
+		data->int_data[2] = 0;
+		normalizedInstructionValues = true;
+	}
+	if (data->int_data[4] < 0) {
+		data->int_data[4] = 0;
+		normalizedInstructionValues = true;
+	}
+	if (data->int_data[6] < 0) {
+		data->int_data[6] = 0;
+		normalizedInstructionValues = true;
+	}
+	if (normalizedInstructionValues)
+		pView->GetDocument()->MarkEditorContentChanged();
 	wcscpy_s(show, std::to_wstring(data->int_data[2]).c_str());
 	edit2.SetWindowTextW(show);
 	wcscpy_s(show, std::to_wstring(data->int_data[4]).c_str());
@@ -8057,18 +8105,21 @@ void CcczEditor2View::OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult)
 	// Root/document selections have no ItemData but are valid idle preview
 	// input; always route selection changes through the single coordinator.
 	if (!suppress_preview_refresh && !m_suppressBattleWritebackPreview) {
-		RefreshScenePreview();
+		if (!RefreshScenePreview())
+			SelectPlaybackItem(pNMTreeView->itemOld.hItem, true);
 	}
 	*pResult = 0;
 }
 
-void CcczEditor2View::RefreshScenePreview()
+bool CcczEditor2View::RefreshScenePreview()
 {
 	CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
-	if (frame == nullptr || cur_item == nullptr) return;
-	frame->m_wndScenePreview.RequestPreviewRefresh(
-		GetTreeCtrl(), cur_item, GetDocument()->pathName);
-	frame->m_wndScenePreview.InitCharList(per2);
+	if (frame == nullptr) return true;
+	cur_item = GetTreeCtrl().GetSelectedItem();
+	const bool accepted = frame->m_wndScenePreview.RequestPreviewRefresh(
+		GetTreeCtrl(), cur_item, *GetDocument());
+	if (accepted) frame->m_wndScenePreview.InitCharList(per2);
+	return accepted;
 }
 
 BOOL CcczEditor2View::PreTranslateMessage(MSG* pMsg)
@@ -8222,6 +8273,7 @@ BOOL CcczEditor2View::PreTranslateMessage(MSG* pMsg)
 					fast_total = fast_total * 10 + pMsg->wParam - '0';
 					data->int_data[0] = fast_total;
 					UpdateShow(cur_item);
+					GetDocument()->MarkEditorContentChanged();
 				}
 			}
 			else if (pMsg->wParam == VK_BACK) {
@@ -8232,6 +8284,7 @@ BOOL CcczEditor2View::PreTranslateMessage(MSG* pMsg)
 					fast_total = fast_total / 10;
 					data->int_data[0] = fast_total;
 					UpdateShow(cur_item);
+					GetDocument()->MarkEditorContentChanged();
 				}
 			}
 			else fast_total = 0;

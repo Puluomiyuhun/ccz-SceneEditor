@@ -99,6 +99,38 @@ CCZ_TEST(battle_parser_reads_map_and_initialization_without_guessing_0x44) {
     CCZ_REQUIRE(result.ok);
 }
 
+CCZ_TEST(battle_parser_filters_deployments_by_reachable_source_key_only) {
+    const std::wstring scope = L"battle:condition-scope";
+    const std::wstring army_key = scope + L"|node:1|instruction:75";
+    const std::wstring ally_key = scope + L"|node:2|instruction:70";
+    const std::wstring enemy_key = scope + L"|node:3|instruction:71";
+    auto army = instruction(0x4b, {303, 7, 8, 2, 1}, army_key);
+    auto ally = instruction(0x46, std::vector<std::int32_t>(11, 0), ally_key);
+    auto enemy = instruction(0x47, std::vector<std::int32_t>(12, 0), enemy_key);
+
+    ccz::preview::BattleParseOptions options = scoped_options(scope.c_str());
+    options.filter_deployment_nodes = true;
+    options.reachable_deployment_keys = {ally_key};
+    const auto result = ccz::preview::parse_battle_instructions(
+        L"S_12.eex",
+        {container(scope, {
+             instruction(0x44, {}, scope + L"|node:0|instruction:68"),
+             instruction(0x27, battle_map_payload(12),
+                        scope + L"|node:4|instruction:39"),
+             std::move(army), std::move(ally), std::move(enemy),
+         })},
+        options);
+
+    CCZ_REQUIRE(result.ok);
+    CCZ_REQUIRE(result.state.initialized);
+    CCZ_REQUIRE(result.state.map.valid);
+    CCZ_REQUIRE_EQ(result.state.map.map_id, 12);
+    CCZ_REQUIRE_EQ(result.state.units.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(result.state.units[0].source_instruction,
+                   static_cast<std::uint16_t>(0x46));
+    CCZ_REQUIRE_EQ(result.state.units[0].source_key, ally_key);
+}
+
 CCZ_TEST(battle_parser_rejects_map_mode_without_dynamic_map_field) {
     const std::wstring scope = L"battle:A";
     const auto result = ccz::preview::parse_battle_instructions(

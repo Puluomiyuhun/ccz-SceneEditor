@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
@@ -34,6 +35,34 @@ bool file_exists(const std::wstring& path) {
     const DWORD attributes = GetFileAttributesW(path.c_str());
     return attributes != INVALID_FILE_ATTRIBUTES &&
            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+std::uint64_t file_revision(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard,
+                              &attributes)) return 0;
+    const std::uint64_t size =
+        (static_cast<std::uint64_t>(attributes.nFileSizeHigh) << 32) |
+        attributes.nFileSizeLow;
+    const std::uint64_t write_time =
+        (static_cast<std::uint64_t>(attributes.ftLastWriteTime.dwHighDateTime)
+         << 32) |
+        attributes.ftLastWriteTime.dwLowDateTime;
+    return size ^ (write_time + 0x9E3779B97F4A7C15ull + (size << 6) +
+                   (size >> 2));
+}
+
+std::uint64_t root_resource_revision(const std::wstring& root) {
+    const std::array<std::wstring, 4> paths = {
+        root + L"Data.e5", root + L"Hexzmap.e5",
+        root + L"Unit_mov.e5", root + L"Ekd5.exe"};
+    std::uint64_t revision = 0x9E3779B97F4A7C15ull;
+    for (const auto& path : paths) {
+        const std::uint64_t value = file_revision(path);
+        revision ^= value + 0x9E3779B97F4A7C15ull +
+            (revision << 6) + (revision >> 2);
+    }
+    return revision;
 }
 
 bool read_file(const std::wstring& path, std::vector<std::uint8_t>& bytes,
@@ -109,26 +138,41 @@ bool BattleAssetCache::LoadForDocument(const std::wstring& document_path,
         return false;
     }
     const std::wstring key = normalize_root(root);
-    if (key == root_key_ && map_id == map_id_) {
-        if (diagnostic) *diagnostic = diagnostic_;
-        return valid();
+    const std::uint64_t revision = root_resource_revision(root);
+    const bool same_root = key == root_key_ && revision == root_revision_;
+    if (!same_root) {
+        Clear();
+        root_key_ = key;
+        root_revision_ = revision;
+
+        std::wstring read_diagnostic;
+        const std::wstring data_path = root + L"Data.e5";
+        if (!read_file(data_path, data_e5_, read_diagnostic))
+            append_diagnostic(diagnostic_, L"Data.e5 未加载");
+        if (!data_e5_.empty())
+            character_catalog_ = ParseBattleCharacterCatalog(data_e5_);
+
+        read_diagnostic.clear();
+        // Hexzmap.e5 is a Mod-root resource in the editor/game directory layout.
+        // It is independent from the loose JPG used for the S battle background.
+        const std::wstring hexz_path = root + L"Hexzmap.e5";
+        if (!read_file(hexz_path, hexzmap_e5_, read_diagnostic))
+            append_diagnostic(diagnostic_, L"Hexzmap.e5 未加载");
+
+        std::wstring unit_diagnostic;
+        if (!LoadUnitSpriteAssets(root, unit_diagnostic))
+            append_diagnostic(diagnostic_, unit_diagnostic);
+        root_diagnostic_ = diagnostic_;
     }
 
-    Clear();
-    root_key_ = key;
+    // Data.e5, Hexzmap.e5, Unit_mov.e5 and the appearance map belong to the
+    // Mod root.  Switching scripts or battle maps within that root should
+    // only resolve the loose background path; re-reading the large archives
+    // here made every S-to-S transition pay the full asset load cost.
     map_id_ = map_id;
-
-    std::wstring read_diagnostic;
-    const std::wstring data_path = root + L"Data.e5";
-    if (!read_file(data_path, data_e5_, read_diagnostic))
-        append_diagnostic(diagnostic_, L"Data.e5 未加载");
-
-    read_diagnostic.clear();
-    // Hexzmap.e5 is a Mod-root resource in the editor/game directory layout.
-    // It is independent from the loose JPG used for the S battle background.
-    const std::wstring hexz_path = root + L"Hexzmap.e5";
-    if (!read_file(hexz_path, hexzmap_e5_, read_diagnostic))
-        append_diagnostic(diagnostic_, L"Hexzmap.e5 未加载");
+    diagnostic_ = root_diagnostic_;
+    map_jpg_path_.clear();
+    map_jpg_revision_ = 0;
 
     // S battle backgrounds are loose JPGs in <ModRoot>\map.  Keep the
     // three-digit native filename convention and let Windows handle the case
@@ -141,30 +185,34 @@ bool BattleAssetCache::LoadForDocument(const std::wstring& document_path,
         if (!file_exists(map_jpg_path_)) {
             append_diagnostic(diagnostic_, L"战场地图 JPG 未找到：" + map_jpg_path_);
             map_jpg_path_.clear();
+        } else {
+            map_jpg_revision_ = file_revision(map_jpg_path_);
         }
     } else {
         append_diagnostic(diagnostic_, L"地图编号未解析");
     }
 
-    std::wstring unit_diagnostic;
-    if (!LoadUnitSpriteAssets(root, unit_diagnostic))
-        append_diagnostic(diagnostic_, unit_diagnostic);
     if (diagnostic) *diagnostic = diagnostic_;
     return valid();
 }
 
 void BattleAssetCache::Clear() {
     root_key_.clear();
+    root_revision_ = 0;
     map_id_ = -1;
     map_jpg_path_.clear();
+    map_jpg_revision_ = 0;
     unit_mov_path_.clear();
+    unit_mov_revision_ = 0;
     data_e5_.clear();
     hexzmap_e5_.clear();
     unit_mov_e5_.clear();
+    character_catalog_ = {};
     arms_.clear();
     appearance_.clear();
     unit_mov_entries_.clear();
     unit_sprite_ready_ = false;
+    root_diagnostic_.clear();
     diagnostic_.clear();
 }
 
@@ -176,6 +224,7 @@ bool BattleAssetCache::LoadUnitSpriteAssets(const std::wstring& root,
     appearance_.clear();
     unit_mov_e5_.clear();
     unit_mov_path_ = root + L"Unit_mov.e5";
+    unit_mov_revision_ = file_revision(unit_mov_path_);
 
     std::wstring read_diagnostic;
     if (!read_file(unit_mov_path_, unit_mov_e5_, read_diagnostic)) {
