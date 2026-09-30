@@ -45,10 +45,11 @@ Assert-Contains $documentCapture 'tree\.GetRootItem\(\)' 'document-only capture 
 Assert-Contains $documentCapture 'CaptureDocumentRoot|CaptureNode' 'document-only capture copies the complete TreeView into owned nodes'
 Assert-Contains $documentCapture 'document_roots\.push_back|CaptureDocumentRoot' 'document-only capture retains the full document snapshot'
 Assert-Contains $documentCapture 'snapshot\.document_path' 'document-only capture preserves source document identity'
-if ($documentCapture -match 'GetSelectedItem\(') {
-    throw 'BATTLE_QUICK_MODE_FAIL: document capture depends on the current TreeView selection'
+Assert-Contains $documentCapture 'snapshot\.selected_handle\s*=\s*reinterpret_cast<std::uintptr_t>\(\s*tree\.GetSelectedItem\(\)\)' 'document capture retains the current TreeView item as a fallback insertion anchor'
+if ($documentCapture -match 'if\s*\(\s*snapshot\.selected_handle') {
+    throw 'BATTLE_QUICK_MODE_FAIL: document resolution is gated on a selection instead of treating it as an optional insertion anchor'
 }
-Write-Output '[PASS] document-only capture does not depend on current selection'
+Write-Output '[PASS] document resolution remains independent of the optional selected-node anchor'
 
 Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::RequestPreviewRefresh(' 'ActiveSession\(\)\.ui\.quick_mode_enabled' 'S preview refresh routes through the document session quick-mode state'
 Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::RequestPreviewRefresh(' 'RequestQuickModeRefresh' 'S preview refresh delegates selection-independent quick-mode routing'
@@ -110,7 +111,7 @@ Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::LoadQuickModeBase
 Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::LoadQuickModeBaselinePreservingDraft(' 'operations->CanUndo\(\)' 'only workspaces with real temporary edit history are rebased'
 Assert-Contains $pageSource 'LoadCapturedBattle\(std::move\(freshCapture\), tree\.GetSafeHwnd\(\)\)' 'writeback and undo derive the quick-mode Section revision from the capture loaded as the new baseline'
 Assert-Contains $pageSource 'quick_mode_section_revision = capture.input.section_revision' 'loading a committed capture refreshes the pinned quick-mode Section revision'
-Assert-FunctionContains $writebackSource 'bool BuildBattleWritebackSectionSnapshot(' 'baseline\.input\.section_revision != current\.input\.section_revision' 'writeback validates Scene1 Section content revisions'
+Assert-FunctionContains $writebackSource 'bool BuildBattleWritebackSectionSnapshot(' 'const bool revision_mismatch =\s*revision_scope == BattleWritebackRevisionScope::WholeDocument &&\s*\(baseline\.input\.document_revision != current\.input\.document_revision \|\|\s*baseline\.input\.section_revision != current\.input\.section_revision\);' 'only whole-document writes require an unchanged document and Section revision; pinned Section writes can reconcile live edits'
 Assert-FunctionContains $viewSource 'void CcczEditor2View::OnInitialUpdate(' 'RefreshScenePreview\(\)' 'opening a script triggers its first preview load without a selection change'
 Assert-FunctionContains $viewSource 'void CcczEditor2View::OnEditModify()' 'RefreshScenePreview\(\)' 'editing a script instruction refreshes the bound Scene1 preview'
 Assert-FunctionContains $pageSource 'void CSBattlePreviewPage::OnQuickModeClicked(' 'SetBattleQuickModeEnabled' 'quick-mode toggle routes through the preview host'

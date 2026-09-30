@@ -44,11 +44,17 @@ enum class BattleWritebackChangeKind {
     UpdateInstruction,
     DeleteInstruction,
     InsertInstruction,
+    InsertFourBGroup,
 };
 
 struct BattleWritebackSourceInstruction {
     std::uint16_t instruction_id{};
     ccz::preview::LogicalNodeKey logical_key;
+    // The preview cache is keyed by logical_key from its baseline. The native
+    // target may have a new positional key after ordinary edits in the same
+    // Section; runtime_handle bridges them within the same tree generation.
+    ccz::preview::LogicalNodeKey current_logical_key;
+    std::uintptr_t runtime_handle{};
     int ordinal{};
     // origin_int_data is the snapshot captured when the Battle cache loaded;
     // current_int_data is freshly captured immediately before planning.
@@ -63,6 +69,7 @@ struct BattleWritebackSectionSnapshot {
     ccz::preview::LogicalNodeKey insert_parent_key;
     ccz::preview::LogicalNodeKey insert_before_key;
     std::vector<BattleDeploymentInsertionAnchor> insertion_anchors;
+    bool has_current_own_deployment_group{};
     std::vector<BattleWritebackSourceInstruction> instructions;
 };
 
@@ -71,6 +78,7 @@ struct BattleWritebackReachabilityScope {
     // condition-tree projection. An empty key list is a valid empty branch.
     bool filter_deployments{};
     std::vector<ccz::preview::LogicalNodeKey> reachable_deployment_keys;
+    std::vector<std::uintptr_t> reachable_deployment_handles;
     ccz::preview::LogicalNodeKey insert_parent_key;
     ccz::preview::LogicalNodeKey insert_before_key;
     std::vector<BattleDeploymentInsertionAnchor> insertion_anchors;
@@ -89,6 +97,8 @@ struct BattleWritebackChange {
     ccz::preview::LogicalNodeKey insert_before_key;
     int source_ordinal{};
     std::vector<std::int32_t> int_data;
+    std::wstring group_label;
+    std::vector<std::vector<std::int32_t>> group_records;
     std::vector<std::uint64_t> affected_cache_ids;
 };
 
@@ -116,11 +126,14 @@ struct BattleWritebackNativeChange {
     // insert-before terminal anchor. Zero means TVI_FIRST at the native edge.
     std::uintptr_t insert_after_handle{};
     std::uintptr_t insert_before_handle{};
+    std::uintptr_t insert_terminal_handle{};
     int source_ordinal{-1};
     // Full preimage captured at the same time as the runtime handle. It lets
     // the transaction reject stale targets and is also its exact rollback data.
     std::vector<std::int32_t> original_int_data;
     std::vector<std::int32_t> int_data;
+    std::wstring group_label;
+    std::vector<std::vector<std::int32_t>> group_records;
 };
 
 struct BattleWritebackNativeBatch {
@@ -145,6 +158,7 @@ struct BattleWritebackNativeNodeSnapshot {
     std::uint16_t instruction_id{};
     int ordinal{};
     std::vector<std::int32_t> int_data;
+    std::wstring long_text;
     bool has_children{};
     bool has_long_text{};
     bool has_structural_links{};
@@ -194,7 +208,24 @@ public:
         std::uintptr_t after_handle, std::uint16_t instruction_id,
         const std::vector<std::int32_t>& int_data, int ordinal,
         std::uintptr_t& inserted_handle) = 0;
+    virtual bool InsertBattleFourBGroup(std::uintptr_t parent_handle,
+        std::uintptr_t after_handle, const std::wstring& label,
+        const std::vector<std::vector<std::int32_t>>& records,
+        int first_ordinal, std::uintptr_t& marker_handle,
+        std::uintptr_t& group_handle,
+        std::vector<std::uintptr_t>& record_handles,
+        std::uintptr_t& terminal_handle) = 0;
     virtual bool DeleteBattleNode(std::uintptr_t handle) = 0;
+    virtual bool DeleteBattleFourBGroup(std::uintptr_t marker_handle,
+        std::uintptr_t group_handle) = 0;
+    virtual bool RestoreBattleFourBGroupBefore(std::uintptr_t parent_handle,
+        std::uintptr_t after_handle, std::uintptr_t before_handle,
+        const std::wstring& label,
+        const std::vector<std::vector<std::int32_t>>& records,
+        int first_ordinal, std::uintptr_t& marker_handle,
+        std::uintptr_t& group_handle,
+        std::vector<std::uintptr_t>& record_handles,
+        std::uintptr_t& terminal_handle) = 0;
     virtual bool RestoreBattleNodeBefore(
         const BattleWritebackNativeNodeSnapshot& node,
         std::uintptr_t before_handle, std::uintptr_t& restored_handle) = 0;
@@ -222,6 +253,15 @@ private:
         // is the inserted node snapshot used to remove or restore it on undo.
         BattleWritebackNativeNodeSnapshot node;
         std::uintptr_t current_handle{};
+        std::uintptr_t group_marker_handle{};
+        std::uintptr_t group_handle{};
+        std::uintptr_t group_terminal_handle{};
+        std::uintptr_t group_parent_handle{};
+        std::uintptr_t group_after_handle{};
+        std::uintptr_t group_before_handle{};
+        std::vector<std::uintptr_t> group_record_handles;
+        std::vector<std::vector<std::int32_t>> group_records;
+        std::wstring group_label;
         std::vector<std::int32_t> after_int_data;
         // Apply-time swap scratch. It receives the exact native preimage and
         // is preallocated before any mutation, so rollback does not allocate.
@@ -277,6 +317,7 @@ struct BattleWritebackMemoryState {
     ccz::preview::BattlePreviewState battle;
     bool document_modified{};
     BattleWritebackSelectionSnapshot selection;
+    std::vector<std::uint64_t> selection_group_cache_ids;
 };
 
 // Fixed battle rows use the original editor's empty-row sentinel.  This value

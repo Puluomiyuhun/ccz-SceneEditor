@@ -9,6 +9,7 @@
 #include <ccz/preview/execution_model.h>
 #include <ccz/preview/instruction_catalog.h>
 #include <ccz/preview/r_document_session.h>
+#include <ccz/preview/script_variable_index.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,15 @@ using SPreviewDocumentId = PreviewDocumentId;
 struct BattlePreviewDocumentVersion {
 	std::uint64_t content_epoch{};
 	std::uint64_t tree_generation{};
+};
+
+enum class BattleParameterPreviewMode : std::uint8_t {
+	None,
+	BattlefieldIndex,
+	Level,
+	UnitType,
+	AiPolicy,
+	Reinforcement,
 };
 
 enum class BattlePreviewActivationCheck {
@@ -44,6 +54,10 @@ struct BattlePreviewUiState {
 	bool sidebar_visible{true};
 	bool brush_tab_active{};
 	bool quick_mode_enabled{true};
+	bool copy_person_mode{};
+	bool unrestricted_terrain_mode{};
+	BattleParameterPreviewMode parameter_preview_mode{
+		BattleParameterPreviewMode::None};
 	bool initialized{};
 	std::wstring search_text;
 	std::uint16_t deployment_instruction{0x4b};
@@ -80,11 +94,15 @@ struct BattlePreviewDocumentSession {
 	ccz::preview::ReplayOptions condition_options;
 	ccz::preview::InstructionCatalog condition_catalog;
 	std::shared_ptr<const ccz::preview::SectionExecutionModel> condition_model;
+	ccz::preview::ScriptVariableIndex condition_variable_index;
+	ccz::preview::LogicalNodeKey condition_activation_target;
 	BattlePreviewUiState ui;
 	std::wstring diagnostic;
 	std::wstring quick_mode_diagnostic;
 	bool native_writeback_rebase_required{};
 	bool condition_button_visible{};
+	bool activation_button_visible{};
+	bool variable_button_visible{};
 };
 
 class BattlePreviewSessionRegistry {

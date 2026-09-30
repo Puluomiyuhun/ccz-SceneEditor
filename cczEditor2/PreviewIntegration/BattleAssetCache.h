@@ -1,10 +1,13 @@
 #pragma once
 
 #include <ccz/preview/battle_preview.h>
+#include <ccz/preview/battle_movement_terrain.h>
 
 #include "BattleCharacterCatalog.h"
+#include "BattleMovementTerrainResourceCache.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,6 +33,10 @@ public:
     const std::vector<std::uint8_t>& hexzmap_e5() const noexcept { return hexzmap_e5_; }
     const BattleCharacterCatalog& character_catalog() const noexcept {
         return character_catalog_;
+    }
+    const std::shared_ptr<const ccz::preview::BattleMovementTerrainTable>&
+    movement_terrain() const noexcept {
+        return movement_terrain_;
     }
     // S battle maps are loose JPG files under the Mod's map directory.  They
     // are deliberately kept separate from the R-scene Mmap.e5 cache.
@@ -64,6 +71,7 @@ private:
 
     bool LoadUnitSpriteAssets(const std::wstring& root,
                               std::wstring& diagnostic);
+    void ClearActiveModAssets();
 
     std::wstring root_key_;
     std::uint64_t root_revision_{};
@@ -76,6 +84,12 @@ private:
     std::vector<std::uint8_t> hexzmap_e5_;
     std::vector<std::uint8_t> unit_mov_e5_;
     BattleCharacterCatalog character_catalog_;
+    BattleMovementTerrainResourceCache movement_terrain_cache_;
+    std::shared_ptr<const ccz::preview::BattleMovementTerrainTable>
+        movement_terrain_;
+    // Keep the independently validated visual mapping input. It is populated
+    // from the same Data.e5 byte but must retain the old 1024-ID behavior even
+    // when the browser catalog exposes only 512 named records.
     std::vector<std::uint8_t> arms_;
     std::vector<std::uint16_t> appearance_;
     std::vector<E5Entry> unit_mov_entries_;

@@ -125,6 +125,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="tests\test_framework.h" />
+    <ClInclude Include="..\cczPreviewCore\include\ccz\preview\e5_archive.h" />
+    <ClInclude Include="..\cczPreviewCore\include\ccz\preview\battle_movement_terrain.h" />
+    <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleMovementTerrainResourceCache.h" />
     <ClCompile Include="tests\test_main.cpp" />
     <ClCompile Include="tests\dialogue_profile_tests.cpp" />
     <ClCompile Include="tests\dialogue_model_tests.cpp" />
@@ -158,6 +161,8 @@
     <ClCompile Include="tests\battle_instruction_parser_tests.cpp" />
     <ClCompile Include="tests\battle_field_spec_tests.cpp" />
     <ClCompile Include="tests\battle_preview_state_tests.cpp" />
+    <ClCompile Include="tests\battle_movement_terrain_tests.cpp" />
+    <ClCompile Include="tests\battle_movement_terrain_resource_cache_tests.cpp" />
     <ClCompile Include="tests\battle_interaction_tests.cpp" />
     <ClCompile Include="tests\battle_writeback_tests.cpp" />
     <ClCompile Include="..\tests\preview_integration\battle_editor_ops_tests.cpp" />

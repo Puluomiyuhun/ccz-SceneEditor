@@ -238,10 +238,6 @@ bool valid_native_source(const BattleWritebackSourceInstruction& source,
         diagnostic = L"战场写回计划失败：来源指令的原生 int_data 长度不符";
         return false;
     }
-    if (source.current_int_data != source.origin_int_data) {
-        diagnostic = L"战场写回计划失败：来源指令自加载后已变化，请刷新缓存";
-        return false;
-    }
     if (source.instruction_id == 0x4b) return true;
     const auto data_id_field = std::find(
         spec->field_roles.begin(), spec->field_roles.end(),
@@ -267,11 +263,17 @@ bool valid_native_source(const BattleWritebackSourceInstruction& source,
 struct PlannedNode {
     std::uint16_t instruction_id{};
     ccz::preview::LogicalNodeKey source_key;
+    ccz::preview::LogicalNodeKey native_source_key;
+    std::uintptr_t runtime_handle{};
     ccz::preview::LogicalNodeKey insert_parent_key;
     ccz::preview::LogicalNodeKey insert_before_key;
     int ordinal{-1};
+    std::vector<std::int32_t> origin_int_data;
     std::vector<std::int32_t> int_data;
+    std::vector<std::vector<std::int32_t>> group_records;
+    std::wstring group_label;
     bool source_backed{};
+    bool four_b_group{};
     bool changed{};
     bool deleted{};
 };
@@ -294,6 +296,17 @@ bool fixed_row_is_empty(const PlannedNode& node, const BattleFieldSpec& spec,
     for (std::size_t field = 0; field < spec.record_stride; ++field) {
         if (spec.field_roles[field] == BattleFieldRole::DataId) {
             return node.int_data[offset + field] == -1;
+        }
+    }
+    return false;
+}
+
+bool fixed_row_is_empty(const std::vector<std::int32_t>& int_data,
+                        const BattleFieldSpec& spec, std::size_t row) {
+    const std::size_t offset = row * spec.record_stride;
+    for (std::size_t field = 0; field < spec.record_stride; ++field) {
+        if (spec.field_roles[field] == BattleFieldRole::DataId) {
+            return int_data[offset + field] == -1;
         }
     }
     return false;
@@ -545,6 +558,76 @@ bool ValidateBattleWritebackNextOrdinal(
     return true;
 }
 
+bool resolve_selected_instruction_anchor(
+    const BattlePreviewCapture& capture,
+    ccz::preview::LogicalNodeKey& parent_key,
+    ccz::preview::LogicalNodeKey& before_key,
+    std::uintptr_t& parent_handle,
+    std::uintptr_t& before_handle,
+    const ccz::preview::RawReplayNode*& parent_raw,
+    std::wstring& diagnostic) {
+    parent_key.clear();
+    before_key.clear();
+    parent_handle = 0;
+    before_handle = 0;
+    parent_raw = nullptr;
+    const auto& path = capture.snapshot.selected_path;
+    if (path.empty()) {
+        diagnostic = L"当前没有选中可作为新增锚点的普通指令";
+        return false;
+    }
+    const ccz::editor_preview::CapturedEditorNode* parent =
+        &capture.snapshot.section_root;
+    for (std::size_t depth = 0; depth + 1 < path.size(); ++depth) {
+        if (path[depth] >= parent->children.size()) {
+            diagnostic = L"当前选中指令路径已不在固定 Section 中";
+            return false;
+        }
+        parent = &parent->children[path[depth]];
+    }
+    const std::size_t selected_index = path.back();
+    if (selected_index >= parent->children.size() ||
+        parent->children.empty() || selected_index + 1 >= parent->children.size()) {
+        diagnostic = L"选中节点不是可定位的 Section 内普通指令";
+        return false;
+    }
+    const auto& selected = parent->children[selected_index];
+    const auto& terminal = parent->children.back();
+    if (parent->instruction_id < 0 || parent->instruction_id == 1 ||
+        parent->instruction_id == 3 || terminal.instruction_id != 0 ||
+        !terminal.children.empty() || selected.instruction_id < 0 ||
+        selected.instruction_id == 0 || selected.instruction_id == 1 ||
+        selected.instruction_id == 3 || selected.runtime_handle == 0) {
+        diagnostic = L"不能选择 Scene/Section、结构标记或事件结束节点作为插入锚点";
+        return false;
+    }
+    const auto& before = parent->children[selected_index + 1];
+    std::size_t parent_matches = 0;
+    parent_raw = find_raw_node(capture.input.nodes, parent->runtime_handle,
+                               parent_matches);
+    if (parent_matches != 1 || parent_raw == nullptr ||
+        parent_raw->children.size() != parent->children.size() ||
+        selected_index + 1 >= parent_raw->children.size() ||
+        parent_raw->children[selected_index].runtime_handle !=
+            selected.runtime_handle ||
+        parent_raw->children[selected_index + 1].runtime_handle !=
+            before.runtime_handle ||
+        parent_raw->children.back().instruction_id != 0 ||
+        !parent_raw->children.back().children.empty() ||
+        !key_in_scope(parent_raw->logical_key, capture.input.scope_key) ||
+        !key_in_scope(parent_raw->children[selected_index + 1].logical_key,
+                      capture.input.scope_key)) {
+        diagnostic = L"选中指令的原生同级节点或末尾 0x00 事件终止符无法验证";
+        parent_raw = nullptr;
+        return false;
+    }
+    parent_key = parent_raw->logical_key;
+    before_key = parent_raw->children[selected_index + 1].logical_key;
+    parent_handle = parent_raw->runtime_handle;
+    before_handle = parent_raw->children[selected_index + 1].runtime_handle;
+    return true;
+}
+
 bool BuildBattleWritebackSectionSnapshot(
     const BattlePreviewCapture& baseline,
     const BattlePreviewCapture& current,
@@ -565,10 +648,9 @@ bool BuildBattleWritebackSectionSnapshot(
         return fail(L"战场写回快照失败：基线或当前捕获不是有效的 S 战场预览");
     }
     const bool revision_mismatch =
-        revision_scope == BattleWritebackRevisionScope::PinnedSection
-            ? baseline.input.section_revision != current.input.section_revision
-            : (baseline.input.document_revision != current.input.document_revision ||
-               baseline.input.section_revision != current.input.section_revision);
+        revision_scope == BattleWritebackRevisionScope::WholeDocument &&
+        (baseline.input.document_revision != current.input.document_revision ||
+         baseline.input.section_revision != current.input.section_revision);
     if (normalized_path(baseline.input.document_path).empty() ||
         normalized_path(baseline.input.document_path) !=
             normalized_path(current.input.document_path) ||
@@ -600,26 +682,44 @@ bool BuildBattleWritebackSectionSnapshot(
     if (reachability_scope != nullptr &&
         reachability_scope->filter_deployments) {
         std::unordered_set<ccz::preview::LogicalNodeKey> reachable_keys;
+        std::unordered_set<std::uintptr_t> reachable_handles;
         for (const auto& key : reachability_scope->reachable_deployment_keys) {
             if (!key_in_scope(key, current.input.scope_key) ||
                 !reachable_keys.emplace(key).second) {
                 return fail(L"战场写回快照失败：条件树出场来源键越界或重复");
             }
         }
-        const auto retain_reachable = [&reachable_keys](
+        for (const std::uintptr_t handle :
+             reachability_scope->reachable_deployment_handles) {
+            if (handle == 0 || !reachable_handles.emplace(handle).second) {
+                return fail(L"战场写回快照失败：条件树出场来源句柄为空或重复");
+            }
+        }
+        const auto retain_baseline_reachable = [&reachable_keys](
             const CapturedDeployment& deployment) {
             return reachable_keys.find(deployment.key) != reachable_keys.end();
         };
+        const auto retain_current_reachable = [&reachable_keys,
+                &reachable_handles](const CapturedDeployment& deployment) {
+            if (!reachable_handles.empty()) {
+                return reachable_handles.find(
+                    deployment.captured->runtime_handle) !=
+                    reachable_handles.end();
+            }
+            return reachable_keys.find(deployment.key) != reachable_keys.end();
+        };
         original.erase(std::remove_if(original.begin(), original.end(),
-            [&retain_reachable](const CapturedDeployment& deployment) {
-                return !retain_reachable(deployment);
+            [&retain_baseline_reachable](const CapturedDeployment& deployment) {
+                return !retain_baseline_reachable(deployment);
             }), original.end());
         live.erase(std::remove_if(live.begin(), live.end(),
-            [&retain_reachable](const CapturedDeployment& deployment) {
-                return !retain_reachable(deployment);
+            [&retain_current_reachable](const CapturedDeployment& deployment) {
+                return !retain_current_reachable(deployment);
             }), live.end());
+        const std::size_t expected_live = reachable_handles.empty()
+            ? reachable_keys.size() : reachable_handles.size();
         if (original.size() != reachable_keys.size() ||
-            live.size() != reachable_keys.size()) {
+            live.size() != expected_live) {
             return fail(L"战场写回快照失败：活动条件分支的出场来源无法在基线和当前树中一一映射");
         }
     }
@@ -636,22 +736,36 @@ bool BuildBattleWritebackSectionSnapshot(
         const auto validate_anchor = [&](
             const ccz::preview::LogicalNodeKey& parent_key,
             const ccz::preview::LogicalNodeKey& before_key,
+            std::uintptr_t parent_handle,
+            std::uintptr_t before_handle,
+            ccz::preview::LogicalNodeKey& resolved_parent_key,
+            ccz::preview::LogicalNodeKey& resolved_before_key,
             std::wstring& anchor_diagnostic) {
             if (parent_key.empty() || before_key.empty()) {
-                anchor_diagnostic = L"条件树插入父节点与终止锚点不完整";
-                return false;
+                if (parent_handle == 0 || before_handle == 0) {
+                    anchor_diagnostic = L"条件树插入父节点与后继锚点不完整";
+                    return false;
+                }
             }
-            if (!key_in_scope(parent_key, candidate.scope_key) ||
-                !key_in_scope(before_key, candidate.scope_key)) {
+            if ((parent_handle == 0 &&
+                 !key_in_scope(parent_key, candidate.scope_key)) ||
+                (before_handle == 0 &&
+                 !key_in_scope(before_key, candidate.scope_key))) {
                 anchor_diagnostic = L"条件树插入锚点越过当前 Section";
                 return false;
             }
             std::size_t parent_matches = 0;
             std::size_t before_matches = 0;
-            const auto* parent = find_raw_node_by_key(
-                current.input.nodes, parent_key, parent_matches);
-            const auto* before = find_raw_node_by_key(
-                current.input.nodes, before_key, before_matches);
+            const auto* parent = parent_handle != 0
+                ? find_raw_node(current.input.nodes, parent_handle,
+                                parent_matches)
+                : find_raw_node_by_key(current.input.nodes, parent_key,
+                                       parent_matches);
+            const auto* before = before_handle != 0
+                ? find_raw_node(current.input.nodes, before_handle,
+                                before_matches)
+                : find_raw_node_by_key(current.input.nodes, before_key,
+                                       before_matches);
             if (!captured_nodes_indexed) {
                 if (!index_captured_nodes(current.snapshot.section_root,
                         captured_by_handle, anchor_diagnostic)) return false;
@@ -659,32 +773,53 @@ bool BuildBattleWritebackSectionSnapshot(
             }
             if (parent_matches != 1 || before_matches != 1 ||
                 parent == nullptr || before == nullptr ||
+                !key_in_scope(parent->logical_key, candidate.scope_key) ||
+                !key_in_scope(before->logical_key, candidate.scope_key) ||
                 parent->children.empty() ||
-                parent->children.back().logical_key != before_key ||
-                before->instruction_id != 0 || !before->children.empty() ||
                 parent->runtime_handle == 0 || before->runtime_handle == 0) {
+                anchor_diagnostic = L"条件树插入父节点或后继锚点已失效";
+                return false;
+            }
+            const auto before_position = std::find_if(
+                parent->children.begin(), parent->children.end(),
+                [before](const ccz::preview::RawReplayNode& child) {
+                    return child.runtime_handle == before->runtime_handle;
+                });
+            const auto& terminal = parent->children.back();
+            if (before_position == parent->children.end() ||
+                terminal.instruction_id != 0 || !terminal.children.empty()) {
                 anchor_diagnostic =
-                    L"条件树插入目标不是唯一且末尾为 0x00 的原生子事件";
+                    L"条件树插入位置必须是事件终止符之前的同级节点";
                 return false;
             }
             const auto captured_parent =
                 captured_by_handle.find(parent->runtime_handle);
             const auto captured_before =
                 captured_by_handle.find(before->runtime_handle);
+            const auto captured_terminal =
+                captured_by_handle.find(terminal.runtime_handle);
             if (captured_parent == captured_by_handle.end() ||
                 captured_before == captured_by_handle.end() ||
+                captured_terminal == captured_by_handle.end() ||
                 captured_parent->second->instruction_id !=
                     static_cast<int>(parent->instruction_id) ||
-                captured_before->second->instruction_id != 0 ||
                 captured_parent->second->children.size() !=
                     parent->children.size() ||
                 captured_parent->second->children.empty() ||
                 captured_parent->second->children.back().runtime_handle !=
-                    before->runtime_handle) {
+                    terminal.runtime_handle ||
+                captured_parent->second->children[
+                    static_cast<std::size_t>(before_position -
+                        parent->children.begin())].runtime_handle !=
+                    before->runtime_handle ||
+                captured_terminal->second->instruction_id != 0 ||
+                captured_terminal->second->runtime_handle == 0) {
                 anchor_diagnostic =
                     L"条件树插入锚点无法映射回原生子事件";
                 return false;
             }
+            resolved_parent_key = parent->logical_key;
+            resolved_before_key = before->logical_key;
             return true;
         };
 
@@ -695,13 +830,16 @@ bool BuildBattleWritebackSectionSnapshot(
         }
         if (!parent_key.empty()) {
             std::wstring anchor_diagnostic;
-            if (!validate_anchor(parent_key, before_key, anchor_diagnostic)) {
+            ccz::preview::LogicalNodeKey resolved_parent;
+            ccz::preview::LogicalNodeKey resolved_before;
+            if (!validate_anchor(parent_key, before_key, 0, 0,
+                    resolved_parent, resolved_before, anchor_diagnostic)) {
                 output = {};
                 diagnostic = L"战场写回快照失败：" + anchor_diagnostic;
                 return false;
             }
-            candidate.insert_parent_key = parent_key;
-            candidate.insert_before_key = before_key;
+            candidate.insert_parent_key = std::move(resolved_parent);
+            candidate.insert_before_key = std::move(resolved_before);
         }
 
         std::unordered_set<std::uint16_t> seen_anchor_types;
@@ -719,31 +857,95 @@ bool BuildBattleWritebackSectionSnapshot(
                 continue;
             }
             std::wstring anchor_diagnostic;
+            ccz::preview::LogicalNodeKey resolved_parent;
+            ccz::preview::LogicalNodeKey resolved_before;
             if (!validate_anchor(anchor.parent_key, anchor.before_key,
-                                 anchor_diagnostic)) {
+                    anchor.parent_handle, anchor.before_handle,
+                    resolved_parent, resolved_before, anchor_diagnostic)) {
                 output = {};
                 diagnostic = L"战场写回快照失败：" + anchor_diagnostic;
                 return false;
             }
-            candidate.insertion_anchors.push_back(anchor);
+            BattleDeploymentInsertionAnchor resolved = anchor;
+            resolved.parent_key = std::move(resolved_parent);
+            resolved.before_key = std::move(resolved_before);
+            candidate.insertion_anchors.push_back(std::move(resolved));
+        }
+
+        if (!original.empty() || !live.empty()) {
+            const auto own_anchor = std::find_if(
+                candidate.insertion_anchors.begin(),
+                candidate.insertion_anchors.end(),
+                [](const BattleDeploymentInsertionAnchor& anchor) {
+                    return anchor.instruction_id == 0x4b && anchor.resolved;
+                });
+            if (own_anchor != candidate.insertion_anchors.end()) {
+                std::size_t matches = 0;
+                const auto* parent = find_raw_node_by_key(current.input.nodes,
+                    own_anchor->parent_key, matches);
+                candidate.has_current_own_deployment_group = matches == 1 &&
+                    parent != nullptr && parent->instruction_id == 2 &&
+                    parent->command.text == L"我军出场";
+            }
+        }
+    }
+    if (original.empty() && live.empty()) {
+        candidate.insert_parent_key.clear();
+        candidate.insert_before_key.clear();
+        candidate.insertion_anchors.clear();
+        ccz::preview::LogicalNodeKey selected_parent_key;
+        ccz::preview::LogicalNodeKey selected_before_key;
+        std::uintptr_t selected_parent_handle = 0;
+        std::uintptr_t selected_before_handle = 0;
+        const ccz::preview::RawReplayNode* selected_parent_raw = nullptr;
+        std::wstring selected_diagnostic;
+        if (resolve_selected_instruction_anchor(current,
+                selected_parent_key, selected_before_key,
+                selected_parent_handle, selected_before_handle,
+                selected_parent_raw, selected_diagnostic)) {
+            candidate.insert_parent_key = selected_parent_key;
+            candidate.insert_before_key = selected_before_key;
+            candidate.has_current_own_deployment_group =
+                selected_parent_raw->instruction_id == 2 &&
+                selected_parent_raw->command.text == L"我军出场";
+            for (const std::uint16_t instruction_id : {
+                     std::uint16_t(0x4b), std::uint16_t(0x46),
+                     std::uint16_t(0x47)}) {
+                BattleDeploymentInsertionAnchor anchor;
+                anchor.instruction_id = instruction_id;
+                anchor.parent_key = selected_parent_key;
+                anchor.before_key = selected_before_key;
+                anchor.resolved = true;
+                anchor.parent_handle = selected_parent_handle;
+                anchor.before_handle = selected_before_handle;
+                candidate.insertion_anchors.push_back(std::move(anchor));
+            }
+        } else {
+            for (const std::uint16_t instruction_id : {
+                     std::uint16_t(0x4b), std::uint16_t(0x46),
+                     std::uint16_t(0x47)}) {
+                BattleDeploymentInsertionAnchor anchor;
+                anchor.instruction_id = instruction_id;
+                anchor.diagnostic = selected_diagnostic;
+                candidate.insertion_anchors.push_back(std::move(anchor));
+            }
         }
     }
     for (const auto& baseline_node : original) {
         const auto found = std::find_if(
             live.begin(), live.end(), [&baseline_node](const auto& node) {
-                return node.key == baseline_node.key &&
+                return node.captured->runtime_handle ==
+                           baseline_node.captured->runtime_handle &&
                        node.instruction_id == baseline_node.instruction_id;
             });
         if (found == live.end()) {
             return fail(L"战场写回快照失败：当前 TreeView 无法映射到缓存基线节点");
         }
-        if (baseline_node.captured->ordinal != found->captured->ordinal ||
-            baseline_node.captured->int_data != found->captured->int_data) {
-            return fail(L"战场写回快照失败：出场指令的树序号或原始字段已改变");
-        }
         BattleWritebackSourceInstruction instruction;
         instruction.instruction_id = found->instruction_id;
-        instruction.logical_key = found->key;
+        instruction.logical_key = baseline_node.key;
+        instruction.current_logical_key = found->key;
+        instruction.runtime_handle = found->captured->runtime_handle;
         instruction.ordinal = found->captured->ordinal;
         instruction.origin_int_data.assign(
             baseline_node.captured->int_data.begin(),
@@ -761,7 +963,11 @@ bool BuildBattleWritebackSectionSnapshot(
     const auto* raw_section = find_raw_node(
         current.input.nodes, current.snapshot.section_root.runtime_handle,
         raw_section_matches);
-    if (reachability_scope == nullptr &&
+    if (reachability_scope == nullptr && original.empty() && live.empty()) {
+        // Keep the user-selected normal instruction as the first-insertion
+        // anchor; the generic first-event fallback below is not appropriate
+        // when this Section has no deployment command at all.
+    } else if (reachability_scope == nullptr &&
         raw_section_matches == 1 && raw_section != nullptr) {
         const auto event = std::find_if(
             raw_section->children.begin(), raw_section->children.end(),
@@ -940,7 +1146,11 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
         PlannedNode node;
         node.instruction_id = source->instruction_id;
         node.source_key = source->logical_key;
+        node.native_source_key = source->current_logical_key.empty()
+            ? source->logical_key : source->current_logical_key;
+        node.runtime_handle = source->runtime_handle;
         node.ordinal = source->ordinal;
+        node.origin_int_data = source->origin_int_data;
         node.int_data = source->current_int_data;
         node.source_backed = true;
         nodes.push_back(std::move(node));
@@ -1004,16 +1214,28 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
         }
         if (unit.record_index >= source_rows[node_index].size() ||
             unit.raw_fields.size() != spec->record_stride ||
-            unit.editor_origin_fields.size() != spec->record_stride) {
+            unit.editor_origin_fields.size() != spec->record_stride ||
+            nodes[node_index].origin_int_data.size() !=
+                nodes[node_index].int_data.size()) {
             return fail_plan(L"战场写回计划失败：来源记录行或原始字段基线不完整");
         }
         const std::size_t offset = unit.record_index * spec->record_stride;
-        const auto begin = nodes[node_index].int_data.begin() +
+        const auto begin = nodes[node_index].origin_int_data.begin() +
                            static_cast<std::ptrdiff_t>(offset);
         const auto end = begin + static_cast<std::ptrdiff_t>(spec->record_stride);
         if (!std::equal(unit.editor_origin_fields.begin(),
                         unit.editor_origin_fields.end(), begin, end)) {
             return fail_plan(L"战场写回计划失败：单位来源记录与缓存基线不一致");
+        }
+        const auto data_id_role = std::find(spec->field_roles.begin(),
+            spec->field_roles.end(), BattleFieldRole::DataId);
+        if (data_id_role != spec->field_roles.end()) {
+            const std::size_t data_id_index = static_cast<std::size_t>(
+                data_id_role - spec->field_roles.begin());
+            if (nodes[node_index].int_data[offset + data_id_index] !=
+                nodes[node_index].origin_int_data[offset + data_id_index]) {
+                return fail_plan(L"战场写回冲突：剧本中该固定槽的 Data 号已变化");
+            }
         }
         if (source_rows[node_index][unit.record_index]) {
             return fail_plan(L"战场写回计划失败：多个缓存单位指向同一来源记录行");
@@ -1025,14 +1247,41 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
 
         if (unit.editor_pending_delete) {
             if (unit.source_instruction == 0x4b) {
+                if (nodes[node_index].int_data !=
+                    nodes[node_index].origin_int_data) {
+                    return fail_plan(L"战场写回冲突：待删除的 0x4B 来源指令已被剧本修改");
+                }
                 nodes[node_index].deleted = true;
                 nodes[node_index].changed = true;
             } else {
+                for (std::size_t field = 0; field < spec->record_stride;
+                     ++field) {
+                    const std::size_t field_offset = offset + field;
+                    if (nodes[node_index].int_data[field_offset] !=
+                        nodes[node_index].origin_int_data[field_offset]) {
+                        return fail_plan(L"战场写回冲突：待删除单位的剧本字段已变化");
+                    }
+                }
                 clear_fixed_row(nodes[node_index], *spec, unit.record_index);
             }
             append_unique_cache_id(changed_cache_ids[node_index],
                                    unit.editor_cache_id);
         } else if (!unit.dirty_fields.empty()) {
+            for (std::size_t field = 0; field < spec->record_stride; ++field) {
+                const BattleFieldRole role = spec->field_roles[field];
+                if (!ccz::preview::is_battle_field_dirty(unit, role)) continue;
+                const std::size_t field_offset = offset + field;
+                const std::int32_t baseline_value =
+                    nodes[node_index].origin_int_data[field_offset];
+                const std::int32_t live_value =
+                    nodes[node_index].int_data[field_offset];
+                const std::int32_t preview_value =
+                    value_for_role(unit, role, baseline_value);
+                if (live_value != baseline_value &&
+                    live_value != preview_value) {
+                    return fail_plan(L"战场写回冲突：剧本与预览修改了同一单位字段");
+                }
+            }
             write_unit_row(nodes[node_index], *spec, unit.record_index, unit,
                            false);
             append_unique_cache_id(changed_cache_ids[node_index],
@@ -1056,7 +1305,8 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
             nodes[node_index].instruction_id);
         for (std::size_t row = 0; row < record_count(*spec); ++row) {
             if (nodes[node_index].instruction_id != 0x4b &&
-                fixed_row_is_empty(nodes[node_index], *spec, row)) continue;
+                fixed_row_is_empty(nodes[node_index].origin_int_data,
+                                   *spec, row)) continue;
             if (!source_rows[node_index][row]) {
                 return fail_plan(L"战场写回计划失败：存在未纳入缓存的原生出场记录");
             }
@@ -1067,11 +1317,23 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
         staged_units.begin(), staged_units.end(), [](const BattleUnit* unit) {
             return unit->editor_deployment_instruction == 0x4b;
         });
+    const bool create_first_four_b_group = has_staged_four_b &&
+        four_b_sources.empty() && !snapshot.has_current_own_deployment_group;
+    std::size_t four_b_group_node_index = nodes.size();
     const bool four_b_layout_changes = has_staged_four_b || std::any_of(
         four_b_sources.begin(), four_b_sources.end(),
         [](const FourBSourceAnchor& anchor) {
             return anchor.unit->editor_pending_delete;
         });
+    if (four_b_layout_changes) {
+        for (const FourBSourceAnchor& anchor : four_b_sources) {
+            const PlannedNode& node = nodes[anchor.node_index];
+            if (node.int_data.empty() || node.origin_int_data.empty() ||
+                node.int_data[0] != node.origin_int_data[0]) {
+                return fail_plan(L"战场写回冲突：0x4B 部署槽序号已变化，无法安全重排");
+            }
+        }
+    }
     int next_four_b_slot = 0;
     if (four_b_layout_changes) {
         for (const FourBSourceAnchor& anchor : four_b_sources) {
@@ -1112,6 +1374,25 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
         std::size_t node_index = nodes.size();
         std::size_t row_index = 0;
         if (instruction == 0x4b) {
+            if (create_first_four_b_group) {
+                if (four_b_group_node_index == nodes.size()) {
+                    PlannedNode group;
+                    group.instruction_id = 0x4b;
+                    group.four_b_group = true;
+                    group.group_label = L"我军出场";
+                    group.changed = true;
+                    std::wstring anchor_diagnostic;
+                    if (!resolve_insert_anchor(instruction,
+                            group.insert_parent_key,
+                            group.insert_before_key, anchor_diagnostic)) {
+                        return fail_plan(anchor_diagnostic);
+                    }
+                    nodes.push_back(std::move(group));
+                    changed_cache_ids.resize(nodes.size());
+                    four_b_group_node_index = nodes.size() - 1;
+                }
+                node_index = four_b_group_node_index;
+            } else {
             PlannedNode node = make_new_node(instruction);
             std::wstring anchor_diagnostic;
             if (!resolve_insert_anchor(instruction, node.insert_parent_key,
@@ -1122,6 +1403,7 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
             nodes.push_back(std::move(node));
             changed_cache_ids.resize(nodes.size());
             node_index = nodes.size() - 1;
+            }
         } else {
             for (std::size_t candidate = 0; candidate < nodes.size(); ++candidate) {
                 if (nodes[candidate].instruction_id != instruction ||
@@ -1154,22 +1436,37 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
             ccz::preview::mark_battle_field_dirty(
                 staged_row, BattleFieldRole::DeploymentIndex);
         }
-        write_unit_row(nodes[node_index], *spec, row_index, staged_row, true);
+        std::size_t binding_record_index = row_index;
+        if (nodes[node_index].four_b_group) {
+            PlannedNode record = make_new_node(0x4b);
+            write_unit_row(record, *spec, 0, staged_row, true);
+            binding_record_index = nodes[node_index].group_records.size();
+            nodes[node_index].group_records.push_back(std::move(record.int_data));
+            nodes[node_index].changed = true;
+        } else {
+            write_unit_row(nodes[node_index], *spec, row_index, staged_row,
+                           true);
+        }
         append_unique_cache_id(changed_cache_ids[node_index],
                                unit->editor_cache_id);
-        pending_bindings.push_back({unit->editor_cache_id, node_index, row_index});
+        pending_bindings.push_back({unit->editor_cache_id, node_index,
+                                    binding_record_index});
     }
 
     std::vector<std::size_t> node_to_change(nodes.size(),
                                             (std::numeric_limits<std::size_t>::max)());
+    for (int pass = 0; pass < 2; ++pass) {
     for (std::size_t node_index = 0; node_index < nodes.size(); ++node_index) {
         const PlannedNode& node = nodes[node_index];
-        if (!node.changed) continue;
+        if (!node.changed || node.four_b_group != (pass == 0)) continue;
         BattleWritebackChange change;
         change.instruction_id = node.instruction_id;
-        change.source_key = node.source_key;
+        change.source_key = node.source_backed
+            ? node.native_source_key : node.source_key;
         change.source_ordinal = node.ordinal;
-        change.int_data = node.int_data;
+        if (!node.four_b_group) change.int_data = node.int_data;
+        change.group_label = node.group_label;
+        change.group_records = node.group_records;
         change.affected_cache_ids = changed_cache_ids[node_index];
         if (node.source_backed) {
             change.kind = node.deleted
@@ -1181,12 +1478,15 @@ BattleWritebackPlanBuild BuildBattleWritebackPlan(
                 node.insert_parent_key == node.insert_before_key) {
                 return fail_plan(L"战场写回计划失败：新指令的类型专属锚点无效");
             }
-            change.kind = BattleWritebackChangeKind::InsertInstruction;
+            change.kind = node.four_b_group
+                ? BattleWritebackChangeKind::InsertFourBGroup
+                : BattleWritebackChangeKind::InsertInstruction;
             change.insert_parent_key = node.insert_parent_key;
             change.insert_before_key = node.insert_before_key;
         }
         node_to_change[node_index] = result.changes.size();
         result.changes.push_back(std::move(change));
+    }
     }
     for (const PendingBinding& binding : pending_bindings) {
         if (binding.planned_node >= node_to_change.size() ||
@@ -1280,7 +1580,16 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
         }
         const std::size_t expected_size =
             native_vector_size(change.instruction_id);
-        if (change.int_data.size() != expected_size) {
+        if ((change.kind == BattleWritebackChangeKind::InsertFourBGroup &&
+             (change.instruction_id != 0x4b || !change.int_data.empty() ||
+              change.group_label != L"我军出场" ||
+              change.group_records.empty() ||
+              std::any_of(change.group_records.begin(),
+                  change.group_records.end(), [](const auto& record) {
+                      return record.size() != 20U;
+                  }))) ||
+            (change.kind != BattleWritebackChangeKind::InsertFourBGroup &&
+             change.int_data.size() != expected_size)) {
             return fail_batch(L"战场原生预检失败：出场指令 int_data 长度不符");
         }
 
@@ -1290,7 +1599,8 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
         native_change.source_ordinal = change.source_ordinal;
         native_change.int_data = change.int_data;
 
-        if (change.kind == BattleWritebackChangeKind::InsertInstruction) {
+        if (change.kind == BattleWritebackChangeKind::InsertInstruction ||
+            change.kind == BattleWritebackChangeKind::InsertFourBGroup) {
             if (!change.source_key.empty() || change.source_ordinal != -1 ||
                 !key_in_scope(change.insert_parent_key, scope_key) ||
                 !key_in_scope(change.insert_before_key, scope_key)) {
@@ -1304,24 +1614,41 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
             }
             const auto* parent = parent_found->second;
             const auto* before = before_found->second;
-            if (parent->children.empty() || before->instruction_id != 0 ||
-                !before->children.empty() ||
-                parent->children.back().logical_key != before->logical_key) {
-                return fail_batch(L"战场原生预检失败：插入锚点不是当前事件的末尾终止指令");
+            if (parent->children.empty() || before->runtime_handle == 0 ||
+                parent->instruction_id < 0 || parent->instruction_id == 1 ||
+                parent->instruction_id == 3) {
+                return fail_batch(L"战场原生预检失败：插入锚点所属子事件无效");
+            }
+            const auto before_position = std::find_if(
+                parent->children.begin(), parent->children.end(),
+                [before](const auto& child) {
+                    return child.runtime_handle == before->runtime_handle;
+                });
+            const auto& terminal = parent->children.back();
+            if (before_position == parent->children.end() ||
+                terminal.instruction_id != 0 ||
+                !terminal.children.empty() ||
+                before_position > parent->children.end() - 1) {
+                return fail_batch(L"战场原生预检失败：插入位置不是末尾 0x00 事件终止符之前的同级节点");
             }
             const auto captured_parent = captured_by_handle.find(
                 parent->runtime_handle);
             const auto captured_before = captured_by_handle.find(
                 before->runtime_handle);
+            const auto captured_terminal = captured_by_handle.find(
+                terminal.runtime_handle);
             if (captured_parent == captured_by_handle.end() ||
                 captured_before == captured_by_handle.end() ||
+                captured_terminal == captured_by_handle.end() ||
                 captured_parent->second->instruction_id !=
                     static_cast<int>(parent->instruction_id) ||
-                captured_before->second->instruction_id != 0 ||
+                captured_before->second->instruction_id !=
+                    static_cast<int>(before->instruction_id) ||
+                captured_terminal->second->instruction_id != 0 ||
                 captured_parent->second->children.size() !=
                     parent->children.size() ||
                 captured_parent->second->children.back().runtime_handle !=
-                    before->runtime_handle) {
+                    terminal.runtime_handle) {
                 return fail_batch(L"战场原生预检失败：插入锚点无法映射回原生树");
             }
             for (std::size_t index = 0; index < parent->children.size(); ++index) {
@@ -1337,8 +1664,9 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
             }
             native_change.parent_handle = parent->runtime_handle;
             native_change.insert_before_handle = before->runtime_handle;
-            if (parent->children.size() > 1) {
-                const auto& previous = parent->children[parent->children.size() - 2];
+            native_change.insert_terminal_handle = terminal.runtime_handle;
+            if (before_position != parent->children.begin()) {
+                const auto& previous = *(before_position - 1);
                 const auto captured_previous = captured_by_handle.find(
                     previous.runtime_handle);
                 if (captured_previous == captured_by_handle.end() ||
@@ -1347,6 +1675,10 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
                     return fail_batch(L"战场原生预检失败：插入前置兄弟无法映射回原生树");
                 }
                 native_change.insert_after_handle = previous.runtime_handle;
+            }
+            if (change.kind == BattleWritebackChangeKind::InsertFourBGroup) {
+                native_change.group_label = change.group_label;
+                native_change.group_records = change.group_records;
             }
         } else {
             if (change.source_key.empty() ||
@@ -1444,8 +1776,20 @@ bool BattleWritebackNativeTransaction::Apply(
         last_inserted_by_anchor.reserve(batch.changes.size());
         for (std::size_t index = 0; index < batch.changes.size(); ++index) {
             const BattleWritebackNativeChange& change = batch.changes[index];
+            const bool four_b_group =
+                change.kind == BattleWritebackChangeKind::InsertFourBGroup;
             if (!is_battle_deployment(change.instruction_id) ||
-                change.int_data.size() != native_vector_size(change.instruction_id)) {
+                (four_b_group
+                    ? change.instruction_id != 0x4b ||
+                        !change.int_data.empty() ||
+                        change.group_label != L"我军出场" ||
+                        change.group_records.empty() ||
+                        std::any_of(change.group_records.begin(),
+                            change.group_records.end(), [](const auto& record) {
+                                return record.size() != 20U;
+                            })
+                    : change.int_data.size() !=
+                        native_vector_size(change.instruction_id))) {
                 diagnostic = L"S 战场事务拒绝：指令类型或完整字段长度无效";
                 return false;
             }
@@ -1453,12 +1797,8 @@ bool BattleWritebackNativeTransaction::Apply(
             entry.operation.kind = change.kind;
             entry.operation.after_int_data = change.int_data;
 
-            if (change.kind == BattleWritebackChangeKind::InsertInstruction) {
-                if (change.instruction_id == 0x4b &&
-                    change.int_data.size() != 20U) {
-                    diagnostic = L"S 战场事务拒绝：0x4B 完整字段长度无效";
-                    return false;
-                }
+            if (change.kind == BattleWritebackChangeKind::InsertInstruction ||
+                four_b_group) {
                 if (change.item_handle != 0 || change.parent_handle == 0 ||
                     change.insert_before_handle == 0 ||
                     change.source_ordinal != -1 ||
@@ -1466,13 +1806,28 @@ bool BattleWritebackNativeTransaction::Apply(
                     diagnostic = L"S 战场事务拒绝：新增指令缺少有效的父节点或终止锚点";
                     return false;
                 }
-                ++insert_count;
+                const std::size_t ordinals = four_b_group
+                    ? change.group_records.size() + 3U : 1U;
+                if (ordinals > static_cast<std::size_t>(
+                        (std::numeric_limits<int>::max)()) - insert_count) {
+                    diagnostic = L"S 战场事务拒绝：新增节点数量将溢出";
+                    return false;
+                }
+                insert_count += ordinals;
                 entry.operation.node.handle = 0;
                 entry.operation.node.parent_handle = change.parent_handle;
-                entry.operation.node.instruction_id = change.instruction_id;
+                entry.operation.node.instruction_id = four_b_group ? 2
+                    : change.instruction_id;
                 entry.operation.node.int_data = change.int_data;
-            } else if (change.kind == BattleWritebackChangeKind::UpdateInstruction ||
-                       change.kind == BattleWritebackChangeKind::DeleteInstruction) {
+                entry.operation.group_label = change.group_label;
+                entry.operation.group_records = change.group_records;
+                entry.operation.group_parent_handle = change.parent_handle;
+                entry.operation.group_after_handle = change.insert_after_handle;
+                entry.operation.group_before_handle = change.insert_before_handle;
+            } else if (change.kind ==
+                       BattleWritebackChangeKind::UpdateInstruction ||
+                       change.kind ==
+                       BattleWritebackChangeKind::DeleteInstruction) {
                 if (change.item_handle == 0 || change.source_ordinal < 0 ||
                     !source_handles.insert(change.item_handle).second ||
                     !host.NodeExists(change.item_handle) ||
@@ -1525,22 +1880,49 @@ bool BattleWritebackNativeTransaction::Apply(
     int next_insert_ordinal = before_state.next_ordinal;
     for (std::size_t index = 0; index < batch.changes.size(); ++index) {
         const auto& change = batch.changes[index];
-        if (change.kind != BattleWritebackChangeKind::InsertInstruction) continue;
+        if (change.kind != BattleWritebackChangeKind::InsertInstruction &&
+            change.kind != BattleWritebackChangeKind::InsertFourBGroup) continue;
 
         BattleWritebackNativeNodeSnapshot parent;
         BattleWritebackNativeNodeSnapshot before;
+        const std::uintptr_t terminal_handle =
+            change.insert_terminal_handle != 0
+                ? change.insert_terminal_handle : change.insert_before_handle;
+        BattleWritebackNativeNodeSnapshot terminal;
         if (!host.NodeExists(change.parent_handle) ||
             !host.NodeExists(change.insert_before_handle) ||
+            !host.NodeExists(terminal_handle) ||
             !host.CaptureNode(change.parent_handle, parent) ||
             !host.CaptureNode(change.insert_before_handle, before) ||
-            !parent.has_children || before.instruction_id != 0 ||
+            !host.CaptureNode(terminal_handle, terminal) ||
+            !parent.has_children ||
             before.parent_handle != change.parent_handle ||
-            before.has_children || before.has_long_text ||
-            before.has_structural_links ||
+            terminal.instruction_id != 0 ||
+            terminal.parent_handle != change.parent_handle ||
+            terminal.has_children || terminal.has_long_text ||
+            terminal.has_structural_links ||
+            terminal.next_sibling_handle != 0 ||
             before.previous_sibling_handle != change.insert_after_handle ||
-            before.next_sibling_handle != 0) {
-            diagnostic = L"S 战场事务拒绝：插入父节点/末尾终止锚点已变化";
+            (change.insert_before_handle == terminal_handle &&
+             before.instruction_id != 0)) {
+            diagnostic = L"S 战场事务拒绝：插入父节点、同级位置或末尾终止锚点已变化";
             return false;
+        }
+        std::uintptr_t following = change.insert_before_handle;
+        std::unordered_set<std::uintptr_t> sibling_chain;
+        while (following != terminal_handle) {
+            if (following == 0 || !sibling_chain.insert(following).second) {
+                diagnostic = L"S 战场事务拒绝：插入位置之后无法抵达事件终止符";
+                return false;
+            }
+            BattleWritebackNativeNodeSnapshot sibling;
+            if (!host.CaptureNode(following, sibling) ||
+                sibling.parent_handle != change.parent_handle ||
+                sibling.next_sibling_handle == 0) {
+                diagnostic = L"S 战场事务拒绝：插入位置与末尾终止符不在同一子事件";
+                return false;
+            }
+            following = sibling.next_sibling_handle;
         }
         if (change.insert_after_handle != 0) {
             BattleWritebackNativeNodeSnapshot after;
@@ -1574,7 +1956,18 @@ bool BattleWritebackNativeTransaction::Apply(
         entry.base_insert_after = surviving_after;
         entry.operation.node.previous_sibling_handle = surviving_after;
         entry.operation.node.next_sibling_handle = change.insert_before_handle;
-        entry.operation.node.ordinal = next_insert_ordinal++;
+        entry.operation.node.ordinal = next_insert_ordinal;
+        if (change.kind == BattleWritebackChangeKind::InsertFourBGroup) {
+            entry.operation.group_parent_handle = change.parent_handle;
+            entry.operation.group_after_handle = surviving_after;
+            entry.operation.group_before_handle = change.insert_before_handle;
+            entry.operation.node.handle = 0;
+            entry.operation.node.ordinal = next_insert_ordinal;
+            next_insert_ordinal += static_cast<int>(
+                change.group_records.size() + 3U);
+        } else {
+            ++next_insert_ordinal;
+        }
         const BattleInsertAnchorKey anchor_key{
             change.parent_handle, change.insert_before_handle};
         try {
@@ -1653,6 +2046,14 @@ bool BattleWritebackNativeTransaction::Apply(
                     !host.DeleteBattleNode(operation->current_handle))
                     restored = false;
                 break;
+            case BattleWritebackChangeKind::InsertFourBGroup:
+                if (operation->group_marker_handle == 0 ||
+                    operation->group_handle == 0 ||
+                    !host.DeleteBattleFourBGroup(
+                        operation->group_marker_handle,
+                        operation->group_handle))
+                    restored = false;
+                break;
             }
         }
         if (!host.RestoreDocumentState(before_state, rollback_mappings))
@@ -1717,6 +2118,92 @@ bool BattleWritebackNativeTransaction::Apply(
             if (!host.DeleteBattleNode(operation.current_handle))
                 return fail_and_rollback(L"S 战场事务失败：删除原生 0x4B 指令未完成");
             candidate.operations.push_back(std::move(operation));
+        } else if (change.kind == BattleWritebackChangeKind::InsertFourBGroup) {
+            const BattleInsertAnchorKey anchor_key{
+                change.parent_handle, change.insert_before_handle};
+            const auto anchor = last_inserted_by_anchor.find(anchor_key);
+            if (anchor == last_inserted_by_anchor.end())
+                return fail_and_rollback(
+                    L"S 战场事务失败：新增我军分组的插入前置索引丢失");
+            std::vector<std::uintptr_t> record_handles;
+            std::uintptr_t marker_handle = 0;
+            std::uintptr_t group_handle = 0;
+            std::uintptr_t terminal_handle = 0;
+            const int first_ordinal = next_ordinal;
+            if (!host.InsertBattleFourBGroup(change.parent_handle,
+                    anchor->second, change.group_label, change.group_records,
+                    first_ordinal, marker_handle, group_handle,
+                    record_handles, terminal_handle) ||
+                marker_handle == 0 || group_handle == 0 ||
+                terminal_handle == 0 ||
+                record_handles.size() != change.group_records.size()) {
+                return fail_and_rollback(
+                    L"S 战场事务失败：新增原生我军出场分组未完成");
+            }
+            operation.group_marker_handle = marker_handle;
+            operation.group_handle = group_handle;
+            operation.group_terminal_handle = terminal_handle;
+            operation.group_parent_handle = change.parent_handle;
+            operation.group_after_handle = anchor->second;
+            operation.group_before_handle = change.insert_before_handle;
+            operation.group_record_handles = std::move(record_handles);
+            operation.group_records = change.group_records;
+            operation.group_label = change.group_label;
+            operation.node.handle = marker_handle;
+            operation.node.parent_handle = change.parent_handle;
+            operation.node.instruction_id = 1;
+            operation.node.ordinal = first_ordinal;
+            operation.node.previous_sibling_handle = anchor->second;
+            operation.node.next_sibling_handle = group_handle;
+            anchor->second = group_handle;
+            next_ordinal += static_cast<int>(change.group_records.size() + 3U);
+
+            BattleWritebackNativeNodeSnapshot marker;
+            BattleWritebackNativeNodeSnapshot group;
+            BattleWritebackNativeNodeSnapshot terminal;
+            bool captured = host.CaptureNode(marker_handle, marker) &&
+                host.CaptureNode(group_handle, group) &&
+                host.CaptureNode(terminal_handle, terminal) &&
+                marker.parent_handle == change.parent_handle &&
+                marker.instruction_id == 1 &&
+                marker.ordinal == first_ordinal &&
+                marker.previous_sibling_handle == operation.group_after_handle &&
+                marker.next_sibling_handle == group_handle &&
+                group.parent_handle == change.parent_handle &&
+                group.instruction_id == 2 &&
+                group.ordinal == first_ordinal + 1 &&
+                group.long_text == change.group_label &&
+                group.previous_sibling_handle == marker_handle &&
+                group.next_sibling_handle == change.insert_before_handle &&
+                terminal.parent_handle == group_handle &&
+                terminal.instruction_id == 0 &&
+                terminal.ordinal == first_ordinal + 2 &&
+                !terminal.has_children && !terminal.has_long_text &&
+                !terminal.has_structural_links &&
+                terminal.next_sibling_handle == 0;
+            for (std::size_t record_index = 0;
+                 captured && record_index < record_handles.size();
+                 ++record_index) {
+                BattleWritebackNativeNodeSnapshot record;
+                captured = host.CaptureNode(record_handles[record_index], record) &&
+                    record.parent_handle == group_handle &&
+                    record.instruction_id == 0x4b &&
+                    record.ordinal == first_ordinal + 3 +
+                        static_cast<int>(record_index) &&
+                    record.int_data == change.group_records[record_index] &&
+                    !record.has_children && !record.has_long_text &&
+                    !record.has_structural_links &&
+                    record.next_sibling_handle ==
+                        (record_index + 1 < record_handles.size()
+                            ? record_handles[record_index + 1]
+                            : terminal_handle);
+            }
+            candidate.operations.push_back(std::move(operation));
+            if (!captured) {
+                return fail_and_rollback(
+                    L"S 战场事务失败：我军分组及 0x4B 记录未能完整回读验证");
+            }
+            candidate.operations.back().node = std::move(marker);
         } else {
             const BattleInsertAnchorKey anchor_key{
                 change.parent_handle, change.insert_before_handle};
@@ -1821,6 +2308,84 @@ bool BattleWritebackNativeTransaction::Undo(
                 diagnostic = L"S 战场撤回拒绝：已提交节点内容与撤回记录不一致";
                 return false;
             }
+        } else if (operation.kind ==
+                   BattleWritebackChangeKind::InsertFourBGroup) {
+            BattleWritebackNativeNodeSnapshot marker;
+            BattleWritebackNativeNodeSnapshot group;
+            BattleWritebackNativeNodeSnapshot terminal;
+            const int first_ordinal = operation.node.ordinal;
+            bool valid = operation.group_marker_handle != 0 &&
+                operation.group_handle != 0 &&
+                operation.group_terminal_handle != 0 &&
+                operation.group_record_handles.size() ==
+                    operation.group_records.size() &&
+                checked_handles.insert(operation.group_marker_handle).second &&
+                checked_handles.insert(operation.group_handle).second &&
+                checked_handles.insert(operation.group_terminal_handle).second &&
+                host.NodeExists(operation.group_marker_handle) &&
+                host.NodeExists(operation.group_handle) &&
+                host.NodeExists(operation.group_terminal_handle) &&
+                host.CaptureNode(operation.group_marker_handle, marker) &&
+                host.CaptureNode(operation.group_handle, group) &&
+                host.CaptureNode(operation.group_terminal_handle, terminal);
+            valid = valid && marker.handle == operation.group_marker_handle &&
+                marker.parent_handle == operation.group_parent_handle &&
+                marker.instruction_id == 1 && marker.ordinal == first_ordinal &&
+                marker.previous_sibling_handle == operation.group_after_handle &&
+                marker.next_sibling_handle == operation.group_handle &&
+                group.handle == operation.group_handle &&
+                group.parent_handle == operation.group_parent_handle &&
+                group.instruction_id == 2 && group.ordinal == first_ordinal + 1 &&
+                group.long_text == operation.group_label &&
+                group.previous_sibling_handle == operation.group_marker_handle &&
+                terminal.handle == operation.group_terminal_handle &&
+                terminal.parent_handle == operation.group_handle &&
+                terminal.instruction_id == 0 && terminal.ordinal == first_ordinal + 2 &&
+                !terminal.has_children && !terminal.has_long_text &&
+                !terminal.has_structural_links &&
+                terminal.next_sibling_handle == 0 &&
+                terminal.previous_sibling_handle ==
+                    (operation.group_record_handles.empty()
+                        ? 0 : operation.group_record_handles.back());
+            for (std::size_t record_index = 0;
+                 valid && record_index < operation.group_record_handles.size();
+                 ++record_index) {
+                const auto handle = operation.group_record_handles[record_index];
+                BattleWritebackNativeNodeSnapshot record;
+                valid = handle != 0 && checked_handles.insert(handle).second &&
+                    host.NodeExists(handle) && host.CaptureNode(handle, record) &&
+                    record.parent_handle == operation.group_handle &&
+                    record.instruction_id == 0x4b &&
+                    record.ordinal == first_ordinal + 3 +
+                        static_cast<int>(record_index) &&
+                    record.int_data == operation.group_records[record_index] &&
+                    !record.has_children && !record.has_long_text &&
+                    !record.has_structural_links &&
+                    record.previous_sibling_handle ==
+                        (record_index == 0 ? 0 :
+                            operation.group_record_handles[record_index - 1]) &&
+                    record.next_sibling_handle ==
+                        (record_index + 1 < operation.group_record_handles.size()
+                            ? operation.group_record_handles[record_index + 1]
+                            : operation.group_terminal_handle);
+            }
+            std::uintptr_t next_sibling = group.next_sibling_handle;
+            std::unordered_set<std::uintptr_t> sibling_chain;
+            while (valid && next_sibling != operation.group_before_handle) {
+                if (next_sibling == 0 ||
+                    !sibling_chain.insert(next_sibling).second) {
+                    valid = false;
+                    break;
+                }
+                BattleWritebackNativeNodeSnapshot sibling;
+                valid = host.CaptureNode(next_sibling, sibling) &&
+                    sibling.parent_handle == operation.group_parent_handle;
+                if (valid) next_sibling = sibling.next_sibling_handle;
+            }
+            if (!valid) {
+                diagnostic = L"S 战场撤回拒绝：我军出场分组、标签或记录与撤回快照不一致";
+                return false;
+            }
         } else if (operation.kind == BattleWritebackChangeKind::DeleteInstruction) {
             if (host.NodeExists(operation.node.handle)) {
                 diagnostic = L"S 战场撤回拒绝：已删除来源句柄意外重新出现";
@@ -1884,6 +2449,53 @@ bool BattleWritebackNativeTransaction::Undo(
                     redo_mappings.push_back({operation.node.handle, new_handle});
                     operation.current_handle = new_handle;
                 }
+            } else if (operation.kind ==
+                       BattleWritebackChangeKind::InsertFourBGroup) {
+                const auto parent = remap_handle(
+                    operation.group_parent_handle, redo_mappings);
+                const auto after = remap_handle(
+                    operation.group_after_handle, redo_mappings);
+                const auto before = remap_handle(
+                    operation.group_before_handle, redo_mappings);
+                std::uintptr_t marker = 0;
+                std::uintptr_t group = 0;
+                std::uintptr_t terminal = 0;
+                std::vector<std::uintptr_t> records;
+                if (!host.RestoreBattleFourBGroupBefore(parent, after, before,
+                        operation.group_label, operation.group_records,
+                        operation.node.ordinal, marker, group, records,
+                        terminal) || marker == 0 || group == 0 ||
+                    terminal == 0 || records.size() !=
+                        operation.group_record_handles.size()) {
+                    restored = false;
+                    continue;
+                }
+                redo_mappings.push_back(
+                    {operation.group_marker_handle, marker});
+                redo_mappings.push_back({operation.group_handle, group});
+                redo_mappings.push_back(
+                    {operation.group_terminal_handle, terminal});
+                for (std::size_t index = 0; index < records.size(); ++index) {
+                    redo_mappings.push_back(
+                        {operation.group_record_handles[index], records[index]});
+                }
+                operation.group_marker_handle = marker;
+                operation.group_handle = group;
+                operation.group_terminal_handle = terminal;
+                operation.group_parent_handle = parent;
+                operation.group_after_handle = after;
+                operation.group_before_handle = before;
+                operation.group_record_handles = std::move(records);
+                operation.node.handle = marker;
+                operation.node.parent_handle = parent;
+                operation.node.previous_sibling_handle = after;
+                operation.node.next_sibling_handle = group;
+                BattleWritebackNativeNodeSnapshot marker_snapshot;
+                if (!host.CaptureNode(marker, marker_snapshot)) {
+                    restored = false;
+                } else {
+                    operation.node = std::move(marker_snapshot);
+                }
             }
         }
         if (!host.RestoreDocumentState(committed_state, redo_mappings))
@@ -1932,6 +2544,13 @@ bool BattleWritebackNativeTransaction::Undo(
         } else if (operation.kind == BattleWritebackChangeKind::InsertInstruction) {
             if (!host.DeleteBattleNode(operation.current_handle))
                 return fail_undo(L"S 战场撤回失败：删除事务新增指令失败");
+            undone_operations.push_back(index);
+        } else if (operation.kind ==
+                   BattleWritebackChangeKind::InsertFourBGroup) {
+            if (!host.DeleteBattleFourBGroup(
+                    operation.group_marker_handle,
+                    operation.group_handle))
+                return fail_undo(L"S 战场撤回失败：删除事务新增我军出场分组失败");
             undone_operations.push_back(index);
         }
     }

@@ -51,11 +51,17 @@ Assert-Text $hostSource 'InitCharList' 'existing character list API remains forw
 Assert-NotText $hostSource 'm_sPage->InitCharList|m_sPage\.InitCharList' `
     'host never forwards the R character table to S'
 
-$battleOnlyDependencies = 'm_pPer2|InitCharList|PopulateBattleCharacterCatalog|IDC_SCENE_CHAR_LIST|CczString\.ini|PreviewAssetCache|(?<!Battle)PreviewSession|m_previewCatalog|DialogueProfile|DynamicPlayback'
+$battleOnlyDependencies = 'm_pPer2|InitCharList|PopulateBattleCharacterCatalog|IDC_SCENE_CHAR_LIST|CczString\.ini|(?<!Battle)PreviewSession|m_previewCatalog|DynamicPlayback'
 Assert-NotText $battleHeader $battleOnlyDependencies `
     'S page declaration has no R table, cache, session, catalog or playback state'
 Assert-NotText $battleSource $battleOnlyDependencies `
     'S page implementation has no R table, cache, session, catalog or playback path'
+Assert-Text $battleHeader 'PreviewAssetCache\s+m_portraitAssets' `
+    'S hover portraits use a page-owned resource cache, not R page session state'
+Assert-Text $battleSource 'm_portraitAssets\.LoadForDocument\(documentPath,[\s\S]*?battle_portrait_profile\(' `
+    'S page loads portrait assets through its own cache with the S portrait profile'
+Assert-Text $battleSource 'ccz::preview::resolve_portrait\(' `
+    'S hover portraits reuse the shared portrait decoder without sharing R session state'
 Assert-Text $battleSource 'CaptureEditorTreeSnapshot|CapturedEditorTree' `
     'S page captures the generic value-owned editor tree directly'
 Assert-Text $battleSource 'parse_battle_instructions' `

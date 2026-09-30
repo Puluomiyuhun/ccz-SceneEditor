@@ -10,17 +10,24 @@
 #include "PreviewIntegration/BattlePreviewSession.h"
 #include "PreviewIntegration/EditorTreeSnapshot.h"
 #include "PreviewIntegration/ConditionTreePane.h"
+#include "PreviewIntegration/VariableControlPane.h"
+#include "PreviewIntegration/BattleUnitParametersPane.h"
+#include "PreviewIntegration/PreviewAssetCache.h"
 #include <ccz/preview/battle_preview.h>
+#include <ccz/preview/dialogue_profile.h>
 #include <ccz/preview/instruction_catalog.h>
 #include <ccz/preview/execution_model.h>
+#include <ccz/preview/portrait_resolver.h>
 
 #include <GdiPlus.h>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 #if defined(_DEBUG) && defined(CCZ_S_BATTLE_PREVIEW_PERF)
 #include <chrono>
@@ -28,6 +35,31 @@
 
 class CcczEditor2View;
 class CcczEditor2Doc;
+
+class CBattlePrimaryActionButton : public CButton
+{
+protected:
+	void DrawItem(LPDRAWITEMSTRUCT draw_item) override;
+};
+
+class CBattlePreviewModeButton : public CButton
+{
+public:
+	void SetHoverHandler(std::function<void()> handler)
+	{
+		m_hoverHandler = std::move(handler);
+	}
+
+protected:
+	afx_msg void OnMouseMove(UINT flags, CPoint point);
+	afx_msg void OnMouseHover(UINT flags, CPoint point);
+	afx_msg void OnMouseLeave();
+	DECLARE_MESSAGE_MAP()
+
+private:
+	std::function<void()> m_hoverHandler;
+	bool m_tracking{};
+};
 
 class CSBattlePreviewPage : public CWnd
 {
@@ -65,10 +97,12 @@ protected:
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);
 	afx_msg void OnLButtonDown(UINT flags, CPoint point);
 	afx_msg void OnLButtonUp(UINT flags, CPoint point);
+	afx_msg void OnLButtonDblClk(UINT flags, CPoint point);
 	afx_msg void OnRButtonDown(UINT flags, CPoint point);
 	afx_msg void OnContextMenu(CWnd* pWnd, CPoint point);
 	afx_msg void OnCaptureChanged(CWnd* window);
 	afx_msg void OnMouseMove(UINT flags, CPoint point);
+	afx_msg void OnMouseLeave();
 	afx_msg void OnMButtonDown(UINT flags, CPoint point);
 	afx_msg void OnMButtonUp(UINT flags, CPoint point);
 	afx_msg BOOL OnMouseWheel(UINT flags, short delta, CPoint point);
@@ -84,7 +118,13 @@ protected:
 	afx_msg void OnNextCharacterPage();
 	afx_msg void OnUndo();
 	afx_msg void OnQuickModeClicked();
+	afx_msg void OnCopyPersonModeClicked();
+	afx_msg void OnUnrestrictedTerrainModeClicked();
 	afx_msg void OnConditionTreeClicked();
+	afx_msg void OnActivationButtonClicked();
+	afx_msg void OnVariableControlClicked();
+	afx_msg void OnUnitParametersClicked();
+	afx_msg void OnPreviewModeClicked();
 	afx_msg LRESULT OnConditionActionMessage(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnWriteback();
 	afx_msg void OnHideSidebar();
@@ -129,6 +169,14 @@ private:
 	bool m_perfAwaitingFirstPaint{};
 	#endif
 	void CreateEditorControls();
+	void ShowPreviewModeMenu();
+	void SetParameterPreviewMode(
+		ccz::editor_preview::BattleParameterPreviewMode mode);
+	void EnsurePortraitAssets();
+	Gdiplus::Bitmap* GetUnitPortrait(int data_id);
+	void DrawHoveredUnitCard(Gdiplus::Graphics& graphics,
+		const ccz::preview::BattleCoord& coordinate,
+		const CPoint& pointer, float cell);
 	ccz::editor_preview::BattlePreviewDocumentSession& ActiveSession() noexcept;
 	const ccz::editor_preview::BattlePreviewDocumentSession& ActiveSession() const noexcept;
 	void SaveActiveSessionUiState();
@@ -137,15 +185,19 @@ private:
 	bool HasPendingPreviewChanges() const;
 	void MarkSessionStale(const std::wstring& diagnostic);
 	void LayoutEditorControls();
-	void RefreshEditorControls(bool refreshPlacementChoices = true);
+	void LayoutCollapsedControlToolbar();
+	void RefreshEditorControls();
 	void RefreshCharacterList();
-	void RefreshBrushList();
+	void RefreshCharacterListIfDeploymentChanged();
 	void RefreshDeploymentList();
+	void RefreshCharacterListSelection();
+	void RefreshDeploymentSelection();
 	void RefreshSelectedUnitIndex();
+	void OpenSingleUnitParameters(std::uint64_t cache_id);
+	void OpenBatchUnitParameters();
 	void BindSelectedDeployment();
 	void ShowOperationResult(
-		const ccz::editor_preview::BattleEditorResult& result,
-		bool refreshPlacementChoices = true);
+		const ccz::editor_preview::BattleEditorResult& result);
 	void StampAt(const ccz::preview::BattleCoord& coordinate);
 	void SetSidebarVisible(bool visible);
 	bool RequestQuickModeRefresh(CTreeCtrl& tree,
@@ -158,9 +210,14 @@ private:
 	bool ActivateConditionScope(
 		const ccz::editor_preview::BattleConditionScope& scope);
 	void RefreshConditionTree();
+	void UpdateConditionActivationTarget(std::uintptr_t runtime_handle);
 	LRESULT ApplyConditionActionAndRefresh(
 		const ccz::preview::LogicalNodeKey& node_key,
 		ccz::preview::ConditionTreeAction action,
+		std::int32_t integer_value);
+	void ApplyVariableActionAndRefresh(
+		ccz::preview::VariableControlKind kind, std::int32_t id,
+		ccz::preview::VariableControlAction action,
 		std::int32_t integer_value);
 	bool ApplyPendingNativeWritebackForCurrentSection(
 		CcczEditor2View& view, std::wstring& diagnostic);
@@ -203,6 +260,7 @@ private:
 	void ApplyMagentaTransparency(Gdiplus::Bitmap* bitmap);
 
 	ccz::editor_preview::BattleAssetCache m_assets;
+	ccz::editor_preview::PreviewAssetCache m_portraitAssets;
 	ccz::editor_preview::BattlePreviewDocumentSession m_unboundSession;
 	ccz::editor_preview::BattlePreviewDocumentSession* m_activeSession{};
 	CcczEditor2Doc* m_activeDocument{};
@@ -215,13 +273,24 @@ private:
 	CButton m_nextPageButton;
 	CButton m_undoButton;
 	CButton m_quickModeButton;
+	CButton m_copyPersonModeButton;
+	CButton m_unrestrictedTerrainModeButton;
 	CButton m_conditionTreeButton;
+	CButton m_activationButton;
+	CButton m_variableControlButton;
+	CButton m_unitParametersButton;
+	CBattlePreviewModeButton m_previewModeButton;
 	CConditionTreePane m_conditionTreePane;
-	CButton m_writebackButton;
+	CVariableControlPane m_variableControlPane;
+	CBattleUnitParametersPane m_unitParametersPane;
+	CBattlePrimaryActionButton m_writebackButton;
 	CEdit m_searchEdit;
 	CComboBox m_deploymentCombo;
 	CListBox m_characterList;
 	CStatic m_pageLabel;
+	CFont m_uiFont;
+	CFont m_toolbarFont;
+	CFont m_writebackFont;
 	CRect m_canvasRect;
 	ccz::editor_preview::BattleBitmapCachePolicy m_bitmapCachePolicy;
 	std::map<ccz::editor_preview::BattleBitmapCacheKey,
@@ -235,8 +304,13 @@ private:
 	Gdiplus::Bitmap* m_mapBitmap = nullptr;
 	ccz::editor_preview::BattleBitmapCacheKey m_activeMapKey;
 	std::map<int, Gdiplus::Bitmap*> m_unitSprites;
+	std::map<int, std::unique_ptr<Gdiplus::Bitmap>> m_unitPortraits;
+	std::set<int> m_failedPortraitDataIds;
 	std::wstring m_unitSpritePath;
 	std::uint64_t m_unitSpriteRevision{};
+	std::wstring m_portraitRootKey;
+	std::uint64_t m_portraitDataRevision{};
+	std::uint64_t m_portraitFaceRevision{};
 	CString m_documentPath;
 	CString m_diagnostic;
 	CString m_quickModeDiagnostic;
@@ -247,9 +321,17 @@ private:
 	int m_scrollY = 0;
 	bool m_viewportUpdating = false;
 	bool m_panActive = false;
+	bool m_trackingMouseLeave = false;
 	bool m_leftStampActive = false;
+	bool m_selectionGestureActive = false;
+	bool m_selectionDragStarted = false;
 	std::optional<ccz::preview::BattleCoord> m_lastStampCell;
+	std::optional<ccz::preview::BattleCoord> m_selectionPressCell;
+	std::optional<ccz::preview::BattleCoord> m_selectionLastCell;
+	std::vector<int> m_rosterDeployedDataIds;
 	CPoint m_panStartPoint{-1, -1};
+	CPoint m_hoverPoint{-1, -1};
+	CPoint m_selectionPressPoint{-1, -1};
 	int m_panStartScrollX = 0;
 	int m_panStartScrollY = 0;
 	std::optional<std::size_t> m_selectedUnit;

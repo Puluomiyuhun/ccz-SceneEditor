@@ -133,6 +133,8 @@
     <ClInclude Include="include\ccz\preview\playback_timeline.h" />
     <ClInclude Include="include\ccz\preview\battle_mode_classifier.h" />
     <ClInclude Include="include\ccz\preview\battle_preview.h" />
+    <ClInclude Include="include\ccz\preview\e5_archive.h" />
+    <ClInclude Include="include\ccz\preview\battle_movement_terrain.h" />
     <ClInclude Include="include\ccz\preview\battle_hexzmap.h" />
     <ClInclude Include="include\ccz\preview\battle_instruction_parser.h" />
     <ClInclude Include="include\ccz\preview\battle_field_spec.h" />
@@ -157,6 +159,8 @@
     <ClCompile Include="src\playback_timeline.cpp" />
     <ClCompile Include="src\battle_mode_classifier.cpp" />
     <ClCompile Include="src\battle_preview.cpp" />
+    <ClCompile Include="src\e5_archive.cpp" />
+    <ClCompile Include="src\battle_movement_terrain.cpp" />
     <ClCompile Include="src\battle_hexzmap.cpp" />
     <ClCompile Include="src\battle_instruction_parser.cpp" />
     <ClCompile Include="src\battle_field_spec.cpp" />

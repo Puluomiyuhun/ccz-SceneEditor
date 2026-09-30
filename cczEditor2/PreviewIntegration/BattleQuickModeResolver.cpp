@@ -41,6 +41,19 @@ const CapturedEditorNode* section_at_path(
     return current->instruction_id == kSectionContainerId ? current : nullptr;
 }
 
+bool find_node_path_by_handle(const CapturedEditorNode& parent,
+                              std::uintptr_t handle,
+                              std::vector<std::uint32_t>& path) {
+    for (std::size_t index = 0; index < parent.children.size(); ++index) {
+        const CapturedEditorNode& child = parent.children[index];
+        path.push_back(static_cast<std::uint32_t>(index));
+        if (child.runtime_handle == handle) return true;
+        if (find_node_path_by_handle(child, handle, path)) return true;
+        path.pop_back();
+    }
+    return false;
+}
+
 const ccz::preview::RawReplayNode* raw_section_at_path(
     const std::vector<ccz::preview::RawReplayNode>& nodes,
     const std::vector<std::uint32_t>& section_path) {
@@ -128,6 +141,15 @@ bool SelectCapturedBattleSection(
 
     document_snapshot.section_path = actual_path;
     document_snapshot.section_root = *section;
+    document_snapshot.selected_path.clear();
+    if (document_snapshot.selected_handle != 0 &&
+        document_snapshot.selected_handle != section_handle) {
+        std::vector<std::uint32_t> selected_path;
+        if (find_node_path_by_handle(*section,
+                document_snapshot.selected_handle, selected_path)) {
+            document_snapshot.selected_path = std::move(selected_path);
+        }
+    }
     selected_snapshot = std::move(document_snapshot);
     return true;
 }

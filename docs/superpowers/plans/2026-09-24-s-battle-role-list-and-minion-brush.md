@@ -10,7 +10,7 @@
 
 **测试文件：** `tests/preview_integration/battle_character_catalog_tests.cpp`、`cczPreviewCoreTests/cczPreviewCoreTests.vcxproj`。
 
-- 建立小型合成 `Data.e5` fixtures：396-byte header、32-byte records、8-byte CP936 name、arms at +26；名称宽度、分组与 arm_kind 默认值按普罗工具解析。
+- 建立小型合成 `Data.e5` fixtures：396-byte header、32-byte records、12-byte CP936 name、arms at +26；名称宽度、分组与 arm_kind 默认值按普罗工具解析。
 - 先断言当前不存在的解析/分组 API，运行目标测试确认失败。
 - 测试 512/1024 记录边界、截断、无效/空名称回退标签、ASCII 数字规范化、连续组最小长度 3、非连续/键变化断组与 Data 排序。
 

@@ -19,6 +19,12 @@ CCZ_TEST(battle_preview_document_session_distinguishes_same_path_documents)
 	second.editor_state.mouse_direction = 3;
 	first.ui.quick_mode_enabled = true;
 	second.ui.quick_mode_enabled = false;
+	first.ui.parameter_preview_mode = BattleParameterPreviewMode::AiPolicy;
+	second.ui.parameter_preview_mode = BattleParameterPreviewMode::None;
+	first.ui.copy_person_mode = true;
+	first.ui.unrestricted_terrain_mode = true;
+	first.editor_state.copy_person_mode = true;
+	first.editor_state.unrestricted_terrain_mode = true;
 	first.ui.zoom = 1.5f;
 	second.ui.zoom = 0.75f;
 	first.ui.deployment_instruction = 0x46;
@@ -37,6 +43,18 @@ CCZ_TEST(battle_preview_document_session_distinguishes_same_path_documents)
 	CCZ_REQUIRE_EQ(second.editor_state.mouse_direction, 3);
 	CCZ_REQUIRE(first.ui.quick_mode_enabled);
 	CCZ_REQUIRE(!second.ui.quick_mode_enabled);
+	CCZ_REQUIRE_EQ(first.ui.parameter_preview_mode,
+		BattleParameterPreviewMode::AiPolicy);
+	CCZ_REQUIRE_EQ(second.ui.parameter_preview_mode,
+		BattleParameterPreviewMode::None);
+	CCZ_REQUIRE(first.ui.copy_person_mode);
+	CCZ_REQUIRE(first.ui.unrestricted_terrain_mode);
+	CCZ_REQUIRE(!second.ui.copy_person_mode);
+	CCZ_REQUIRE(!second.ui.unrestricted_terrain_mode);
+	CCZ_REQUIRE(first.editor_state.copy_person_mode);
+	CCZ_REQUIRE(first.editor_state.unrestricted_terrain_mode);
+	CCZ_REQUIRE(!second.editor_state.copy_person_mode);
+	CCZ_REQUIRE(!second.editor_state.unrestricted_terrain_mode);
 	CCZ_REQUIRE_EQ(first.ui.zoom, 1.5f);
 	CCZ_REQUIRE_EQ(second.ui.zoom, 0.75f);
 	CCZ_REQUIRE_EQ(first.ui.deployment_instruction, 0x46);

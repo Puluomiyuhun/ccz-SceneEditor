@@ -24,6 +24,8 @@
     <ClInclude Include="include\ccz\preview\playback_timeline.h"><Filter>include\ccz\preview</Filter></ClInclude>
     <ClInclude Include="include\ccz\preview\battle_mode_classifier.h"><Filter>include\ccz\preview</Filter></ClInclude>
     <ClInclude Include="include\ccz\preview\battle_preview.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\e5_archive.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\battle_movement_terrain.h"><Filter>include\ccz\preview</Filter></ClInclude>
     <ClInclude Include="include\ccz\preview\battle_hexzmap.h"><Filter>include\ccz\preview</Filter></ClInclude>
     <ClInclude Include="include\ccz\preview\battle_instruction_parser.h"><Filter>include\ccz\preview</Filter></ClInclude>
     <ClInclude Include="include\ccz\preview\battle_field_spec.h"><Filter>include\ccz\preview</Filter></ClInclude>
@@ -46,6 +48,8 @@
     <ClCompile Include="src\playback_timeline.cpp"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\battle_mode_classifier.cpp"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\battle_preview.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\e5_archive.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\battle_movement_terrain.cpp"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\battle_hexzmap.cpp"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\battle_instruction_parser.cpp"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\battle_field_spec.cpp"><Filter>src</Filter></ClCompile>

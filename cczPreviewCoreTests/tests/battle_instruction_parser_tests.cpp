@@ -394,14 +394,98 @@ CCZ_TEST(battle_parser_keeps_two_complete_47_pages_and_all_records) {
     CCZ_REQUIRE(result.diagnostics.empty());
     CCZ_REQUIRE_EQ(result.state.units.size(), kRowsPerPage * 2);
     CCZ_REQUIRE_EQ(result.state.units[79].page, 0);
-    CCZ_REQUIRE_EQ(result.state.units[79].record_index, 79);
+    CCZ_REQUIRE_EQ(result.state.units[79].record_index, std::size_t{79});
     CCZ_REQUIRE_EQ(result.state.units[79].data_id, 179);
     CCZ_REQUIRE_EQ(result.state.units[80].page, 1);
-    CCZ_REQUIRE_EQ(result.state.units[80].record_index, 0);
+    CCZ_REQUIRE_EQ(result.state.units[80].record_index, std::size_t{0});
     CCZ_REQUIRE_EQ(result.state.units[80].data_id, 300);
     CCZ_REQUIRE_EQ(result.state.units[159].page, 1);
-    CCZ_REQUIRE_EQ(result.state.units[159].record_index, 79);
+    CCZ_REQUIRE_EQ(result.state.units[159].record_index, std::size_t{79});
     CCZ_REQUIRE_EQ(result.state.units[159].data_id, 379);
+}
+
+CCZ_TEST(battle_parser_derives_battlefield_numbers_from_adjacent_instructions) {
+    const std::wstring scope = L"battle:numbering";
+    const auto keyed = [&scope](int node, std::uint16_t instruction_id,
+                                std::vector<std::int32_t> fields) {
+        return instruction(instruction_id, std::move(fields), scope +
+            L"|node:" + std::to_wstring(node) + L"|instruction:" +
+            std::to_wstring(instruction_id));
+    };
+    std::vector<std::int32_t> enemy_a(12, -1);
+    enemy_a[0] = 500;
+    std::vector<std::int32_t> enemy_b(12, -1);
+    enemy_b[0] = 501;
+    std::vector<std::int32_t> ally_a(11, -1);
+    ally_a[0] = 600;
+    std::vector<std::int32_t> ally_b(11, -1);
+    ally_b[0] = 601;
+    std::vector<std::int32_t> enemy_c(12, -1);
+    enemy_c[0] = 502;
+    std::vector<std::int32_t> enemy_d(12, -1);
+    enemy_d[0] = 503;
+    std::vector<std::int32_t> own(5, 0);
+    own[0] = 7;
+
+    const auto result = ccz::preview::parse_battle_instructions(
+        L"S_numbering.eex",
+        {container(scope, {
+             keyed(0, 0x47, [&] {
+                 enemy_a.insert(enemy_a.end(), enemy_b.begin(), enemy_b.end());
+                 return std::move(enemy_a);
+             }()),
+             keyed(1, 0x47, std::move(enemy_c)),
+             keyed(2, 0x46, [&] {
+                 ally_a.insert(ally_a.end(), ally_b.begin(), ally_b.end());
+                 return std::move(ally_a);
+             }()),
+             keyed(3, 0x4b, std::move(own)),
+             keyed(4, 0x47, std::vector<std::int32_t>(12, -1)),
+             keyed(5, 0x47, std::vector<std::int32_t>(12, -1)),
+         })},
+        scoped_options(scope.c_str()));
+
+    CCZ_REQUIRE(result.ok);
+    CCZ_REQUIRE_EQ(result.state.units.size(), std::size_t{8});
+    CCZ_REQUIRE_EQ(result.state.units[0].battlefield_index, 60);
+    CCZ_REQUIRE_EQ(result.state.units[1].battlefield_index, 61);
+    CCZ_REQUIRE_EQ(result.state.units[2].battlefield_index, 140);
+    CCZ_REQUIRE_EQ(result.state.units[3].battlefield_index, 20);
+    CCZ_REQUIRE_EQ(result.state.units[4].battlefield_index, 21);
+    CCZ_REQUIRE_EQ(result.state.units[5].battlefield_index, 7);
+    CCZ_REQUIRE_EQ(result.state.units[6].battlefield_index, 60);
+    CCZ_REQUIRE_EQ(result.state.units[7].battlefield_index, 140);
+}
+
+CCZ_TEST(battle_parser_restarts_legacy_battlefield_number_at_nested_parent) {
+    const std::wstring scope = L"battle:nested-numbering";
+    const auto enemy = [](int node, const std::wstring& parent) {
+        std::vector<std::int32_t> fields(12, -1);
+        fields[0] = 700 + node;
+        return instruction(0x47, std::move(fields), parent + L"|node:" +
+            std::to_wstring(node) + L"|instruction:71");
+    };
+
+    const auto result = ccz::preview::parse_battle_instructions(
+        L"S_nested_numbering.eex",
+        {container(scope, {
+            container(scope + L"|subevent:first", {
+                enemy(0, scope + L"|subevent:first"),
+                enemy(1, scope + L"|subevent:first"),
+            }),
+            container(scope + L"|subevent:second", {
+                enemy(2, scope + L"|subevent:second"),
+            }),
+        })},
+        scoped_options(scope.c_str()));
+
+    CCZ_REQUIRE(result.ok);
+    CCZ_REQUIRE_EQ(result.state.units.size(), std::size_t{3});
+    // Dialog_70::FindLast only counts same-instruction siblings below the
+    // current parent, so separate nested subevents restart at enemy slot 60.
+    CCZ_REQUIRE_EQ(result.state.units[0].battlefield_index, 60);
+    CCZ_REQUIRE_EQ(result.state.units[1].battlefield_index, 140);
+    CCZ_REQUIRE_EQ(result.state.units[2].battlefield_index, 60);
 }
 
 CCZ_TEST(battle_parser_rejects_incomplete_record_length_with_diagnostic) {

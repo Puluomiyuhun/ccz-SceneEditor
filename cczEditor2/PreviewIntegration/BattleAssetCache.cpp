@@ -132,7 +132,7 @@ bool BattleAssetCache::LoadForDocument(const std::wstring& document_path,
                                        std::wstring* diagnostic) {
     const std::wstring root = source_root_from_document_path(document_path);
     if (root.empty()) {
-        Clear();
+        ClearActiveModAssets();
         diagnostic_ = L"无法从当前剧本路径确定 Mod 根目录";
         if (diagnostic) *diagnostic = diagnostic_;
         return false;
@@ -141,7 +141,7 @@ bool BattleAssetCache::LoadForDocument(const std::wstring& document_path,
     const std::uint64_t revision = root_resource_revision(root);
     const bool same_root = key == root_key_ && revision == root_revision_;
     if (!same_root) {
-        Clear();
+        ClearActiveModAssets();
         root_key_ = key;
         root_revision_ = revision;
 
@@ -149,8 +149,14 @@ bool BattleAssetCache::LoadForDocument(const std::wstring& document_path,
         const std::wstring data_path = root + L"Data.e5";
         if (!read_file(data_path, data_e5_, read_diagnostic))
             append_diagnostic(diagnostic_, L"Data.e5 未加载");
-        if (!data_e5_.empty())
+        if (!data_e5_.empty()) {
             character_catalog_ = ParseBattleCharacterCatalog(data_e5_);
+            movement_terrain_ = movement_terrain_cache_.Preload(
+                key, file_revision(data_path), data_e5_);
+            if (!movement_terrain_ || !movement_terrain_->valid) {
+                append_diagnostic(diagnostic_, L"Data.e5 资源4兵种地形表未加载");
+            }
+        }
 
         read_diagnostic.clear();
         // Hexzmap.e5 is a Mod-root resource in the editor/game directory layout.
@@ -197,6 +203,11 @@ bool BattleAssetCache::LoadForDocument(const std::wstring& document_path,
 }
 
 void BattleAssetCache::Clear() {
+    ClearActiveModAssets();
+    movement_terrain_cache_.Clear();
+}
+
+void BattleAssetCache::ClearActiveModAssets() {
     root_key_.clear();
     root_revision_ = 0;
     map_id_ = -1;
@@ -208,6 +219,7 @@ void BattleAssetCache::Clear() {
     hexzmap_e5_.clear();
     unit_mov_e5_.clear();
     character_catalog_ = {};
+    movement_terrain_.reset();
     arms_.clear();
     appearance_.clear();
     unit_mov_entries_.clear();
@@ -270,9 +282,9 @@ bool BattleAssetCache::LoadUnitSpriteAssets(const std::wstring& root,
     }
 
     // Pro's large Data.e5 branch reads 32-byte records after a 396-byte
-    // header; arms[] is the byte at record offset +26.  The current engine
-    // uses 1024 records, which is also the only branch for which the EXE
-    // appearance table is two bytes per data id.
+    // header; the existing appearance resolver consumes the byte at +26 as
+    // its visual mapping value. Keep this path unchanged; the terrain system
+    // reads the same byte through the character catalog as a movement class.
     constexpr std::size_t kDataHeader = 396;
     constexpr std::size_t kRecordSize = 32;
     constexpr std::size_t kDataCount = 1024;
@@ -286,7 +298,6 @@ bool BattleAssetCache::LoadUnitSpriteAssets(const std::wstring& root,
         arms_[data_id] = data_e5_[kDataHeader + data_id * kRecordSize +
                                   kArmsOffset];
     }
-
     std::vector<std::uint8_t> exe_bytes;
     const std::wstring exe_path = root + L"Ekd5.exe";
     if (!read_file(exe_path, exe_bytes, read_diagnostic)) {

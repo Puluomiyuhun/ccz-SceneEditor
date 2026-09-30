@@ -17,7 +17,7 @@ constexpr std::size_t kStride = 32;
 void put_name(std::vector<std::uint8_t>& bytes, std::size_t index,
               const char* name, std::uint8_t arms = 3) {
     const std::size_t start = kHeader + index * kStride;
-    for (std::size_t offset = 0; name[offset] != '\0' && offset < 8; ++offset)
+    for (std::size_t offset = 0; name[offset] != '\0' && offset < 12; ++offset)
         bytes[start + offset] = static_cast<std::uint8_t>(name[offset]);
     bytes[start + 26] = arms;
 }
@@ -39,6 +39,7 @@ void catalog_uses_pro_record_contract_and_cp936_names() {
     CCZ_REQUIRE(parsed.characters[0].data_id == 0);
     CCZ_REQUIRE(parsed.characters[0].name == L"云筱");
     CCZ_REQUIRE(parsed.characters[0].has_name);
+    CCZ_REQUIRE_EQ(parsed.characters[0].movement_class_code, 7);
     // Pro's brush selection supplies arm_kind separately (default 0); the
     // Data.e5 arms byte is only for the engine's base resource mapping.
     CCZ_REQUIRE(parsed.characters[0].unit_type == 0);
@@ -46,7 +47,7 @@ void catalog_uses_pro_record_contract_and_cp936_names() {
     CCZ_REQUIRE(!parsed.characters[1].has_name);
 }
 
-void catalog_decodes_only_the_8_byte_name_field() {
+void catalog_decodes_the_12_byte_name_field() {
     auto bytes = data_fixture(512);
     const char* full_width_name = "ABCDEFGHIJKL";
     for (std::size_t index = 0; index < 12; ++index)
@@ -54,7 +55,26 @@ void catalog_decodes_only_the_8_byte_name_field() {
 
     const auto parsed = ParseBattleCharacterCatalog(bytes);
     CCZ_REQUIRE(parsed.ok);
-    CCZ_REQUIRE(parsed.characters[0].name == L"ABCDEFGH");
+    CCZ_REQUIRE(parsed.characters[0].name == L"ABCDEFGHIJKL");
+}
+
+void catalog_preserves_actual_five_character_and_eleven_byte_names() {
+    auto bytes = data_fixture(512);
+    const std::uint8_t five_character_name[] = {
+        0xca, 0xaf, 0xd4, 0xad, 0xb1, 0xf8, 0xb4, 0xce, 0xc0, 0xc9};
+    const std::uint8_t eleven_byte_name[] = {
+        0xc3, 0xfb, 0xbd, 0xab, 0xb1, 0xb8, 0xd3, 0xc3, 0x31, 0x30, 0x38};
+    const std::size_t five_character_offset = kHeader + 163 * kStride;
+    const std::size_t eleven_byte_offset = kHeader + 129 * kStride;
+    for (std::size_t index = 0; index < sizeof(five_character_name); ++index)
+        bytes[five_character_offset + index] = five_character_name[index];
+    for (std::size_t index = 0; index < sizeof(eleven_byte_name); ++index)
+        bytes[eleven_byte_offset + index] = eleven_byte_name[index];
+
+    const auto parsed = ParseBattleCharacterCatalog(bytes);
+    CCZ_REQUIRE(parsed.ok);
+    CCZ_REQUIRE(parsed.characters[163].name == L"石原兵次郎");
+    CCZ_REQUIRE(parsed.characters[129].name == L"名将备用108");
 }
 
 void catalog_selects_512_or_1024_branch_only_when_complete() {
@@ -120,8 +140,12 @@ CCZ_TEST(battle_character_catalog_parses_S_Data_e5_records) {
     catalog_uses_pro_record_contract_and_cp936_names();
 }
 
-CCZ_TEST(battle_character_catalog_respects_the_8_byte_name_field) {
-    catalog_decodes_only_the_8_byte_name_field();
+CCZ_TEST(battle_character_catalog_respects_the_12_byte_name_field) {
+    catalog_decodes_the_12_byte_name_field();
+}
+
+CCZ_TEST(battle_character_catalog_preserves_five_character_names) {
+    catalog_preserves_actual_five_character_and_eleven_byte_names();
 }
 
 CCZ_TEST(battle_character_catalog_validates_record_count_boundaries) {

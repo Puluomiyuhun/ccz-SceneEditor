@@ -12,8 +12,8 @@ namespace {
 
 constexpr std::size_t kDataHeader = 396;
 constexpr std::size_t kDataRecordStride = 32;
-constexpr std::size_t kNameFieldWidth = 8;
-constexpr std::size_t kArmsOffset = 26;
+constexpr std::size_t kNameFieldWidth = 12;
+constexpr std::size_t kMovementClassOffset = 26;
 constexpr std::size_t kSmallRecordCount = 512;
 constexpr std::size_t kLargeRecordCount = 1024;
 constexpr std::size_t kLargeCatalogThreshold = 46000;
@@ -110,7 +110,8 @@ BattleCharacterCatalog ParseBattleCharacterCatalog(
         const std::size_t offset = kDataHeader + data_id * kDataRecordStride;
         if (offset > data_e5.size() ||
             data_e5.size() - offset < kDataRecordStride ||
-            kNameFieldWidth > kDataRecordStride || kArmsOffset >= kDataRecordStride) {
+            kNameFieldWidth > kDataRecordStride ||
+            kMovementClassOffset >= kDataRecordStride) {
             result.characters.clear();
             result.diagnostic = L"Data.e5 S 角色记录越界或截断";
             return result;
@@ -134,10 +135,11 @@ BattleCharacterCatalog ParseBattleCharacterCatalog(
         entry.default_direction = 0;
         entry.level = 0;
         // Pro's brush arm_kind is an independent selection value and defaults
-        // to zero. Data.e5's arms byte belongs to the asset mapping table.
+        // to zero. Data.e5 +26 is separately retained as movement class code.
         entry.unit_type = 0;
         entry.reinforcement = false;
         entry.ai_policy = -1;
+        entry.movement_class_code = data_e5[offset + kMovementClassOffset];
         result.characters.push_back(std::move(entry));
     }
 

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 $projectPath = Join-Path $repo 'cczEditor2\cczEditor2.vcxproj'
@@ -28,7 +28,7 @@ Assert-Condition ($page -notmatch 'IsCurrentQaCopy|ApplyPendingNativeWritebackFo
     'writeback admission no longer depends on a QA marker or QA-copy folder'
 Assert-Condition ($page -match 'ApplyPendingNativeWritebackForCurrentSection[\s\S]*?ApplyPendingNativeWritebackTransaction\(view, section, diagnostic, true\)') `
     'the product button routes nonempty changes through the existing native transaction'
-Assert-Condition ($page -match 'm_writebackButton\.EnableWindow\(m_editorOps != nullptr &&\s*ActiveSession\(\)\.baseline_capture\.ok &&\s*ActiveSession\(\)\.active_condition_scope\.writeback_scope_resolved &&\s*!ActiveSession\(\)\.stale && !ActiveSession\(\)\.native_writeback_rebase_required\)') `
+Assert-Condition ($page -match 'const bool writebackEnabled = m_editorOps != nullptr &&\s*ActiveSession\(\)\.baseline_capture\.ok &&\s*ActiveSession\(\)\.active_condition_scope\.writeback_scope_resolved &&\s*!ActiveSession\(\)\.stale && !ActiveSession\(\)\.native_writeback_rebase_required;[\s\S]*?m_writebackButton\.EnableWindow\(writebackEnabled\)') `
     'writeback enablement exposes unresolved condition scopes before a click while retaining stale-session and failed-rebase guards'
 Assert-Condition ($page -match 'ApplyPendingNativeWritebackTransaction[\s\S]*?ActiveSession\(\)\.stale[\s\S]*?document_id[\s\S]*?ValidateBattleWritebackNextOrdinal') `
     'native writeback retains session identity, stale-state, and ordinal validation'

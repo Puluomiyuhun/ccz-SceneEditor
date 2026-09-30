@@ -41,6 +41,10 @@ struct BattleDeploymentInsertionAnchor {
     ccz::preview::LogicalNodeKey before_key;
     bool resolved{};
     std::wstring diagnostic;
+    // Runtime identities permit a pinned active scope to survive ordinary
+    // sibling insertions that change positional logical keys.
+    std::uintptr_t parent_handle{};
+    std::uintptr_t before_handle{};
 };
 
 // Build a value-owned, complete-document input for the independent Battle

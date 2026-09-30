@@ -231,6 +231,8 @@ bool CaptureEditorDocumentSnapshot(
     snapshot = {};
     snapshot.document_path = document_path;
     diagnostic.clear();
+    snapshot.selected_handle = reinterpret_cast<std::uintptr_t>(
+        tree.GetSelectedItem());
     const HTREEITEM root = tree.GetRootItem();
     if (root == nullptr) {
         diagnostic = L"剧本文档树为空";
@@ -297,6 +299,7 @@ bool CaptureEditorTreeSnapshot(
     HTREEITEM selected = selected_item != nullptr
                              ? selected_item
                              : tree.GetSelectedItem();
+    snapshot.selected_handle = reinterpret_cast<std::uintptr_t>(selected);
     if (selected == nullptr) {
         return true;
     }

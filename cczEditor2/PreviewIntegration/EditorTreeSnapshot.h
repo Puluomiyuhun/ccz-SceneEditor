@@ -27,6 +27,9 @@ struct CapturedEditorTree {
     std::wstring document_path;
     std::vector<std::uint32_t> section_path;
     std::vector<std::uint32_t> selected_path;
+    // Native selection captured independently of the pinned Section. Quick
+    // mode uses it to recover the selected instruction inside Scene1.
+    std::uintptr_t selected_handle{};
     // Synthetic value-owned Section container (-2).  Its children preserve
     // the native Section's complete direct-child order, including entry
     // instructions before the first top-level 0x00 boundary.

@@ -242,6 +242,7 @@
     <ClInclude Include="PreviewIntegration\BattleWritebackAdapter.h" />
     <ClInclude Include="PreviewIntegration\BattleEditorOps.h" />
     <ClInclude Include="PreviewIntegration\BattleCharacterCatalog.h" />
+    <ClInclude Include="PreviewIntegration\BattleMovementTerrainResourceCache.h" />
     <ClInclude Include="PreviewIntegration\BattleAssetCache.h" />
     <ClInclude Include="PreviewIntegration\BattleBitmapCachePolicy.h" />
     <ClInclude Include="PreviewIntegration\BattlePreviewSession.h" />
@@ -255,6 +256,7 @@
     <ClInclude Include="PreviewIntegration\DialogueOverlayRenderer.h" />
     <ClInclude Include="PreviewIntegration\ConditionTreePane.h" />
     <ClInclude Include="PreviewIntegration\VariableControlPane.h" />
+    <ClInclude Include="PreviewIntegration\BattleUnitParametersPane.h" />
     <ClInclude Include="PreviewIntegration\DynamicPlaybackSession.h" />
     <ClInclude Include="PreviewIntegration\PlaybackInterpolation.h" />
   </ItemGroup>
@@ -334,6 +336,9 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="PreviewIntegration\VariableControlPane.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleUnitParametersPane.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="PreviewIntegration\DynamicPlaybackSession.cpp">

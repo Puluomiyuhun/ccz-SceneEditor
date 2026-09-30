@@ -51,7 +51,11 @@ foreach ($painter in @('Appearance', 'Hidden', 'Direction', 'Level',
     Assert-Text $opsHeader $painter "painter mode $painter is declared"
 }
 Assert-Text $opsSource 'BattleWritebackTransaction' 'Task 5 value transaction is used'
-Assert-Text $opsSource 'can_place_battle_unit' 'terrain placement gate is used'
+Assert-NotText $opsSource 'Task 5 写回门仍关闭' `
+    'preview edit status no longer claims that product writeback is disabled'
+Assert-Text $opsSource 'BattleEditorOps::TerrainAllows' 'terrain placement gate is centralized in the editor operations'
+Assert-Text $opsSource 'battle_movement_terrain_cost' 'terrain placement uses the selected Data character movement class'
+Assert-Text $opsSource 'if \(\*cost == 0xff\)' 'impassable movement cost rejects placement'
 Assert-Text $opsSource 'view=all' 'all source-record groups share one battle view'
 Assert-Text $opsSource 'InScope' 'battle scope filter is implemented'
 Assert-Text $opsSource 'ClearUndo' 'temporary reset can clear the undo stack'

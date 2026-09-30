@@ -10,6 +10,8 @@ $project = Join-Path $root 'cczEditor2\cczEditor2.vcxproj'
 $bitmapPolicy = Join-Path $root 'cczEditor2\PreviewIntegration\BattleBitmapCachePolicy.cpp'
 $bitmapPolicyHeader = Join-Path $root 'cczEditor2\PreviewIntegration\BattleBitmapCachePolicy.h'
 $sessionHeader = Join-Path $root 'cczEditor2\PreviewIntegration\BattlePreviewSession.h'
+$terrainCacheHeader = Join-Path $root 'cczEditor2\PreviewIntegration\BattleMovementTerrainResourceCache.h'
+$opsHeader = Join-Path $root 'cczEditor2\PreviewIntegration\BattleEditorOps.h'
 
 function Assert-Text($path, $pattern, $label) {
     $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
@@ -18,7 +20,7 @@ function Assert-Text($path, $pattern, $label) {
 }
 
 foreach ($path in @($adapter, $header, $battlePage, $rPage, $catalog, $hostSource, $project,
-    $bitmapPolicy, $bitmapPolicyHeader, $sessionHeader)) {
+    $bitmapPolicy, $bitmapPolicyHeader, $sessionHeader, $terrainCacheHeader, $opsHeader)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "BATTLE_ASSET_CACHE_FAIL: source missing: $path"
     }
@@ -41,6 +43,16 @@ Assert-Text $adapter 'root_resource_revision\(root\)[\s\S]*L"Data\.e5"[\s\S]*L"H
     'Mod-root resource caches invalidate when any data, terrain, unit, or appearance file changes'
 Assert-Text $adapter 'character_catalog_\s*=\s*ParseBattleCharacterCatalog\(data_e5_\)' `
     'S Data.e5 character and brush records are parsed once per Mod root'
+Assert-Text $header 'BattleMovementTerrainResourceCache movement_terrain_cache_' `
+    '兵种地形表缓存归 BattleAssetCache 的 Mod 资源层持有'
+Assert-Text $terrainCacheHeader 'normalized_mod_root,\s*std::uint64_t data_e5_revision' `
+    '兵种地形表缓存按 Mod 根目录与 Data.e5 修订号索引'
+Assert-Text $adapter 'movement_terrain_cache_\.Preload\(\s*key,\s*file_revision\(data_path\),\s*data_e5_\)' `
+    'Data.e5 已加载后立即预载资源4兵种地形表'
+Assert-Text $opsHeader 'std::shared_ptr<const ccz::preview::BattleMovementTerrainTable>\s*movement_terrain' `
+    '每个剧本编辑状态只持有共享只读矩阵引用'
+Assert-Text $battlePage 'session\.editor_state\.movement_terrain = m_assets\.movement_terrain\(\)[\s\S]*workspace\.second->state\.movement_terrain =\s*m_assets\.movement_terrain\(\)' `
+    '激活剧本时把 Mod 缓存引用绑定到会话和条件工作区'
 $assetText = Get-Content -LiteralPath $adapter -Raw -Encoding UTF8
 $expectedFacingMappings = @(
     @{ Direction = 0; Frame = 4; Flip = 'false' },

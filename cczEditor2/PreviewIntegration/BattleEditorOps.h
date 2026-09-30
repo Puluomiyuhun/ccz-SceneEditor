@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ccz/preview/battle_preview.h>
+#include <ccz/preview/battle_movement_terrain.h>
 #include <ccz/preview/execution_model.h>
 
 #include "BattlePreviewPredicates.h"
@@ -8,11 +9,15 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace ccz::editor_preview {
+
+inline constexpr std::size_t kBattleCharacterPageSize = 50;
 
 // This is the small data contract behind the original Battle arranger page.
 // It intentionally has no HWND, TreeView, GDI, or R-scene state.  The native
@@ -62,11 +67,14 @@ struct BattleCharacterEntry {
     bool reinforcement{};
     int ai_policy{-1};
     bool has_name{true};
+    // Raw Data.e5 +26 movement-class code. This is independent of unit_type
+    // (the instruction field) and the visual faction arm_kind.
+    int movement_class_code{-1};
 };
 
 struct BattleCharacterListState {
     std::vector<BattleCharacterEntry> entries;
-    std::size_t page_size{20};
+    std::size_t page_size{kBattleCharacterPageSize};
     std::size_t current_page{};
     std::wstring query;
     int selected_data_id{-1};
@@ -84,12 +92,27 @@ struct BattlePlacementDefaults {
     int direction{};
     bool hidden{};
     int level{};
-    int unit_type{};
+    int unit_type{2};
     bool reinforcement{};
-    int ai_policy{-1};
+    int ai_policy{0};
     int target{-1};
     int target_x{-1};
     int target_y{-1};
+};
+
+// One shared template using the maximum enemy-deployment field set. Every new
+// placement applies only fields supported by its selected deployment kind.
+// The template remains local to this document/condition workspace.
+struct BattlePlacementProfile {
+    std::optional<int> direction;
+    std::optional<bool> hidden;
+    std::optional<int> level;
+    std::optional<int> unit_type;
+    std::optional<bool> reinforcement;
+    std::optional<int> ai_policy;
+    std::optional<int> target;
+    std::optional<int> target_x;
+    std::optional<int> target_y;
 };
 
 struct BattlePlacementContext {
@@ -120,6 +143,10 @@ struct BattleViewportState {
 
 struct BattleEditorState {
     ccz::preview::BattlePreviewState battle;
+    // Session-local state only keeps a reference to the shared Mod resource
+    // cache entry; the 40x30 table itself is preloaded once per Mod revision.
+    std::shared_ptr<const ccz::preview::BattleMovementTerrainTable>
+        movement_terrain;
     ccz::preview::LogicalNodeKey scope_root;
     BattleCharacterListState characters;
     std::vector<BattleMinionBrush> minion_brushes;
@@ -128,14 +155,21 @@ struct BattleEditorState {
     std::uint64_t selected_minion_brush_batch_id{};
     BattlePlacementContext placement;
     BattlePlacementDefaults placement_defaults;
+    std::map<std::uint16_t, BattlePlacementProfile> placement_profiles;
     BattleEditorMode mode{BattleEditorMode::Select};
     BattleEditorMode mode_before_position_adjustment{BattleEditorMode::Select};
     BattleViewportState viewport;
     std::optional<BattleSelection> selection;
+    std::vector<BattleSelection> selection_group;
     std::uint64_t next_cache_id{1};
     std::uint64_t adjusting_cache_id{};
+    // Batch move mirrors R preview: every member previews with the anchor's
+    // direction, and the shared direction is committed only on drop.
+    int group_adjustment_direction{-1};
     std::optional<ccz::preview::BattleCoord> hover;
     bool direction_locked{};
+    bool copy_person_mode{};
+    bool unrestricted_terrain_mode{};
     int mouse_direction{};
     // This flag is carried through Task 5's value transaction for an eventual
     // document bridge.  BattleEditorOps never sets it: no document is touched.
@@ -167,6 +201,7 @@ struct BattlePlacementPreview {
     bool valid{};
     ccz::preview::BattleCoord coordinate{};
     ccz::preview::BattleUnit unit;
+    std::vector<ccz::preview::BattleUnit> units;
     std::wstring diagnostic;
 };
 
@@ -188,6 +223,7 @@ public:
     // all-units view.  Record-group provenance remains on BattleUnit::page.
     std::size_t BattlePageCount() const noexcept;
     std::vector<BattleCharacterEntry> VisibleCharacters() const;
+    std::vector<int> CurrentDeployedCharacterDataIds() const;
     BattleEditorResult SetCharacterSearch(const std::wstring& query);
     BattleEditorResult SetCharacterPage(std::size_t page);
     // Compatibility API: only page 0 is accepted; no visible page changes.
@@ -196,11 +232,17 @@ public:
     BattleEditorResult SelectMinionBrush(int first_data_id);
     BattleEditorResult SetPlacementParameters(
         const BattlePlacementDefaults& parameters);
+    BattleEditorResult SetPlacementProfile(
+        std::uint16_t instruction_id,
+        const BattlePlacementProfile& profile);
+    BattleEditorResult ResetPlacementProfile(std::uint16_t instruction_id);
     BattleEditorResult SetPlacementContext(
         const BattlePlacementContext& context);
     // Sets the unified deployment brush independently of any existing EEX node.
     BattleEditorResult SetDeploymentInstruction(std::uint16_t instruction_id);
     BattleEditorResult SetMode(BattleEditorMode mode);
+    BattleEditorResult SetCopyPersonMode(bool enabled);
+    BattleEditorResult SetUnrestrictedTerrainMode(bool enabled);
     BattleEditorResult CancelPlacementBrush();
 
     BattleEditorResult SetDirectionLock(bool enabled);
@@ -210,6 +252,14 @@ public:
         const ccz::preview::BattleCoord& coordinate) const;
     BattleEditorResult Place(const ccz::preview::BattleCoord& coordinate);
     BattleEditorResult SelectAt(const ccz::preview::BattleCoord& coordinate);
+    BattleEditorResult AddSelectionAt(
+        const ccz::preview::BattleCoord& coordinate);
+    BattleEditorResult RemoveSelectionAt(
+        const ccz::preview::BattleCoord& coordinate);
+    BattleEditorResult FilterSelectionByDeployment(
+        std::uint16_t instruction_id);
+    BattleEditorResult ClearSelectionGroup();
+    BattleEditorResult DeleteSelectionGroup();
     BattleEditorResult BeginPositionAdjustment(std::uint64_t cache_id);
     BattlePlacementPreview PreviewPositionAdjustment(
         const ccz::preview::BattleCoord& coordinate) const;
@@ -218,6 +268,9 @@ public:
     BattleEditorResult CancelPositionAdjustment();
     BattleEditorResult ModifyAt(const ccz::preview::BattleCoord& coordinate,
                                 const BattleUnitPatch& patch);
+    BattleEditorResult ModifySelectionGroup(
+        const std::vector<std::uint64_t>& cache_ids,
+        const BattleUnitPatch& patch);
     BattleEditorResult DeleteAt(const ccz::preview::BattleCoord& coordinate);
 
     BattleEditorResult PaintAt(BattlePainterMode mode,
@@ -255,8 +308,11 @@ private:
     static std::wstring UnitSummary(const ccz::preview::BattleUnit& unit);
     static int WrappedDirection(int value);
     static bool CompleteTerrain(const BattleEditorState& state);
+    bool TerrainAllows(const ccz::preview::BattleCoord& coordinate,
+                       int data_id, std::wstring& diagnostic) const;
     int NextAvailableBrushDataId(const BattleMinionBrush& brush) const;
     bool RefreshSelectedBrushDataId(bool reset_direction = false);
+    void ApplyPlacementProfileToDefaults();
     static BattleWritebackMemoryState ToMemoryState(
         const BattleEditorState& state);
     static void ApplyMemoryState(BattleEditorState& state,
@@ -275,6 +331,10 @@ private:
                          std::size_t& target_index,
                          std::wstring& diagnostic) const;
 };
+
+std::vector<ccz::preview::BattleCoord> BattleSelectionPathCells(
+    const ccz::preview::BattleCoord& start,
+    const ccz::preview::BattleCoord& end);
 
 // Rebase only user-edited preview values onto a fresh source parse. Clean
 // source rows always come from the fresh parse; overlapping edits are reported

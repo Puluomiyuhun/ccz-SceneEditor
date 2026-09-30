@@ -123,7 +123,7 @@ Assert-Text $test 'battle_writeback_plan_rejects_insert_anchor_outside_scope' 'n
 Assert-Text $test 'battle_writeback_plan_rejects_duplicate_source_ordinals' 'source-node order must be unambiguous'
 Assert-Text $test 'battle_writeback_native_batch_resolves_all_handles_before_mutation' 'native source and insertion handles resolve before mutation'
 Assert-Text $test 'battle_writeback_native_batch_rejects_stale_or_duplicate_nodes_atomically' 'stale or duplicate source nodes reject the complete batch'
-Assert-Text $test 'battle_writeback_native_batch_rejects_nonterminal_insert_anchor' 'only the terminal event anchor may receive insertions'
+Assert-Text $test 'battle_writeback_native_batch_accepts_selected_sibling_insert_anchor' 'a user-selected same-Section sibling may anchor a new instruction'
 Assert-Text $test 'battle_writeback_native_transaction_inserts_under_nested_condition_event' 'native transaction inserts and undoes a deployment in a nested condition event'
 Assert-Text $test 'battle_editor_brush_delete_compacts_only_its_selection_batch' 'brush deletion isolates placement sessions'
 
@@ -206,7 +206,13 @@ $expectedTests = @(
     'battle_writeback_capture_allows_changes_outside_pinned_section',
     'battle_writeback_native_batch_resolves_all_handles_before_mutation',
     'battle_writeback_native_batch_rejects_stale_or_duplicate_nodes_atomically',
-    'battle_writeback_native_batch_rejects_nonterminal_insert_anchor',
+    'battle_writeback_native_batch_accepts_selected_sibling_insert_anchor',
+    'battle_writeback_capture_uses_selected_anchor_without_condition_scope',
+    'battle_writeback_capture_uses_selected_instruction_when_no_deployments_exist',
+    'battle_writeback_native_transaction_inserts_and_undoes_atomic_4b_group',
+    'battle_writeback_native_transaction_rolls_back_new_4b_group_after_late_failure',
+    'battle_writeback_plan_merges_disjoint_live_and_preview_fields',
+    'battle_writeback_plan_rejects_true_same_field_conflict',
     'battle_writeback_qa_gate_only_allows_marked_s_script_copies',
     'battle_writeback_qa_copy_root_is_fixed_next_to_executable',
     'battle_writeback_native_transaction_applies_and_undoes_one_atomic_batch',

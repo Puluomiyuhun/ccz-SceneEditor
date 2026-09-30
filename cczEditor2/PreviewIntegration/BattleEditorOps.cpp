@@ -4,7 +4,9 @@
 #include <ccz/preview/battle_field_spec.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cwctype>
+#include <functional>
 #include <limits>
 #include <map>
 #include <sstream>
@@ -58,6 +60,12 @@ bool matches_query(const BattleCharacterEntry& entry,
     std::wstringstream id;
     id << entry.data_id;
     return contains_ignore_case(id.str(), query);
+}
+
+bool placement_profile_is_empty(const BattlePlacementProfile& profile) {
+    return !profile.direction && !profile.hidden && !profile.level &&
+        !profile.unit_type && !profile.reinforcement && !profile.ai_policy &&
+        !profile.target && !profile.target_x && !profile.target_y;
 }
 
 std::wstring mode_name(BattlePainterMode mode) {
@@ -139,6 +147,7 @@ void clear_character_dependent_state(BattleEditorState& state) {
     state.placement_defaults = BattlePlacementDefaults{};
     state.direction_locked = direction_locked;
     state.selection.reset();
+    state.selection_group.clear();
     state.hover.reset();
 }
 
@@ -292,6 +301,20 @@ std::vector<BattleCharacterEntry> BattleEditorOps::VisibleCharacters() const {
     return result;
 }
 
+std::vector<int> BattleEditorOps::CurrentDeployedCharacterDataIds() const {
+    std::vector<int> data_ids;
+    if (state_ == nullptr) return data_ids;
+    data_ids.reserve(state_->battle.units.size());
+    for (const BattleUnit& unit : state_->battle.units) {
+        if (!IsCurrentUnit(*state_, unit) || unit.data_id < 0) continue;
+        data_ids.push_back(unit.data_id);
+    }
+    std::sort(data_ids.begin(), data_ids.end());
+    data_ids.erase(std::unique(data_ids.begin(), data_ids.end()),
+                   data_ids.end());
+    return data_ids;
+}
+
 BattleEditorResult BattleEditorOps::SetCharacterSearch(
     const std::wstring& query) {
     if (state_ == nullptr) return failure(L"战场编辑器状态为空");
@@ -348,6 +371,7 @@ BattleEditorResult BattleEditorOps::SelectCharacter(int data_id) {
     state_->placement_defaults.unit_type = entry->unit_type;
     state_->placement_defaults.reinforcement = entry->reinforcement;
     state_->placement_defaults.ai_policy = entry->ai_policy;
+    ApplyPlacementProfileToDefaults();
     state_->mode = BattleEditorMode::Place;
     return success(L"当前战场角色与放置参数已切换");
 }
@@ -356,6 +380,7 @@ int BattleEditorOps::NextAvailableBrushDataId(
     const BattleMinionBrush& brush) const {
     if (state_ == nullptr || brush.first_data_id < 0 ||
         brush.last_data_id < brush.first_data_id) return -1;
+    if (state_->copy_person_mode) return brush.first_data_id;
     for (int data_id = brush.first_data_id; data_id <= brush.last_data_id;
          ++data_id) {
         const bool occupied = std::any_of(
@@ -394,7 +419,8 @@ bool BattleEditorOps::RefreshSelectedBrushDataId(bool reset_direction) {
     }
 
     if (batch_metadata_valid && batch_count == 0) {
-        // A newly selected brush starts at the lowest available Data ID.
+        // Copy mode intentionally starts each brush batch at the range's
+        // first ID. Batch provenance/cache IDs keep repeated Data IDs safe.
         data_id = NextAvailableBrushDataId(brush);
     } else if (batch_metadata_valid && batch_first_id >= 0) {
         const long long next_id = static_cast<long long>(batch_first_id) +
@@ -404,8 +430,12 @@ bool BattleEditorOps::RefreshSelectedBrushDataId(bool reset_direction) {
             const bool occupied = std::any_of(
                 state_->battle.units.begin(), state_->battle.units.end(),
                 [this, candidate](const BattleUnit& unit) {
-                    return IsCurrentUnit(*state_, unit) &&
-                           unit.data_id == candidate;
+                    if (!IsCurrentUnit(*state_, unit) ||
+                        unit.data_id != candidate) return false;
+                    return !state_->copy_person_mode ||
+                        (unit.editor_staged_new &&
+                         unit.editor_minion_brush_batch_id ==
+                             state_->selected_minion_brush_batch_id);
                 });
             if (!occupied) {
                 data_id = candidate;
@@ -450,6 +480,7 @@ bool BattleEditorOps::RefreshSelectedBrushDataId(bool reset_direction) {
     state_->placement_defaults.unit_type = entry->unit_type;
     state_->placement_defaults.reinforcement = entry->reinforcement;
     state_->placement_defaults.ai_policy = entry->ai_policy;
+    ApplyPlacementProfileToDefaults();
     state_->mouse_direction = state_->placement_defaults.direction;
     return true;
 }
@@ -498,6 +529,101 @@ BattleEditorResult BattleEditorOps::SetPlacementParameters(
     return success(L"战场放置参数已更新");
 }
 
+BattleEditorResult BattleEditorOps::SetPlacementProfile(
+    std::uint16_t instruction_id,
+    const BattlePlacementProfile& profile) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    const BattleFieldSpec* spec =
+        ccz::preview::get_battle_field_spec(instruction_id);
+    if (spec == nullptr || !spec->semantic_complete ||
+        (instruction_id != 0x46 && instruction_id != 0x47 &&
+         instruction_id != 0x4b)) {
+        return failure(L"不支持的战场出场参数类别");
+    }
+    if (profile.direction &&
+        (*profile.direction < -1 || *profile.direction > 3)) {
+        return failure(L"朝向值超出默认方向或四向编码范围");
+    }
+    if (profile.ai_policy &&
+        (*profile.ai_policy < 0 || *profile.ai_policy > 6)) {
+        return failure(L"新增单位默认方针必须选择有效的七种方针之一");
+    }
+    const bool any_target = profile.target || profile.target_x ||
+        profile.target_y;
+    if (any_target &&
+        (!profile.target || !profile.target_x || !profile.target_y)) {
+        return failure(L"默认目标必须同时提供武将 Data 号与坐标");
+    }
+    // Store one maximum-field profile. New placements apply only the roles
+    // supported by their own deployment instruction.
+    if (placement_profile_is_empty(profile)) {
+        state_->placement_profiles.erase(0x47);
+    } else {
+        state_->placement_profiles[0x47] = profile;
+    }
+    ApplyPlacementProfileToDefaults();
+    return success(L"当前分支的共享新增单位默认参数已更新；摆放时按阵营适配", true);
+}
+
+BattleEditorResult BattleEditorOps::ResetPlacementProfile(
+    std::uint16_t instruction_id) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    if (instruction_id != 0x46 && instruction_id != 0x47 &&
+        instruction_id != 0x4b) {
+        return failure(L"不支持的战场出场参数类别");
+    }
+    state_->placement_profiles.erase(0x47);
+    const int data_id = state_->placement_defaults.data_id;
+    const auto entry = std::find_if(
+        state_->characters.entries.begin(), state_->characters.entries.end(),
+        [data_id](const BattleCharacterEntry& character) {
+            return character.data_id == data_id;
+        });
+    state_->placement_defaults.direction = entry == state_->characters.entries.end()
+        ? 0 : WrappedDirection(entry->default_direction);
+    state_->placement_defaults.hidden = false;
+    state_->placement_defaults.level = entry == state_->characters.entries.end()
+        ? 0 : entry->level;
+    state_->placement_defaults.unit_type = 2;
+    state_->placement_defaults.reinforcement = entry != state_->characters.entries.end() &&
+        entry->reinforcement;
+    state_->placement_defaults.ai_policy = 0;
+    state_->placement_defaults.target = -1;
+    state_->placement_defaults.target_x = -1;
+    state_->placement_defaults.target_y = -1;
+    state_->mouse_direction = state_->placement_defaults.direction;
+    return success(L"共享新增参数已恢复基础默认值：高级兵种、被动出击", true);
+}
+
+void BattleEditorOps::ApplyPlacementProfileToDefaults() {
+    if (state_ == nullptr) return;
+    // Shared new-unit defaults start at the editor's standard enemy/ally
+    // values. Character records still provide identity, direction and level;
+    // an explicit shared profile can override these two values.
+    state_->placement_defaults.unit_type = 2;
+    state_->placement_defaults.ai_policy = 0;
+    const auto found = state_->placement_profiles.find(0x47);
+    if (found == state_->placement_profiles.end()) return;
+    const BattlePlacementProfile& profile = found->second;
+    BattlePlacementDefaults& defaults = state_->placement_defaults;
+    if (profile.direction) {
+        defaults.direction = *profile.direction == -1
+            ? -1 : WrappedDirection(*profile.direction);
+        state_->mouse_direction = defaults.direction;
+    }
+    if (profile.hidden) defaults.hidden = *profile.hidden;
+    if (profile.level) defaults.level = *profile.level;
+    if (profile.unit_type) defaults.unit_type = *profile.unit_type;
+    if (profile.reinforcement) defaults.reinforcement = *profile.reinforcement;
+    if (profile.ai_policy && *profile.ai_policy >= 0 &&
+        *profile.ai_policy <= 6) {
+        defaults.ai_policy = *profile.ai_policy;
+    }
+    if (profile.target) defaults.target = *profile.target;
+    if (profile.target_x) defaults.target_x = *profile.target_x;
+    if (profile.target_y) defaults.target_y = *profile.target_y;
+}
+
 BattleEditorResult BattleEditorOps::SetPlacementContext(
     const BattlePlacementContext& context) {
     if (state_ == nullptr) return failure(L"战场编辑器状态为空");
@@ -527,6 +653,7 @@ BattleEditorResult BattleEditorOps::SetDeploymentInstruction(
     }
     state_->placement = {};
     state_->placement.instruction_id = instruction_id;
+    ApplyPlacementProfileToDefaults();
     return success(L"战场布置笔刷类别已切换；无需既有出场指令");
 }
 
@@ -539,10 +666,23 @@ BattleEditorResult BattleEditorOps::SetMode(BattleEditorMode mode) {
     if (state_->mode == BattleEditorMode::AdjustPosition &&
         mode != BattleEditorMode::AdjustPosition) {
         state_->adjusting_cache_id = 0;
+        state_->group_adjustment_direction = -1;
         state_->hover.reset();
     }
     state_->mode = mode;
     return success(L"战场编辑模式已切换");
+}
+
+BattleEditorResult BattleEditorOps::SetCopyPersonMode(bool enabled) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    state_->copy_person_mode = enabled;
+    return success(enabled ? L"复制人模式已开启" : L"复制人模式已关闭");
+}
+
+BattleEditorResult BattleEditorOps::SetUnrestrictedTerrainMode(bool enabled) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    state_->unrestricted_terrain_mode = enabled;
+    return success(enabled ? L"无地形限制模式已开启" : L"无地形限制模式已关闭");
 }
 
 BattleEditorResult BattleEditorOps::CancelPlacementBrush() {
@@ -557,6 +697,7 @@ BattleEditorResult BattleEditorOps::CancelPlacementBrush() {
     state_->mode = BattleEditorMode::Select;
     state_->mode_before_position_adjustment = BattleEditorMode::Select;
     state_->adjusting_cache_id = 0;
+    state_->group_adjustment_direction = -1;
     state_->hover.reset();
     return success(L"战场布置笔刷已取消");
 }
@@ -616,6 +757,56 @@ bool BattleEditorOps::CompleteTerrain(const BattleEditorState& state) {
     return complete_terrain(state.battle);
 }
 
+bool BattleEditorOps::TerrainAllows(
+    const ccz::preview::BattleCoord& coordinate, int data_id,
+    std::wstring& diagnostic) const {
+    if (state_ == nullptr) {
+        diagnostic = L"战场编辑器状态为空，无法校验地形";
+        return false;
+    }
+    if (state_->unrestricted_terrain_mode) return true;
+    if (!CompleteTerrain(*state_) || !ccz::preview::is_battle_coord_in_bounds(
+            coordinate, state_->battle.map.width,
+            state_->battle.map.height)) {
+        diagnostic = L"战场地图/地形未闭合或坐标越界，拒绝放置";
+        return false;
+    }
+    const auto character = std::find_if(
+        state_->characters.entries.begin(), state_->characters.entries.end(),
+        [data_id](const BattleCharacterEntry& entry) {
+            return entry.data_id == data_id;
+        });
+    if (data_id < 0 || character == state_->characters.entries.end()) {
+        diagnostic = L"无法确定该单位的 Data.e5 兵种，地形校验失败";
+        return false;
+    }
+    const std::size_t terrain_offset =
+        static_cast<std::size_t>(coordinate.y) *
+            static_cast<std::size_t>(state_->battle.map.width) +
+        static_cast<std::size_t>(coordinate.x);
+    if (terrain_offset >= state_->battle.terrain.size()) {
+        diagnostic = L"战场目标格没有有效的 Hexzmap 地形编号";
+        return false;
+    }
+    const int terrain_id = state_->battle.terrain[terrain_offset];
+    if (!state_->movement_terrain) {
+        diagnostic = L"当前 Mod 的兵种地形表未预载，拒绝放置";
+        return false;
+    }
+    const auto cost = ccz::preview::battle_movement_terrain_cost(
+        *state_->movement_terrain, character->movement_class_code, terrain_id);
+    if (!cost.has_value()) {
+        diagnostic = L"Data.e5 兵种地形表、兵种码或地形编号无效，拒绝放置";
+        return false;
+    }
+    if (*cost == 0xff) {
+        diagnostic = L"该兵种无法进入目标地形，拒绝放置";
+        return false;
+    }
+    diagnostic.clear();
+    return true;
+}
+
 std::wstring BattleEditorOps::UnitSummary(const BattleUnit& unit) {
     std::wstringstream result;
     const std::uint16_t deployment =
@@ -661,6 +852,11 @@ BattleWritebackMemoryState BattleEditorOps::ToMemoryState(
         memory.selection.page = state.selection->page;
         memory.selection.cache_id = state.selection->cache_id;
     }
+    memory.selection_group_cache_ids.reserve(state.selection_group.size());
+    for (const BattleSelection& selected : state.selection_group) {
+        if (selected.cache_id != 0)
+            memory.selection_group_cache_ids.push_back(selected.cache_id);
+    }
     return memory;
 }
 
@@ -675,6 +871,19 @@ void BattleEditorOps::ApplyMemoryState(
                                           memory.selection.record_index,
                                           memory.selection.page,
                                           memory.selection.cache_id};
+    }
+    state.selection_group.clear();
+    for (const std::uint64_t cache_id : memory.selection_group_cache_ids) {
+        const auto unit = std::find_if(
+            state.battle.units.begin(), state.battle.units.end(),
+            [cache_id](const BattleUnit& candidate) {
+                return candidate.editor_cache_id == cache_id &&
+                    !candidate.editor_pending_delete &&
+                    candidate.fields_decoded &&
+                    !IsBattleFixedEmptySlot(candidate);
+            });
+        if (unit != state.battle.units.end())
+            state.selection_group.push_back(selection_for(*unit));
     }
 }
 
@@ -738,20 +947,48 @@ BattlePlacementPreview BattleEditorOps::BuildPlacementPreview(
         result.diagnostic = L"战场地图/地形未闭合，拒绝放置预览";
         return result;
     }
+    std::size_t own_count = 0;
+    std::size_t ally_count = 0;
+    std::size_t enemy_count = 0;
+    for (const BattleUnit& existing : state_->battle.units) {
+        if (!IsCurrentUnit(*state_, existing)) continue;
+        const std::uint16_t instruction =
+            existing.editor_deployment_instruction != 0xffff
+                ? existing.editor_deployment_instruction
+                : existing.source_instruction;
+        switch (instruction) {
+        case 0x4b: ++own_count; break;
+        case 0x46: ++ally_count; break;
+        case 0x47: ++enemy_count; break;
+        default: break;
+        }
+    }
+    const std::size_t total_count = own_count + ally_count + enemy_count;
+    const std::uint16_t instruction = state_->placement.instruction_id;
+    if ((instruction == 0x4b && own_count >= 20) ||
+        (instruction == 0x46 && ally_count >= 40) ||
+        (instruction == 0x47 && enemy_count >= 190)) {
+        result.diagnostic = L"对应阵营已达到战场人数上限，拒绝继续添加";
+        return result;
+    }
+    if (total_count >= 250) {
+        result.diagnostic = L"战场总人数已达到250人上限，拒绝继续添加";
+        return result;
+    }
     if (!ccz::preview::is_battle_coord_in_bounds(
             coordinate, state_->battle.map.width, state_->battle.map.height)) {
         result.diagnostic = L"战场放置坐标越界";
         return result;
     }
     for (const BattleUnit& unit : state_->battle.units) {
-        if (IsCurrentUnit(*state_, unit) &&
+        if (!state_->copy_person_mode && IsCurrentUnit(*state_, unit) &&
             unit.data_id == state_->placement_defaults.data_id) {
             result.diagnostic = L"当前战场 Data 号已被其他单位占用";
             return result;
         }
     }
-    if (ccz::preview::is_battle_terrain_blocked_at(state_->battle, coordinate)) {
-        result.diagnostic = L"战场目标格受地形限制，拒绝放置";
+    if (!TerrainAllows(coordinate, state_->placement_defaults.data_id,
+                       result.diagnostic)) {
         return result;
     }
     for (const BattleUnit& unit : state_->battle.units) {
@@ -766,7 +1003,8 @@ BattlePlacementPreview BattleEditorOps::BuildPlacementPreview(
     unit.data_id = state_->placement_defaults.data_id;
     unit.page = 0;
     unit.position = coordinate;
-    unit.direction = WrappedDirection(state_->mouse_direction);
+    unit.direction = state_->mouse_direction == -1
+        ? -1 : WrappedDirection(state_->mouse_direction);
     unit.hidden = state_->placement_defaults.hidden;
     unit.reinforcement = state_->placement_defaults.reinforcement;
     unit.level = state_->placement_defaults.level;
@@ -841,6 +1079,7 @@ BattleEditorResult BattleEditorOps::Place(
         proposed.battle.units.push_back(staged);
     }
     proposed.selection = selection_for(staged);
+    proposed.selection_group.clear();
     proposed.mode = proposed.selected_minion_brush.has_value()
         ? BattleEditorMode::Place : BattleEditorMode::Modify;
     BattleEditorResult result = CommitMutation(proposed, 1,
@@ -862,7 +1101,175 @@ BattleEditorResult BattleEditorOps::SelectAt(
     }
     const BattleUnit& unit = state_->battle.units[indices.front()];
     state_->selection = selection_for(unit);
+    state_->selection_group.clear();
     return success(L"已选择当前战场逻辑格单位");
+}
+
+BattleEditorResult BattleEditorOps::AddSelectionAt(
+    const ccz::preview::BattleCoord& coordinate) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    if (state_->mode == BattleEditorMode::Place ||
+        state_->mode == BattleEditorMode::AdjustPosition) {
+        return failure(L"当前编辑模式不支持多选");
+    }
+    const std::vector<std::size_t> indices = UnitsAt(*state_, coordinate);
+    if (indices.empty()) return failure(L"当前战场作用域没有可选单位");
+    if (indices.size() != 1)
+        return failure(L"当前逻辑格存在多个单位，拒绝歧义选择");
+    const BattleSelection selected =
+        selection_for(state_->battle.units[indices.front()]);
+    if (!selected.valid()) return failure(L"目标单位缺少稳定缓存身份");
+    const auto existing = std::find_if(
+        state_->selection_group.begin(), state_->selection_group.end(),
+        [&selected](const BattleSelection& item) {
+            return item.cache_id == selected.cache_id;
+        });
+    if (existing != state_->selection_group.end())
+        return success(L"目标单位已在多选组中");
+    state_->selection_group.push_back(selected);
+    if (!state_->selection.has_value()) state_->selection = selected;
+    return success(L"单位已加入多选组", true, 1);
+}
+
+BattleEditorResult BattleEditorOps::RemoveSelectionAt(
+    const ccz::preview::BattleCoord& coordinate) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    const std::vector<std::size_t> indices = UnitsAt(*state_, coordinate);
+    if (indices.empty()) return failure(L"光标指向位置没有可选单位");
+    if (indices.size() != 1)
+        return failure(L"当前逻辑格存在多个单位，拒绝歧义取消");
+    const std::uint64_t cache_id =
+        state_->battle.units[indices.front()].editor_cache_id;
+    const auto selected = std::find_if(
+        state_->selection_group.begin(), state_->selection_group.end(),
+        [cache_id](const BattleSelection& item) {
+            return item.cache_id == cache_id;
+        });
+    if (selected == state_->selection_group.end())
+        return failure(L"光标指向的角色不在当前选择组");
+    state_->selection_group.erase(selected);
+    const bool primary_remains = state_->selection.has_value() &&
+        std::any_of(state_->selection_group.begin(),
+                    state_->selection_group.end(),
+            [this](const BattleSelection& item) {
+                return item.cache_id == state_->selection->cache_id;
+            });
+    if (state_->selection_group.empty()) {
+        state_->selection.reset();
+    } else if (!primary_remains) {
+        state_->selection = state_->selection_group.front();
+    }
+    return success(L"已将光标指向角色移出多选组", true, 1);
+}
+
+BattleEditorResult BattleEditorOps::FilterSelectionByDeployment(
+    std::uint16_t instruction_id) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    if (instruction_id != 0x4b && instruction_id != 0x46 &&
+        instruction_id != 0x47) {
+        return failure(L"不支持的战场阵营筛选");
+    }
+    if (state_->selection_group.empty())
+        return failure(L"当前没有多选角色可筛选");
+    const std::uint64_t old_primary = state_->selection.has_value()
+        ? state_->selection->cache_id : 0;
+    std::vector<BattleSelection> filtered;
+    filtered.reserve(state_->selection_group.size());
+    for (const BattleSelection& selected : state_->selection_group) {
+        const BattleUnit* unit = FindUnitByCacheId(selected.cache_id);
+        if (unit == nullptr || !IsCurrentUnit(*state_, *unit)) continue;
+        const std::uint16_t deployment =
+            unit->editor_deployment_instruction != 0xffff
+                ? unit->editor_deployment_instruction
+                : unit->source_instruction;
+        if (deployment == instruction_id) filtered.push_back(selection_for(*unit));
+    }
+    if (filtered.size() == state_->selection_group.size())
+        return success(L"多选组已符合当前阵营筛选");
+    state_->selection_group = std::move(filtered);
+    const auto primary = std::find_if(
+        state_->selection_group.begin(), state_->selection_group.end(),
+        [old_primary](const BattleSelection& item) {
+            return item.cache_id == old_primary;
+        });
+    if (primary != state_->selection_group.end()) {
+        state_->selection = *primary;
+    } else if (state_->selection_group.empty()) {
+        state_->selection.reset();
+    } else {
+        state_->selection = state_->selection_group.front();
+    }
+    return success(L"多选组已按阵营筛选", true,
+                   state_->selection_group.size());
+}
+
+BattleEditorResult BattleEditorOps::ClearSelectionGroup() {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    const bool changed = !state_->selection_group.empty() ||
+                         state_->selection.has_value();
+    state_->selection_group.clear();
+    state_->selection.reset();
+    return success(L"已清空全部角色选择", changed,
+                   changed ? 1U : 0U);
+}
+
+BattleEditorResult BattleEditorOps::DeleteSelectionGroup() {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    if (state_->selection_group.empty())
+        return failure(L"当前没有多选角色可删除");
+    BattleEditorState proposed = *state_;
+    std::vector<std::size_t> indices;
+    indices.reserve(proposed.selection_group.size());
+    for (const BattleSelection& selected : proposed.selection_group) {
+        const auto found = std::find_if(
+            proposed.battle.units.begin(), proposed.battle.units.end(),
+            [&selected, &proposed](const BattleUnit& unit) {
+                return unit.editor_cache_id == selected.cache_id &&
+                       IsCurrentUnit(proposed, unit);
+            });
+        if (found == proposed.battle.units.end())
+            return failure(L"多选组中有角色已离开当前战场，未执行删除");
+        indices.push_back(static_cast<std::size_t>(
+            std::distance(proposed.battle.units.begin(), found)));
+    }
+    std::sort(indices.begin(), indices.end(), std::greater<std::size_t>());
+    const std::size_t affected_count = indices.size();
+    for (const std::size_t index : indices) {
+        if (index >= proposed.battle.units.size())
+            return failure(L"多选删除目标索引失效，缓存未修改");
+        const BattleUnit removed = proposed.battle.units[index];
+        if (!removed.editor_staged_new) {
+            proposed.battle.units[index].editor_pending_delete = true;
+            continue;
+        }
+        proposed.battle.units.erase(proposed.battle.units.begin() +
+                                    static_cast<std::ptrdiff_t>(index));
+        if (removed.editor_minion_brush_batch_id == 0) continue;
+        for (BattleUnit& unit : proposed.battle.units) {
+            if (!unit.editor_staged_new ||
+                unit.editor_minion_brush_batch_id !=
+                    removed.editor_minion_brush_batch_id ||
+                unit.data_id <= removed.data_id) continue;
+            --unit.data_id;
+            const auto entry = std::find_if(
+                proposed.characters.entries.begin(),
+                proposed.characters.entries.end(),
+                [&unit](const BattleCharacterEntry& character) {
+                    return character.data_id == unit.data_id;
+                });
+            if (entry != proposed.characters.entries.end()) {
+                unit.appearance = entry->appearance;
+                unit.unit_type = entry->unit_type;
+            }
+            mark_role(unit, BattleFieldRole::DataId);
+        }
+    }
+    proposed.selection.reset();
+    proposed.selection_group.clear();
+    BattleEditorResult result = CommitMutation(proposed, affected_count,
+        L"已批量删除多选角色（一次撤回可恢复整组）");
+    if (result.ok) RefreshSelectedBrushDataId();
+    return result;
 }
 
 const BattleUnit* BattleEditorOps::FindUnitByCacheId(
@@ -890,12 +1297,32 @@ BattleEditorResult BattleEditorOps::BeginPositionAdjustment(
     if (!unit->editor_staged_new && !has_complete_source_anchor(*unit))
         return failure(L"既有单位缺少完整指令来源/原始字段基线，拒绝调整");
 
+    const bool group_anchor = state_->selection_group.size() > 1 &&
+        std::any_of(state_->selection_group.begin(),
+                    state_->selection_group.end(),
+            [cache_id](const BattleSelection& item) {
+                return item.cache_id == cache_id;
+            });
+    int group_direction = -1;
+    if (group_anchor) {
+        for (const BattleSelection& selected : state_->selection_group) {
+            const BattleUnit* member = FindUnitByCacheId(selected.cache_id);
+            if (member == nullptr || !IsCurrentUnit(*state_, *member) ||
+                !HasRole(*member, BattleFieldRole::Direction)) {
+                return failure(L"多选组中有单位不支持统一调整朝向");
+            }
+        }
+        group_direction = WrappedDirection(unit->direction);
+    }
+    if (!group_anchor) state_->selection_group.clear();
     state_->selection = selection_for(*unit);
     state_->mode_before_position_adjustment = state_->mode;
     state_->adjusting_cache_id = cache_id;
+    state_->group_adjustment_direction = group_direction;
     state_->mode = BattleEditorMode::AdjustPosition;
     state_->hover = unit->position;
-    return success(L"位置调整已开始；落点只修改暂存缓存", true, 1);
+    return success(L"位置调整已开始；落点只修改暂存缓存", true,
+                   group_anchor ? state_->selection_group.size() : 1U);
 }
 
 BattlePlacementPreview BattleEditorOps::PreviewPositionAdjustment(
@@ -916,29 +1343,96 @@ BattlePlacementPreview BattleEditorOps::PreviewPositionAdjustment(
         result.diagnostic = L"既有单位来源锚点或原始字段基线已失效";
         return result;
     }
-    result.unit = *moving;
-    result.unit.position = coordinate;
     if (!CompleteTerrain(*state_)) {
         result.diagnostic = L"战场地图/地形未闭合，拒绝位置预览";
         return result;
     }
-    if (!ccz::preview::is_battle_coord_in_bounds(
-            coordinate, state_->battle.map.width, state_->battle.map.height)) {
-        result.diagnostic = L"战场目标坐标越界";
-        return result;
+    std::vector<const BattleUnit*> moving_units;
+    const bool move_group = state_->selection_group.size() > 1 &&
+        std::any_of(state_->selection_group.begin(),
+                    state_->selection_group.end(),
+            [moving](const BattleSelection& item) {
+                return item.cache_id == moving->editor_cache_id;
+            });
+    if (move_group) {
+        moving_units.reserve(state_->selection_group.size());
+        for (const BattleSelection& selected : state_->selection_group) {
+            const BattleUnit* member = FindUnitByCacheId(selected.cache_id);
+            if (member == nullptr || !IsCurrentUnit(*state_, *member)) {
+                result.diagnostic = L"多选组中有单位已离开当前战场";
+                return result;
+            }
+            if (!member->editor_staged_new &&
+                !has_complete_source_anchor(*member)) {
+                result.diagnostic = L"多选组中有单位的来源锚点或字段基线已失效";
+                return result;
+            }
+            moving_units.push_back(member);
+        }
+    } else {
+        moving_units.push_back(moving);
     }
-    if (coordinate != moving->position &&
-        ccz::preview::is_battle_terrain_blocked_at(state_->battle, coordinate)) {
-        result.diagnostic = L"战场目标格受地形限制，拒绝位置预览";
-        return result;
+    const int delta_x = coordinate.x - moving->position.x;
+    const int delta_y = coordinate.y - moving->position.y;
+    result.units.reserve(moving_units.size());
+    for (const BattleUnit* member : moving_units) {
+        BattleUnit destination = *member;
+        destination.position = {member->position.x + delta_x,
+                                member->position.y + delta_y};
+        if (move_group && state_->group_adjustment_direction >= 0)
+            destination.direction = state_->group_adjustment_direction;
+        if (!ccz::preview::is_battle_coord_in_bounds(
+                destination.position, state_->battle.map.width,
+                state_->battle.map.height)) {
+            result.diagnostic = L"战场目标坐标越界";
+            result.units.clear();
+            return result;
+        }
+        if (destination.position != member->position &&
+            !TerrainAllows(destination.position, member->data_id,
+                           result.diagnostic)) {
+            if (result.diagnostic.empty())
+                result.diagnostic = L"战场目标格受兵种地形限制，拒绝位置预览";
+            result.units.clear();
+            return result;
+        }
+        for (const BattleUnit& prior : result.units) {
+            if (prior.position == destination.position) {
+                result.diagnostic = L"多选组移动后会发生单位重叠";
+                result.units.clear();
+                return result;
+            }
+        }
+        result.units.push_back(std::move(destination));
     }
     for (const BattleUnit& other : state_->battle.units) {
-        if (other.editor_cache_id != moving->editor_cache_id &&
-            IsCurrentUnit(*state_, other) && other.position == coordinate) {
+        if (!IsCurrentUnit(*state_, other)) continue;
+        const bool is_moving = std::any_of(
+            moving_units.begin(), moving_units.end(),
+            [&other](const BattleUnit* member) {
+                return member->editor_cache_id == other.editor_cache_id;
+            });
+        if (is_moving) continue;
+        if (std::any_of(result.units.begin(), result.units.end(),
+                [&other](const BattleUnit& destination) {
+                    return destination.position == other.position;
+                })) {
             result.diagnostic = L"战场目标格已有其他单位";
+            result.units.clear();
             return result;
         }
     }
+    const auto moved_anchor = std::find_if(
+        result.units.begin(), result.units.end(),
+        [moving](const BattleUnit& unit) {
+            return unit.editor_cache_id == moving->editor_cache_id;
+        });
+    if (moved_anchor == result.units.end()) {
+        result.diagnostic = L"待调整单位不在多选移动结果中";
+        result.units.clear();
+        return result;
+    }
+    result.unit = *moved_anchor;
     result.valid = true;
     result.diagnostic = L"战场位置调整预览有效；尚未写入剧本";
     return result;
@@ -948,33 +1442,54 @@ BattleEditorResult BattleEditorOps::ConfirmPositionAdjustment(
     const ccz::preview::BattleCoord& coordinate) {
     const BattlePlacementPreview preview = PreviewPositionAdjustment(coordinate);
     if (!preview.valid) return failure(preview.diagnostic.c_str());
-    const std::uint64_t cache_id = state_->adjusting_cache_id;
     BattleEditorState proposed = *state_;
-    auto unit = std::find_if(
+    std::size_t changed_count = 0;
+    for (const BattleUnit& destination : preview.units) {
+        auto unit = std::find_if(
+            proposed.battle.units.begin(), proposed.battle.units.end(),
+            [&destination](const BattleUnit& candidate) {
+                return candidate.editor_cache_id ==
+                           destination.editor_cache_id &&
+                       !candidate.editor_pending_delete;
+            });
+        if (unit == proposed.battle.units.end())
+            return failure(L"待调整组中有单位已失效，缓存未修改");
+        const bool position_changed = unit->position != destination.position;
+        const bool direction_changed = unit->direction != destination.direction;
+        if (position_changed) {
+            unit->position = destination.position;
+            mark_role(*unit, BattleFieldRole::X);
+            mark_role(*unit, BattleFieldRole::Y);
+        }
+        if (direction_changed) {
+            unit->direction = destination.direction;
+            mark_role(*unit, BattleFieldRole::Direction);
+        }
+        if (position_changed || direction_changed) ++changed_count;
+    }
+    const auto anchor = std::find_if(
         proposed.battle.units.begin(), proposed.battle.units.end(),
-        [cache_id](const BattleUnit& candidate) {
-            return candidate.editor_cache_id == cache_id &&
+        [this](const BattleUnit& candidate) {
+            return candidate.editor_cache_id == state_->adjusting_cache_id &&
                    !candidate.editor_pending_delete;
         });
-    if (unit == proposed.battle.units.end())
+    if (anchor == proposed.battle.units.end())
         return failure(L"待调整单位已失效，缓存未修改");
-    const bool changed = unit->position != coordinate;
-    if (changed) {
-        unit->position = coordinate;
-        mark_role(*unit, BattleFieldRole::X);
-        mark_role(*unit, BattleFieldRole::Y);
-    }
-    proposed.selection = selection_for(*unit);
+    proposed.selection = selection_for(*anchor);
     proposed.mode = proposed.mode_before_position_adjustment;
     proposed.adjusting_cache_id = 0;
+    proposed.group_adjustment_direction = -1;
     proposed.hover = coordinate;
-    if (!changed) {
+    if (changed_count == 0) {
         *state_ = std::move(proposed);
-        return success(L"位置未变化，已结束调整", false, 0);
+        return success(L"位置与朝向未变化，已结束调整", false, 0);
     }
-    return CommitMutation(proposed, 1, unit->editor_staged_new
-        ? L"新增单位位置已调整（仅更新布阵缓存）"
-        : L"既有单位坐标已暂存（写回前仍需重验来源记录）");
+    return CommitMutation(proposed, changed_count,
+        preview.units.size() > 1
+            ? L"多选单位位置与朝向已统一调整（一个撤回事务）"
+            : (anchor->editor_staged_new
+                ? L"新增单位位置已调整（仅更新布阵缓存）"
+                : L"既有单位坐标已暂存（写回前仍需重验来源记录）"));
 }
 
 BattleEditorResult BattleEditorOps::CancelPositionAdjustment() {
@@ -985,21 +1500,13 @@ BattleEditorResult BattleEditorOps::CancelPositionAdjustment() {
     }
     state_->mode = state_->mode_before_position_adjustment;
     state_->adjusting_cache_id = 0;
+    state_->group_adjustment_direction = -1;
     state_->hover.reset();
-    return success(L"已取消位置调整；缓存未变化");
+    return success(L"已取消位置与朝向调整；预览未写入缓存");
 }
 
 bool BattleEditorOps::ApplyPatch(BattleUnit& unit, const BattleUnitPatch& patch,
                                  std::wstring& diagnostic) const {
-    const bool has_target = patch.target.has_value() ||
-                            patch.target_x.has_value() ||
-                            patch.target_y.has_value();
-    if (has_target && (!patch.target.has_value() ||
-                       !patch.target_x.has_value() ||
-                       !patch.target_y.has_value())) {
-        diagnostic = L"目标字段必须同时提供 Data 号与坐标";
-        return false;
-    }
     if (patch.data_id && !HasRole(unit, BattleFieldRole::DataId)) {
         diagnostic = L"当前战场记录不含 Data 号字段";
         return false;
@@ -1034,10 +1541,16 @@ bool BattleEditorOps::ApplyPatch(BattleUnit& unit, const BattleUnitPatch& patch,
         diagnostic = L"当前战场记录不含 AI 字段";
         return false;
     }
-    if (has_target && (!HasRole(unit, BattleFieldRole::TargetDataId) ||
-                       !HasRole(unit, BattleFieldRole::TargetX) ||
-                       !HasRole(unit, BattleFieldRole::TargetY))) {
-        diagnostic = L"当前战场记录不含完整目标字段";
+    if (patch.target && !HasRole(unit, BattleFieldRole::TargetDataId)) {
+        diagnostic = L"当前战场记录不含目标 Data 字段";
+        return false;
+    }
+    if (patch.target_x && !HasRole(unit, BattleFieldRole::TargetX)) {
+        diagnostic = L"当前战场记录不含目标 X 字段";
+        return false;
+    }
+    if (patch.target_y && !HasRole(unit, BattleFieldRole::TargetY)) {
+        diagnostic = L"当前战场记录不含目标 Y 字段";
         return false;
     }
 
@@ -1045,16 +1558,15 @@ bool BattleEditorOps::ApplyPatch(BattleUnit& unit, const BattleUnitPatch& patch,
     if (patch.position) unit.position = *patch.position;
     if (patch.appearance) unit.appearance = *patch.appearance;
     if (patch.hidden) unit.hidden = *patch.hidden;
-    if (patch.direction) unit.direction = WrappedDirection(*patch.direction);
+    if (patch.direction) unit.direction = *patch.direction == -1
+        ? -1 : WrappedDirection(*patch.direction);
     if (patch.level) unit.level = *patch.level;
     if (patch.unit_type) unit.unit_type = *patch.unit_type;
     if (patch.reinforcement) unit.reinforcement = *patch.reinforcement;
     if (patch.ai_policy) unit.ai_policy = *patch.ai_policy;
-    if (has_target) {
-        unit.target = *patch.target;
-        unit.target_x = *patch.target_x;
-        unit.target_y = *patch.target_y;
-    }
+    if (patch.target) unit.target = *patch.target;
+    if (patch.target_x) unit.target_x = *patch.target_x;
+    if (patch.target_y) unit.target_y = *patch.target_y;
 
     if (patch.data_id) mark_role(unit, BattleFieldRole::DataId);
     if (patch.position) {
@@ -1067,11 +1579,9 @@ bool BattleEditorOps::ApplyPatch(BattleUnit& unit, const BattleUnitPatch& patch,
     if (patch.unit_type) mark_role(unit, BattleFieldRole::UnitType);
     if (patch.reinforcement) mark_role(unit, BattleFieldRole::Reinforcement);
     if (patch.ai_policy) mark_role(unit, BattleFieldRole::AiPolicy);
-    if (has_target) {
-        mark_role(unit, BattleFieldRole::TargetDataId);
-        mark_role(unit, BattleFieldRole::TargetX);
-        mark_role(unit, BattleFieldRole::TargetY);
-    }
+    if (patch.target) mark_role(unit, BattleFieldRole::TargetDataId);
+    if (patch.target_x) mark_role(unit, BattleFieldRole::TargetX);
+    if (patch.target_y) mark_role(unit, BattleFieldRole::TargetY);
     // Appearance is intentionally not marked dirty: Task 2A's confirmed EEX
     // roles contain UnitType but do not prove a separate appearance slot.  It
     // is still available as a temporary visual parameter; raw fields remain
@@ -1091,9 +1601,13 @@ BattleEditorResult BattleEditorOps::ModifyAt(
     if (!ApplyPatch(unit, patch, diagnostic)) return failure(diagnostic.c_str());
     if (patch.position) {
         if (!CompleteTerrain(proposed) ||
-            !ccz::preview::can_place_battle_unit(proposed.battle,
-                                                 *patch.position)) {
-            return failure(L"修改后的战场坐标越界、地形禁放或地形未闭合");
+            !ccz::preview::is_battle_coord_in_bounds(
+                *patch.position, proposed.battle.map.width,
+                proposed.battle.map.height)) {
+            return failure(L"修改后的战场坐标越界或地形未闭合");
+        }
+        if (!TerrainAllows(*patch.position, unit.data_id, diagnostic)) {
+            return failure(diagnostic.c_str());
         }
         for (std::size_t index = 0; index < proposed.battle.units.size(); ++index) {
             if (index == indices.front()) continue;
@@ -1107,7 +1621,49 @@ BattleEditorResult BattleEditorOps::ModifyAt(
     const BattleUnit& selected = proposed.battle.units[indices.front()];
     proposed.selection = selection_for(selected);
     return CommitMutation(proposed, 1,
-                          L"战场单位已临时修改（Task 5 写回门仍关闭）");
+                          L"战场单位已临时修改，等待写回");
+}
+
+BattleEditorResult BattleEditorOps::ModifySelectionGroup(
+    const std::vector<std::uint64_t>& cache_ids,
+    const BattleUnitPatch& patch) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    if (cache_ids.size() < 2)
+        return failure(L"批量修改至少需要两个单位");
+    if (patch.data_id || patch.position || patch.appearance)
+        return failure(L"批量参数修改不支持角色身份、坐标或临时形象");
+
+    BattleEditorState proposed = *state_;
+    std::vector<std::size_t> indices;
+    std::vector<std::uint64_t> seen_cache_ids;
+    indices.reserve(cache_ids.size());
+    seen_cache_ids.reserve(cache_ids.size());
+    for (const std::uint64_t cache_id : cache_ids) {
+        if (cache_id == 0 || std::find(seen_cache_ids.begin(),
+                seen_cache_ids.end(), cache_id) != seen_cache_ids.end()) {
+            return failure(L"批量修改目标列表无效或包含重复单位");
+        }
+        const auto found = std::find_if(proposed.battle.units.begin(),
+            proposed.battle.units.end(), [cache_id](const BattleUnit& unit) {
+                return unit.editor_cache_id == cache_id;
+            });
+        if (found == proposed.battle.units.end() ||
+            !IsCurrentUnit(proposed, *found) || !found->fields_decoded ||
+            IsBattleFixedEmptySlot(*found)) {
+            return failure(L"批量修改组中有单位已离开当前战场");
+        }
+        indices.push_back(static_cast<std::size_t>(
+            std::distance(proposed.battle.units.begin(), found)));
+        seen_cache_ids.push_back(cache_id);
+    }
+
+    for (const std::size_t index : indices) {
+        std::wstring diagnostic;
+        if (!ApplyPatch(proposed.battle.units[index], patch, diagnostic))
+            return failure(diagnostic.c_str());
+    }
+    return CommitMutation(proposed, indices.size(),
+        L"多选单位参数已统一修改（一个撤回事务）");
 }
 
 BattleEditorResult BattleEditorOps::DeleteAt(
@@ -1142,6 +1698,7 @@ BattleEditorResult BattleEditorOps::DeleteAt(
             }
         }
         proposed.selection.reset();
+        proposed.selection_group.clear();
         BattleEditorResult result = CommitMutation(proposed, 1,
             L"新增单位已从临时布阵中删除");
         if (result.ok) RefreshSelectedBrushDataId();
@@ -1152,8 +1709,9 @@ BattleEditorResult BattleEditorOps::DeleteAt(
     // filters this tombstone, while undo can still restore the exact row.
     proposed.battle.units[indices.front()].editor_pending_delete = true;
     proposed.selection.reset();
+    proposed.selection_group.clear();
     BattleEditorResult result = CommitMutation(proposed, 1,
-        L"战场单位已临时删除（Task 5 写回门仍关闭）");
+        L"战场单位已标记删除，等待写回");
     if (result.ok) RefreshSelectedBrushDataId();
     return result;
 }
@@ -1161,6 +1719,17 @@ BattleEditorResult BattleEditorOps::DeleteAt(
 BattleEditorResult BattleEditorOps::CycleDirection(int delta) {
     if (state_ == nullptr) return failure(L"战场编辑器状态为空");
     if (delta == 0) return success(L"战场方向未变化");
+    const bool adjusting_group =
+        state_->mode == BattleEditorMode::AdjustPosition &&
+        state_->adjusting_cache_id != 0 &&
+        state_->selection_group.size() > 1 &&
+        state_->group_adjustment_direction >= 0;
+    if (adjusting_group) {
+        state_->group_adjustment_direction = WrappedDirection(
+            state_->group_adjustment_direction + delta);
+        return success(L"多选移动预览朝向已统一调整；确认后整组应用", true,
+                       state_->selection_group.size());
+    }
     if (!state_->selection.has_value() ||
         state_->mode == BattleEditorMode::Place) {
         state_->mouse_direction = WrappedDirection(state_->mouse_direction + delta);
@@ -1299,8 +1868,8 @@ BattleEditorResult BattleEditorOps::PaintAt(
         }
     }
     std::wstringstream message;
-    message << L"战场 painter 已临时修改当前战场逻辑格的" << mode_name(mode)
-            << L"字段（Task 5 写回门仍关闭）";
+    message << L"战场参数笔刷已临时修改当前逻辑格的" << mode_name(mode)
+            << L"字段，等待写回";
     const std::wstring diagnostic = message.str();
     return CommitMutation(proposed, indices.size(), diagnostic.c_str());
 }
@@ -1384,9 +1953,12 @@ BattleEditorDraftRebaseResult RebaseBattleEditorDraft(
     rebased.mode_before_position_adjustment = rebased.mode;
     rebased.viewport = draft.viewport;
     rebased.direction_locked = draft.direction_locked;
+    rebased.copy_person_mode = draft.copy_person_mode;
+    rebased.unrestricted_terrain_mode = draft.unrestricted_terrain_mode;
     rebased.mouse_direction = draft.mouse_direction;
     rebased.document_modified = draft.document_modified;
     rebased.adjusting_cache_id = 0;
+    rebased.group_adjustment_direction = -1;
     rebased.hover.reset();
 
     std::map<std::uint64_t, std::uint64_t> cache_id_remap;
@@ -1535,7 +2107,73 @@ BattleEditorDraftRebaseResult RebaseBattleEditorDraft(
         rebased.selection.reset();
     }
 
+    rebased.selection_group.clear();
+    for (const BattleSelection& old_selection : draft.selection_group) {
+        BattleSelection selection = old_selection;
+        const auto mapped = cache_id_remap.find(selection.cache_id);
+        const BattleUnit* matched = nullptr;
+        if (mapped != cache_id_remap.end()) {
+            const auto unit = std::find_if(
+                rebased.battle.units.begin(), rebased.battle.units.end(),
+                [&mapped](const BattleUnit& candidate) {
+                    return candidate.editor_cache_id == mapped->second &&
+                        !candidate.editor_pending_delete &&
+                        !IsBattleFixedEmptySlot(candidate);
+                });
+            if (unit != rebased.battle.units.end()) matched = &*unit;
+        } else {
+            const auto unit = std::find_if(
+                rebased.battle.units.begin(), rebased.battle.units.end(),
+                [&selection](const BattleUnit& candidate) {
+                    return candidate.source_key == selection.source_key &&
+                        candidate.record_index == selection.record_index &&
+                        candidate.page == static_cast<int>(selection.page) &&
+                        !candidate.editor_pending_delete &&
+                        !IsBattleFixedEmptySlot(candidate);
+                });
+            if (unit != rebased.battle.units.end()) matched = &*unit;
+        }
+        if (matched == nullptr) continue;
+        const BattleSelection rebased_selection = selection_for(*matched);
+        const bool duplicate = std::any_of(
+            rebased.selection_group.begin(), rebased.selection_group.end(),
+            [&rebased_selection](const BattleSelection& existing) {
+                return existing.cache_id == rebased_selection.cache_id;
+            });
+        if (!duplicate) rebased.selection_group.push_back(rebased_selection);
+    }
+
     result.ok = true;
+    return result;
+}
+
+std::vector<ccz::preview::BattleCoord> BattleSelectionPathCells(
+    const ccz::preview::BattleCoord& start,
+    const ccz::preview::BattleCoord& end) {
+    using ccz::preview::BattleCoord;
+    std::vector<BattleCoord> result;
+    const long long delta_x = static_cast<long long>(end.x) - start.x;
+    const long long delta_y = static_cast<long long>(end.y) - start.y;
+    const long long abs_x = delta_x < 0 ? -delta_x : delta_x;
+    const long long abs_y = delta_y < 0 ? -delta_y : delta_y;
+    const long long step_x = delta_x < 0 ? -1 : 1;
+    const long long step_y = delta_y < 0 ? -1 : 1;
+    long long error = abs_x - abs_y;
+    long long x = start.x;
+    long long y = start.y;
+    for (;;) {
+        result.push_back({static_cast<int>(x), static_cast<int>(y)});
+        if (x == end.x && y == end.y) break;
+        const long long doubled_error = error * 2;
+        if (doubled_error > -abs_y) {
+            error -= abs_y;
+            x += step_x;
+        }
+        if (doubled_error < abs_x) {
+            error += abs_x;
+            y += step_y;
+        }
+    }
     return result;
 }
 

@@ -167,6 +167,8 @@ struct AnchorCandidate {
     LogicalNodeKey parent_key;
     LogicalNodeKey before_key;
     std::size_t depth{};
+    std::uintptr_t parent_handle{};
+    std::uintptr_t before_handle{};
 };
 
 void collect_anchor_candidates(
@@ -177,7 +179,9 @@ void collect_anchor_candidates(
         const RawReplayNode& terminal = node.children.back();
         if (reaches_key(model, terminal.logical_key, options)) {
             candidates.push_back({0, node.instruction_id, node.logical_key,
-                                  terminal.logical_key, depth});
+                                  terminal.logical_key, depth,
+                                  node.runtime_handle,
+                                  terminal.runtime_handle});
         }
     }
     for (const RawReplayNode& child : node.children) {
@@ -248,13 +252,16 @@ BattleConditionTreeBuild BuildBattleConditionTree(
         if (!reaches_key(*result.model, node.logical_key, options)) continue;
 
         result.scope.reachable_deployment_keys.push_back(node.logical_key);
+        result.scope.reachable_deployment_handles.push_back(
+            node.runtime_handle);
         for (auto ancestor = location.ancestors.rbegin();
              ancestor != location.ancestors.rend(); ++ancestor) {
             if (has_final_terminator(**ancestor)) {
                 const RawReplayNode& terminal = (**ancestor).children.back();
                 deployment_anchors.push_back({node.instruction_id,
                     (**ancestor).instruction_id, (**ancestor).logical_key,
-                    terminal.logical_key, location.ancestors.size()});
+                    terminal.logical_key, location.ancestors.size(),
+                    (**ancestor).runtime_handle, terminal.runtime_handle});
                 break;
             }
         }
@@ -300,6 +307,8 @@ BattleConditionTreeBuild BuildBattleConditionTree(
                 if (common_anchor) {
                     anchor.parent_key = common_candidate.parent_key;
                     anchor.before_key = common_candidate.before_key;
+                    anchor.parent_handle = common_candidate.parent_handle;
+                    anchor.before_handle = common_candidate.before_handle;
                 } else {
                     anchor.diagnostic = std::wstring(L"当前可达出场指令没有共同的子事件锚点，无法安全插入缺少的 ") +
                         (instruction_id == 0x4b ? L"0x4B" :
@@ -318,6 +327,8 @@ BattleConditionTreeBuild BuildBattleConditionTree(
                 if (unique) {
                     anchor.parent_key = first->parent_key;
                     anchor.before_key = first->before_key;
+                    anchor.parent_handle = first->parent_handle;
+                    anchor.before_handle = first->before_handle;
                 } else {
                     anchor.diagnostic = std::wstring(L"当前可达分支中的 ") +
                         (instruction_id == 0x4b ? L"0x4B" :
@@ -386,6 +397,7 @@ BattleConditionTreeBuild BuildBattleConditionTree(
                     candidates.front().parent_key;
                 result.scope.insert_before_key =
                     candidates.front().before_key;
+                result.scope.insertion_anchors.clear();
                 result.scope.insertion_anchor_resolved = true;
             }
         }

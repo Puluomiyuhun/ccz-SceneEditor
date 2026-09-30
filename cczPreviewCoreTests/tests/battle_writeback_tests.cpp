@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 
 namespace {
 
@@ -183,6 +184,10 @@ BattleWritebackSectionSnapshot section_snapshot() {
     snapshot.insert_before_key = L"scope|event-end";
     return snapshot;
 }
+
+BattleWritebackSourceInstruction four_b_source(const wchar_t* key,
+                                                int ordinal);
+BattleUnit existing_four_b(const wchar_t* key);
 
 CCZ_TEST(battle_writeback_capture_builds_scoped_snapshot_and_insert_anchors) {
     auto baseline = writeback_capture(77);
@@ -364,15 +369,164 @@ CCZ_TEST(battle_writeback_capture_rejects_stale_or_cross_scope_snapshot) {
 
     current = writeback_capture(77);
     current.input.section_revision = 99;
-    CCZ_REQUIRE(!ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
-        baseline, current, snapshot, diagnostic));
-    CCZ_REQUIRE(snapshot.instructions.empty());
+    current.snapshot.section_root.children[0].children[0].int_data[1] = 6;
+    current.input.nodes[0].children[0].children[0].command.int_data[1] = 6;
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
+        baseline, current, snapshot, diagnostic,
+        ccz::editor_preview::BattleWritebackRevisionScope::PinnedSection));
+    CCZ_REQUIRE_EQ(snapshot.instructions.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(snapshot.instructions[0].origin_int_data[1], 0);
+    CCZ_REQUIRE_EQ(snapshot.instructions[0].current_int_data[1], 6);
 
     current = writeback_capture(77);
     current.input.scope_key = L"S|scene:1|section:0";
     CCZ_REQUIRE(!ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
         baseline, current, snapshot, diagnostic));
     CCZ_REQUIRE(snapshot.instructions.empty());
+}
+
+CCZ_TEST(battle_writeback_plan_merges_disjoint_live_and_preview_fields) {
+    BattlePreviewState state;
+    BattleUnit unit = existing_four_b(L"scope|unit-4b");
+    unit.editor_cache_id = 1;
+    unit.position = {9, 4};
+    ccz::preview::mark_battle_field_dirty(
+        unit, ccz::preview::BattleFieldRole::X);
+    state.units.push_back(unit);
+
+    auto source = four_b_source(L"scope|unit-4b", 10);
+    source.origin_int_data[0] = 0;
+    source.origin_int_data[1] = 3;
+    source.origin_int_data[2] = 4;
+    source.origin_int_data[3] = 1;
+    source.origin_int_data[4] = 0;
+    source.current_int_data = source.origin_int_data;
+    source.current_int_data[2] = 6;  // User changed Y in the script tree.
+    auto snapshot = section_snapshot();
+    snapshot.instructions.push_back(source);
+
+    const auto plan = ccz::editor_preview::BuildBattleWritebackPlan(
+        state, L"scope", snapshot);
+    CCZ_REQUIRE(plan.ok);
+    CCZ_REQUIRE_EQ(plan.changes.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(plan.changes[0].int_data[1], 9);
+    CCZ_REQUIRE_EQ(plan.changes[0].int_data[2], 6);
+}
+
+CCZ_TEST(battle_writeback_plan_rejects_true_same_field_conflict) {
+    BattlePreviewState state;
+    BattleUnit unit = existing_four_b(L"scope|unit-4b");
+    unit.editor_cache_id = 1;
+    unit.position = {9, 4};
+    ccz::preview::mark_battle_field_dirty(
+        unit, ccz::preview::BattleFieldRole::X);
+    state.units.push_back(unit);
+
+    auto source = four_b_source(L"scope|unit-4b", 10);
+    source.origin_int_data[0] = 0;
+    source.origin_int_data[1] = 3;
+    source.origin_int_data[2] = 4;
+    source.origin_int_data[3] = 1;
+    source.origin_int_data[4] = 0;
+    source.current_int_data = source.origin_int_data;
+    source.current_int_data[1] = 8;  // Both sides changed PositionX.
+    auto snapshot = section_snapshot();
+    snapshot.instructions.push_back(source);
+
+    const auto plan = ccz::editor_preview::BuildBattleWritebackPlan(
+        state, L"scope", snapshot);
+    CCZ_REQUIRE(!plan.ok);
+    CCZ_REQUIRE(plan.changes.empty());
+    CCZ_REQUIRE(plan.diagnostic.find(L"冲突") != std::wstring::npos);
+}
+
+CCZ_TEST(battle_writeback_capture_uses_selected_instruction_when_no_deployments_exist) {
+    auto baseline = writeback_capture(77);
+    auto current = writeback_capture(77);
+    auto make_empty = [](BattlePreviewCapture& capture) {
+        auto& event = capture.snapshot.section_root.children[0];
+        auto& raw_event = capture.input.nodes[0].children[0];
+        event.children.erase(event.children.begin());
+        raw_event.children.erase(raw_event.children.begin());
+
+        CapturedEditorNode selected;
+        selected.runtime_handle = 104;
+        selected.instruction_id = 0x27;
+        selected.ordinal = 17;
+        selected.int_data.assign(20, 0);
+        RawReplayNode raw_selected;
+        raw_selected.runtime_handle = 104;
+        raw_selected.logical_key =
+            L"S|scene:0|section:0|instruction:0/0|instruction:39";
+        raw_selected.instruction_id = 0x27;
+        raw_selected.command.instruction_id = 0x27;
+        raw_selected.command.int_data.assign(20, 0);
+        event.children.insert(event.children.begin(), selected);
+        raw_event.children.insert(raw_event.children.begin(), raw_selected);
+        capture.snapshot.selected_path = {0, 0};
+    };
+    make_empty(baseline);
+    make_empty(current);
+
+    ccz::editor_preview::BattleWritebackReachabilityScope reachability;
+    reachability.filter_deployments = true;
+    BattleWritebackSectionSnapshot snapshot;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
+        baseline, current, snapshot, diagnostic,
+        ccz::editor_preview::BattleWritebackRevisionScope::PinnedSection,
+        &reachability));
+    CCZ_REQUIRE_EQ(snapshot.insert_parent_key,
+        std::wstring(L"S|scene:0|section:0|instruction:0"));
+    CCZ_REQUIRE_EQ(snapshot.insert_before_key,
+        std::wstring(L"S|scene:0|section:0|instruction:0/1|instruction:0"));
+    CCZ_REQUIRE_EQ(snapshot.insertion_anchors.size(), std::size_t(3));
+    CCZ_REQUIRE(std::all_of(snapshot.insertion_anchors.begin(),
+        snapshot.insertion_anchors.end(), [](const auto& anchor) {
+            return anchor.resolved;
+        }));
+}
+
+CCZ_TEST(battle_writeback_capture_uses_selected_anchor_without_condition_scope) {
+    auto baseline = writeback_capture(77);
+    auto current = writeback_capture(77);
+    for (BattlePreviewCapture* capture : {&baseline, &current}) {
+        auto& event = capture->snapshot.section_root.children[0];
+        auto& raw_event = capture->input.nodes[0].children[0];
+        event.children.erase(event.children.begin());
+        raw_event.children.erase(raw_event.children.begin());
+
+        CapturedEditorNode selected;
+        selected.runtime_handle = 104;
+        selected.instruction_id = 0x27;
+        selected.ordinal = 17;
+        selected.int_data.assign(20, 0);
+        RawReplayNode raw_selected;
+        raw_selected.runtime_handle = 104;
+        raw_selected.logical_key =
+            L"S|scene:0|section:0|instruction:0/0|instruction:39";
+        raw_selected.instruction_id = 0x27;
+        raw_selected.command.instruction_id = 0x27;
+        raw_selected.command.int_data.assign(20, 0);
+        event.children.insert(event.children.begin(), selected);
+        raw_event.children.insert(raw_event.children.begin(), raw_selected);
+        capture->snapshot.selected_path = {0, 0};
+    }
+
+    BattleWritebackSectionSnapshot snapshot;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleWritebackSectionSnapshot(
+        baseline, current, snapshot, diagnostic,
+        ccz::editor_preview::BattleWritebackRevisionScope::PinnedSection));
+    CCZ_REQUIRE_EQ(snapshot.insert_parent_key,
+        std::wstring(L"S|scene:0|section:0|instruction:0"));
+    CCZ_REQUIRE_EQ(snapshot.insert_before_key,
+        std::wstring(L"S|scene:0|section:0|instruction:0/1|instruction:0"));
+    CCZ_REQUIRE_EQ(snapshot.insertion_anchors.size(), std::size_t(3));
+    CCZ_REQUIRE(std::all_of(snapshot.insertion_anchors.begin(),
+        snapshot.insertion_anchors.end(), [](const auto& anchor) {
+            return anchor.resolved;
+        }));
 }
 
 CCZ_TEST(battle_writeback_capture_allows_changes_outside_pinned_section) {
@@ -460,7 +614,7 @@ CCZ_TEST(battle_writeback_native_batch_rejects_stale_or_duplicate_nodes_atomical
     CCZ_REQUIRE(batch.changes.empty());
 }
 
-CCZ_TEST(battle_writeback_native_batch_rejects_nonterminal_insert_anchor) {
+CCZ_TEST(battle_writeback_native_batch_accepts_selected_sibling_insert_anchor) {
     const auto capture = writeback_capture(77);
     ccz::editor_preview::BattleWritebackPlanBuild plan;
     plan.ok = true;
@@ -476,8 +630,10 @@ CCZ_TEST(battle_writeback_native_batch_rejects_nonterminal_insert_anchor) {
 
     const auto batch = ccz::editor_preview::BuildBattleWritebackNativeBatch(
         plan, capture, L"S|scene:0|section:0");
-    CCZ_REQUIRE(!batch.ok);
-    CCZ_REQUIRE(batch.changes.empty());
+    CCZ_REQUIRE(batch.ok);
+    CCZ_REQUIRE_EQ(batch.changes.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(batch.changes[0].insert_before_handle, std::uintptr_t(102));
+    CCZ_REQUIRE_EQ(batch.changes[0].insert_terminal_handle, std::uintptr_t(103));
 }
 
 BattleWritebackSourceInstruction fixed_source(
@@ -589,6 +745,11 @@ BattleEditorState brush_placement_state() {
     state.battle.map.width = 8;
     state.battle.map.height = 8;
     state.battle.terrain.assign(64, 0);
+    auto movement_terrain = std::make_shared<
+        ccz::preview::BattleMovementTerrainTable>();
+    movement_terrain->valid = true;
+    movement_terrain->values.fill(1);
+    state.movement_terrain = std::move(movement_terrain);
     for (int data_id = 358; data_id <= 365; ++data_id) {
         ccz::editor_preview::BattleCharacterEntry entry;
         entry.data_id = data_id;
@@ -598,6 +759,7 @@ BattleEditorState brush_placement_state() {
         entry.level = 3;
         entry.unit_type = 1;
         entry.ai_policy = 1;
+        entry.movement_class_code = 0;
         state.characters.entries.push_back(std::move(entry));
     }
     state.minion_brushes.push_back({L"test brush", 358, 365});
@@ -716,6 +878,147 @@ public:
         state.next_ordinal = ordinal + 1;
         RefreshRevision();
         return true;
+    }
+
+    bool InsertBattleFourBGroup(std::uintptr_t parent_handle,
+        std::uintptr_t after_handle, const std::wstring& label,
+        const std::vector<std::vector<std::int32_t>>& records,
+        int first_ordinal, std::uintptr_t& marker_handle,
+        std::uintptr_t& group_handle,
+        std::vector<std::uintptr_t>& record_handles,
+        std::uintptr_t& terminal_handle) override {
+        marker_handle = group_handle = terminal_handle = 0;
+        record_handles.clear();
+        if (FailOnce(L"group-insert") || label != L"我军出场" ||
+            records.empty() || first_ordinal != state.next_ordinal ||
+            nodes.find(parent_handle) == nodes.end() ||
+            children.find(parent_handle) == children.end()) return false;
+        for (const auto& record : records)
+            if (record.size() != 20) return false;
+
+        auto& siblings = children[parent_handle];
+        std::size_t insert_index = 0;
+        if (after_handle != 0) {
+            const auto after = std::find(siblings.begin(), siblings.end(),
+                                         after_handle);
+            if (after == siblings.end()) return false;
+            insert_index = static_cast<std::size_t>(after - siblings.begin()) + 1;
+        }
+        marker_handle = next_handle++;
+        group_handle = next_handle++;
+        AddNode(marker_handle, parent_handle, 1, first_ordinal,
+                0, 0, {});
+        AddNode(group_handle, parent_handle, 2, first_ordinal + 1,
+                0, 0, {});
+        nodes[group_handle].long_text = label;
+        nodes[group_handle].has_long_text = true;
+        siblings.insert(siblings.begin() + static_cast<std::ptrdiff_t>(insert_index),
+                        marker_handle);
+        siblings.insert(siblings.begin() + static_cast<std::ptrdiff_t>(insert_index + 1),
+                        group_handle);
+        auto& group_children = children[group_handle];
+        record_handles.reserve(records.size());
+        for (std::size_t index = 0; index < records.size(); ++index) {
+            const std::uintptr_t handle = next_handle++;
+            AddNode(handle, group_handle, 0x4b,
+                    first_ordinal + 3 + static_cast<int>(index),
+                    0, 0, records[index]);
+            record_handles.push_back(handle);
+            group_children.push_back(handle);
+        }
+        terminal_handle = next_handle++;
+        AddNode(terminal_handle, group_handle, 0,
+                first_ordinal + 2, 0, 0, {});
+        group_children.push_back(terminal_handle);
+        state.next_ordinal = first_ordinal +
+            static_cast<int>(records.size()) + 3;
+        RefreshRevision();
+        return true;
+    }
+
+    bool DeleteBattleFourBGroup(std::uintptr_t marker_handle,
+        std::uintptr_t group_handle) override {
+        if (FailOnce(L"group-delete")) return false;
+        const auto marker = nodes.find(marker_handle);
+        const auto group = nodes.find(group_handle);
+        if (marker == nodes.end() || group == nodes.end() ||
+            marker->second.instruction_id != 1 ||
+            group->second.instruction_id != 2 ||
+            group->second.long_text != L"我军出场" ||
+            marker->second.parent_handle != group->second.parent_handle)
+            return false;
+        auto siblings = children.find(marker->second.parent_handle);
+        auto group_children = children.find(group_handle);
+        if (siblings == children.end() || group_children == children.end() ||
+            group_children->second.size() < 2 ||
+            group_children->second.back() == 0) return false;
+        const auto marker_position = std::find(siblings->second.begin(),
+            siblings->second.end(), marker_handle);
+        if (marker_position == siblings->second.end() ||
+            marker_position + 1 == siblings->second.end() ||
+            *(marker_position + 1) != group_handle) return false;
+        for (std::size_t index = 0;
+             index + 1 < group_children->second.size(); ++index) {
+            const auto record = nodes.find(group_children->second[index]);
+            if (record == nodes.end() || record->second.instruction_id != 0x4b ||
+                record->second.int_data.size() != 20) return false;
+        }
+        const auto terminal = nodes.find(group_children->second.back());
+        if (terminal == nodes.end() || terminal->second.instruction_id != 0 ||
+            !terminal->second.int_data.empty()) return false;
+
+        const std::uintptr_t parent_handle = marker->second.parent_handle;
+        if (state.selected_handle == marker_handle ||
+            state.selected_handle == group_handle ||
+            std::find(group_children->second.begin(), group_children->second.end(),
+                      state.selected_handle) != group_children->second.end())
+            state.selected_handle = parent_handle;
+        for (const std::uintptr_t handle : group_children->second)
+            nodes.erase(handle);
+        children.erase(group_children);
+        nodes.erase(group_handle);
+        siblings = children.find(parent_handle);
+        const auto erase_handle = [&siblings](std::uintptr_t handle) {
+            const auto found = std::find(siblings->second.begin(),
+                                         siblings->second.end(), handle);
+            if (found != siblings->second.end()) siblings->second.erase(found);
+        };
+        erase_handle(group_handle);
+        erase_handle(marker_handle);
+        nodes.erase(marker_handle);
+        RefreshRevision();
+        return true;
+    }
+
+    bool RestoreBattleFourBGroupBefore(std::uintptr_t parent_handle,
+        std::uintptr_t after_handle, std::uintptr_t before_handle,
+        const std::wstring& label,
+        const std::vector<std::vector<std::int32_t>>& records,
+        int first_ordinal, std::uintptr_t& marker_handle,
+        std::uintptr_t& group_handle,
+        std::vector<std::uintptr_t>& record_handles,
+        std::uintptr_t& terminal_handle) override {
+        if (FailOnce(L"group-restore")) return false;
+        const int next_ordinal = state.next_ordinal;
+        if (before_handle != 0) {
+            const auto& siblings = children[parent_handle];
+            const auto before = std::find(siblings.begin(), siblings.end(),
+                                          before_handle);
+            if (before == siblings.end())
+                return false;
+            if (after_handle != 0) {
+                const auto after = std::find(siblings.begin(), siblings.end(),
+                                             after_handle);
+                if (after == siblings.end() || after >= before) return false;
+            }
+        }
+        state.next_ordinal = first_ordinal;
+        const bool inserted = InsertBattleFourBGroup(parent_handle,
+            after_handle, label, records, first_ordinal, marker_handle,
+            group_handle, record_handles, terminal_handle);
+        state.next_ordinal = next_ordinal;
+        RefreshRevision();
+        return inserted;
     }
 
     bool DeleteBattleNode(std::uintptr_t handle) override {
@@ -1379,6 +1682,124 @@ CCZ_TEST(battle_writeback_native_transaction_inserts_all_three_new_unit_types) {
     CCZ_REQUIRE(!transaction.undo_available());
 }
 
+CCZ_TEST(battle_writeback_native_transaction_inserts_and_undoes_atomic_4b_group) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+
+    BattleWritebackNativeChange group;
+    group.kind = BattleWritebackChangeKind::InsertFourBGroup;
+    group.instruction_id = 0x4b;
+    group.parent_handle = 10;
+    group.insert_after_handle = 12;
+    group.insert_before_handle = 13;
+    group.insert_terminal_handle = 13;
+    group.source_ordinal = -1;
+    group.group_label = L"我军出场";
+    group.group_records = {std::vector<std::int32_t>(20, 11),
+                           std::vector<std::int32_t>(20, 22)};
+    group.group_records[0][0] = 0;
+    group.group_records[1][0] = 1;
+    batch.changes.push_back(std::move(group));
+
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x46;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.insert_terminal_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data.assign(1000, 46);
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    const auto siblings = host.Children(10);
+    CCZ_REQUIRE_EQ(siblings.size(), std::size_t(6));
+    CCZ_REQUIRE_EQ(siblings[0], std::uintptr_t(11));
+    CCZ_REQUIRE_EQ(siblings[1], std::uintptr_t(12));
+    const std::uintptr_t marker_handle = siblings[2];
+    const std::uintptr_t group_handle = siblings[3];
+    BattleWritebackNativeNodeSnapshot following_instruction;
+    CCZ_REQUIRE(host.CaptureNode(siblings[4], following_instruction));
+    CCZ_REQUIRE_EQ(following_instruction.instruction_id, std::uint16_t(0x46));
+    CCZ_REQUIRE_EQ(siblings[5], std::uintptr_t(13));
+
+    BattleWritebackNativeNodeSnapshot marker;
+    BattleWritebackNativeNodeSnapshot group_node;
+    CCZ_REQUIRE(host.CaptureNode(marker_handle, marker));
+    CCZ_REQUIRE(host.CaptureNode(group_handle, group_node));
+    CCZ_REQUIRE_EQ(marker.instruction_id, std::uint16_t(1));
+    CCZ_REQUIRE_EQ(group_node.instruction_id, std::uint16_t(2));
+    CCZ_REQUIRE_EQ(group_node.long_text, std::wstring(L"我军出场"));
+    const auto group_children = host.Children(group_handle);
+    CCZ_REQUIRE_EQ(group_children.size(), std::size_t(3));
+    CCZ_REQUIRE_EQ(host.FirstInt(group_children[0]), 0);
+    CCZ_REQUIRE_EQ(host.FirstInt(group_children[1]), 1);
+    BattleWritebackNativeNodeSnapshot terminal;
+    CCZ_REQUIRE(host.CaptureNode(group_children.back(), terminal));
+    CCZ_REQUIRE_EQ(terminal.instruction_id, std::uint16_t(0));
+    CCZ_REQUIRE_EQ(host.state.next_ordinal, 36);
+
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10),
+                   (std::vector<std::uintptr_t>{11, 12, 13}));
+    CCZ_REQUIRE(!host.NodeExists(marker_handle));
+    CCZ_REQUIRE(!host.NodeExists(group_handle));
+    CCZ_REQUIRE_EQ(host.state.next_ordinal, 30);
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_rolls_back_new_4b_group_after_late_failure) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    const auto initial_revision = host.state.document_revision;
+    host.FailNext(L"insert");
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange group;
+    group.kind = BattleWritebackChangeKind::InsertFourBGroup;
+    group.instruction_id = 0x4b;
+    group.parent_handle = 10;
+    group.insert_after_handle = 12;
+    group.insert_before_handle = 13;
+    group.insert_terminal_handle = 13;
+    group.source_ordinal = -1;
+    group.group_label = L"我军出场";
+    group.group_records = {std::vector<std::int32_t>(20, 7)};
+    batch.changes.push_back(std::move(group));
+
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x46;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.insert_terminal_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data.assign(1000, 46);
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE(!transaction.undo_available());
+    CCZ_REQUIRE_EQ(host.Children(10),
+                   (std::vector<std::uintptr_t>{11, 12, 13}));
+    CCZ_REQUIRE(host.NodeExists(11));
+    CCZ_REQUIRE(host.NodeExists(12));
+    CCZ_REQUIRE_EQ(host.state.next_ordinal, 30);
+    CCZ_REQUIRE(!host.state.custom_modified);
+    CCZ_REQUIRE(host.state.framework_modified);
+    CCZ_REQUIRE_EQ(host.state.document_revision, initial_revision);
+    CCZ_REQUIRE(diagnostic.find(L"完整回滚") != std::wstring::npos);
+    CCZ_REQUIRE(!host.NodeExists(std::uintptr_t(100)));
+}
+
 CCZ_TEST(battle_writeback_native_transaction_rolls_back_after_first_insert_when_second_fails) {
     using namespace ccz::editor_preview;
     FakeBattleWritebackNativeHost host;
@@ -1661,6 +2082,10 @@ CCZ_TEST(battle_writeback_position_adjustment_reaches_native_instruction_plan) {
     editor.battle.map.width = 16;
     editor.battle.map.height = 16;
     editor.battle.terrain.assign(16 * 16, 0);
+    // This imported 0x4B record has no Data ID in its native fields. This
+    // writeback-planning test is unrelated to terrain classification, so run
+    // the position adjustment with the explicit terrain-override mode.
+    editor.unrestricted_terrain_mode = true;
 
     BattleUnit unit = existing_four_b(L"scope|unit-4b");
     unit.position = {3, 4};
@@ -1700,6 +2125,7 @@ CCZ_TEST(battle_writeback_plan_creates_missing_categories_from_source_less_cache
     state.units.push_back(staged_unit(0x4b, 20, 1, 2, 1));
     state.units.push_back(staged_unit(0x46, 21, 3, 4, 2));
     state.units.push_back(staged_unit(0x47, 22, 5, 6, 3));
+    state.units.push_back(staged_unit(0x4b, 23, 7, 8, 4));
 
     const auto plan = ccz::editor_preview::BuildBattleWritebackPlan(
         state, L"scope", section_snapshot());
@@ -1707,12 +2133,17 @@ CCZ_TEST(battle_writeback_plan_creates_missing_categories_from_source_less_cache
     CCZ_REQUIRE(!plan.product_writeback_allowed);
     CCZ_REQUIRE_EQ(plan.changes.size(), static_cast<std::size_t>(3));
     CCZ_REQUIRE_EQ(plan.changes[0].kind,
-                   BattleWritebackChangeKind::InsertInstruction);
+                   BattleWritebackChangeKind::InsertFourBGroup);
     CCZ_REQUIRE_EQ(plan.changes[0].instruction_id, 0x4b);
-    CCZ_REQUIRE_EQ(plan.changes[0].int_data.size(), static_cast<std::size_t>(20));
+    CCZ_REQUIRE_EQ(plan.changes[0].group_label, std::wstring(L"我军出场"));
+    CCZ_REQUIRE_EQ(plan.changes[0].group_records.size(), std::size_t(2));
+    CCZ_REQUIRE_EQ(plan.changes[0].group_records[0].size(), std::size_t(20));
     // The character Data ID is editor-only for 0x4B; field 0 is a
     // deployment slot assigned by the writeback planner.
-    CCZ_REQUIRE_EQ(plan.changes[0].int_data[0], 0);
+    CCZ_REQUIRE_EQ(plan.changes[0].group_records[0][0], 0);
+    CCZ_REQUIRE_EQ(plan.changes[0].group_records[1][0], 1);
+    CCZ_REQUIRE_EQ(plan.changes[0].group_records[1][1], 7);
+    CCZ_REQUIRE_EQ(plan.changes[0].group_records[1][2], 8);
     CCZ_REQUIRE_EQ(plan.changes[1].instruction_id, 0x46);
     CCZ_REQUIRE_EQ(plan.changes[1].int_data.size(), static_cast<std::size_t>(1000));
     CCZ_REQUIRE_EQ(plan.changes[1].int_data[0], 21);
@@ -1726,6 +2157,20 @@ CCZ_TEST(battle_writeback_plan_creates_missing_categories_from_source_less_cache
     CCZ_REQUIRE_EQ(plan.changes[0].insert_before_key,
                    std::wstring(L"scope|event-end"));
     CCZ_REQUIRE_EQ(plan.changes[0].source_ordinal, -1);
+    const auto first_binding = std::find_if(plan.bindings.begin(),
+        plan.bindings.end(), [](const auto& binding) {
+            return binding.cache_id == 1;
+        });
+    const auto second_binding = std::find_if(plan.bindings.begin(),
+        plan.bindings.end(), [](const auto& binding) {
+            return binding.cache_id == 4;
+        });
+    CCZ_REQUIRE(first_binding != plan.bindings.end());
+    CCZ_REQUIRE(second_binding != plan.bindings.end());
+    CCZ_REQUIRE_EQ(first_binding->change_index, std::size_t(0));
+    CCZ_REQUIRE_EQ(first_binding->record_index, std::size_t(0));
+    CCZ_REQUIRE_EQ(second_binding->change_index, std::size_t(0));
+    CCZ_REQUIRE_EQ(second_binding->record_index, std::size_t(1));
 }
 
 CCZ_TEST(battle_writeback_plan_routes_new_instruction_types_to_distinct_child_events) {
@@ -1737,6 +2182,7 @@ CCZ_TEST(battle_writeback_plan_routes_new_instruction_types_to_distinct_child_ev
     auto snapshot = section_snapshot();
     snapshot.insert_parent_key.clear();
     snapshot.insert_before_key.clear();
+    snapshot.has_current_own_deployment_group = true;
     snapshot.insertion_anchors = {
         {0x4b, L"scope|event-4b", L"scope|end-4b", true, {}},
         {0x46, L"scope|event-46", L"scope|end-46", true, {}},

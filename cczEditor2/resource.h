@@ -162,6 +162,10 @@
 #define IDD_DIALOGEXIT                  384
 #define IDD_DIALOG105                   385
 #define IDD_DIALOG114                   386
+#define IDD_BATTLE_BATCH_WARNING        391
+#define IDC_BATTLE_BATCH_WARNING_TEXT   1027
+#define IDC_BATTLE_BATCH_OVERWRITE      1028
+#define IDC_BATTLE_BATCH_UNIFORM        1029
 #define IDD_DIALOGDUP                   387
 #define IDD_DIALOGEDIT                  388
 #define IDI_BIRD                        389
@@ -315,9 +319,9 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        391
+#define _APS_NEXT_RESOURCE_VALUE        392
 #define _APS_NEXT_COMMAND_VALUE         40062
-#define _APS_NEXT_CONTROL_VALUE         1027
+#define _APS_NEXT_CONTROL_VALUE         1030
 #define _APS_NEXT_SYMED_VALUE           311
 #endif
 #endif

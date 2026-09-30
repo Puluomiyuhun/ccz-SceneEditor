@@ -15,6 +15,7 @@ struct BattleConditionScope {
     // sources and insertion destination.
     ccz::preview::LogicalNodeKey workspace_key;
     std::vector<ccz::preview::LogicalNodeKey> reachable_deployment_keys;
+    std::vector<std::uintptr_t> reachable_deployment_handles;
     ccz::preview::LogicalNodeKey insert_parent_key;
     ccz::preview::LogicalNodeKey insert_before_key;
     std::vector<BattleDeploymentInsertionAnchor> insertion_anchors;

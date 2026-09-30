@@ -34,6 +34,7 @@ void decode_unit_fields(const BattleFieldSpec& spec, BattleUnit& unit) {
             break;
         case BattleFieldRole::DeploymentIndex:
             unit.deployment_index = value;
+            unit.battlefield_index = value;
             break;
         case BattleFieldRole::Hidden:
             unit.hidden = value != 0;
@@ -123,9 +124,16 @@ std::size_t effective_field_count(const BattleFieldSpec& spec,
     return stored_field_count;
 }
 
+void parse_siblings(
+    const std::vector<RawReplayNode>& siblings,
+    const BattleParseOptions& options, BattleParseResult& result,
+    bool& scope_seen,
+    std::map<std::uint16_t, std::size_t>& page_counters);
+
 void parse_node(const RawReplayNode& node, const BattleParseOptions& options,
                 BattleParseResult& result, bool& scope_seen,
-                std::map<std::uint16_t, std::size_t>& page_counters) {
+                std::map<std::uint16_t, std::size_t>& page_counters,
+                std::size_t adjacent_predecessors) {
     const bool selected = in_scope(node, options.scope_root_key);
     if (selected) {
         scope_seen = true;
@@ -138,9 +146,8 @@ void parse_node(const RawReplayNode& node, const BattleParseOptions& options,
                       node.logical_key) !=
                 options.reachable_deployment_keys.end();
         if (!deployment_reachable) {
-            for (const RawReplayNode& child : node.children) {
-                parse_node(child, options, result, scope_seen, page_counters);
-            }
+            parse_siblings(node.children, options, result, scope_seen,
+                           page_counters);
             return;
         }
         switch (node.instruction_id) {
@@ -215,6 +222,13 @@ void parse_node(const RawReplayNode& node, const BattleParseOptions& options,
                 unit.source_key = node.logical_key;
                 unit.record_index = row;
                 unit.page = static_cast<int>(page);
+                if (node.instruction_id == 0x46) {
+                    unit.battlefield_index = static_cast<int>(
+                        20 + adjacent_predecessors * 20 + row);
+                } else if (node.instruction_id == 0x47) {
+                    unit.battlefield_index = static_cast<int>(
+                        60 + adjacent_predecessors * 80 + row);
+                }
                 const auto begin = node.command.int_data.begin() +
                                    static_cast<std::ptrdiff_t>(row * spec->record_stride);
                 const auto end = begin +
@@ -230,8 +244,28 @@ void parse_node(const RawReplayNode& node, const BattleParseOptions& options,
         }
     }
 
-    for (const RawReplayNode& child : node.children) {
-        parse_node(child, options, result, scope_seen, page_counters);
+    parse_siblings(node.children, options, result, scope_seen,
+                   page_counters);
+}
+
+void parse_siblings(
+    const std::vector<RawReplayNode>& siblings,
+    const BattleParseOptions& options, BattleParseResult& result,
+    bool& scope_seen,
+    std::map<std::uint16_t, std::size_t>& page_counters) {
+    std::uint16_t previous_instruction = kContainerInstruction;
+    std::size_t adjacent_predecessors = 0;
+    bool has_previous = false;
+    for (const RawReplayNode& node : siblings) {
+        if (has_previous && node.instruction_id == previous_instruction) {
+            ++adjacent_predecessors;
+        } else {
+            adjacent_predecessors = 0;
+        }
+        parse_node(node, options, result, scope_seen, page_counters,
+                   adjacent_predecessors);
+        previous_instruction = node.instruction_id;
+        has_previous = true;
     }
 }
 
@@ -249,9 +283,8 @@ BattleParseResult parse_battle_instructions(
         return result;
     }
 
-    for (const RawReplayNode& node : document_nodes) {
-        parse_node(node, options, result, scope_seen, page_counters);
-    }
+    parse_siblings(document_nodes, options, result, scope_seen,
+                   page_counters);
 
     if (!scope_seen) {
         add_diagnostic(result, L"未找到指定的战场作用域");

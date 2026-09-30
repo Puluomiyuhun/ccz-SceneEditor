@@ -42,6 +42,10 @@ struct BattleUnit {
     // It is intentionally separate from data_id, which remains the visual /
     // roster identity when the editor has one in its temporary cache.
     int deployment_index{-1};
+    // UI-facing battle-list number.  0x4B uses deployment_index; 0x46/0x47
+    // derive this from their source sibling run and record row.  It must never
+    // be used as a Data ID or as an appearance lookup key.
+    int battlefield_index{-1};
     int page{};
     BattleCoord position{};
     int direction{};
