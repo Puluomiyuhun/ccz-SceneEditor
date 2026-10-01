@@ -50,6 +50,13 @@ inline int position_subject_index(PositionSourceKind kind) noexcept
 	return -1;
 }
 
+inline int position_direction_index(PositionSourceKind kind) noexcept
+{
+	if (kind == PositionSourceKind::ActorAppear) return 3;
+	if (kind == PositionSourceKind::ActorMove) return 5;
+	return -1;
+}
+
 inline bool PositionSourceMatchesInstruction(
 	const PositionSource& source,
 	const std::vector<int>& int_data) noexcept

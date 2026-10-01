@@ -124,6 +124,8 @@ PlaybackSegmentKind segment_kind_for(const ExecutionNode& node) {
         case 0x16:
         case 0x1c:
         case 0x2c:
+        case 0x33:
+        case 0x34:
         case 0x63:
         case 0x69:
         case 0x7a:

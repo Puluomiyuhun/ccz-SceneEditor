@@ -420,7 +420,11 @@ private:
 	void ReconcileCharacterSelection();
 	bool CommitCharacterStates(const std::vector<CharacterState>& states);
 	bool CommitCharacterStates(const std::vector<CharacterState>& states,
+		bool writeDirection);
+	bool CommitCharacterStates(const std::vector<CharacterState>& states,
 		const wchar_t* undoLabel);
+	bool CommitCharacterStates(const std::vector<CharacterState>& states,
+		const wchar_t* undoLabel, bool writeDirection);
 	bool CommitMapPortraitPosition(int personID, int x, int y);
 	PositionWritebackSource MakePositionSource(int instructionId, int subjectId,
 		HTREEITEM sourceItem) const;
@@ -451,6 +455,9 @@ private:
 		int oldY = 0;
 		int newX = 0;
 		int newY = 0;
+		bool directionChanged = false;
+		int oldDirection = 0;
+		int newDirection = 0;
 	};
 	struct PreviewUndoTransaction {
 		enum class Kind { Coordinate, Inserted };

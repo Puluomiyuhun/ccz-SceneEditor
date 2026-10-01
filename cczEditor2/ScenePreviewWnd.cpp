@@ -2618,11 +2618,24 @@ PositionWritebackSource CRScenePreviewPage::MakePositionSource(
 bool CRScenePreviewPage::CommitCharacterStates(
 	const std::vector<CharacterState>& states)
 {
-	return CommitCharacterStates(states, L"调整位置");
+	return CommitCharacterStates(states, L"调整位置", false);
+}
+
+bool CRScenePreviewPage::CommitCharacterStates(
+	const std::vector<CharacterState>& states, bool writeDirection)
+{
+	return CommitCharacterStates(states, L"调整位置", writeDirection);
 }
 
 bool CRScenePreviewPage::CommitCharacterStates(
 	const std::vector<CharacterState>& states, const wchar_t* undoLabel)
+{
+	return CommitCharacterStates(states, undoLabel, false);
+}
+
+bool CRScenePreviewPage::CommitCharacterStates(
+	const std::vector<CharacterState>& states, const wchar_t* undoLabel,
+	bool writeDirection)
 {
 	if (!m_pTreeCtrl || !m_hCurItem || states.empty()) return false;
 	CcczEditor2View* pView = GetActiveEditorView();
@@ -2648,11 +2661,18 @@ bool CRScenePreviewPage::CommitCharacterStates(
 			source = MakePositionSource(48, state.id, hAppear);
 		}
 		ItemData* data = (ItemData*)m_pTreeCtrl->GetItemData(source.item);
+		const int directionIndex = writeDirection
+			? ccz::scene_preview::position_direction_index(source.source.kind) : -1;
 		if (!data || data->id != source.source.instructionId ||
 			source.source.subjectId != state.id ||
+			source.source.xIndex < 0 || source.source.yIndex < 0 ||
 			!ccz::scene_preview::PositionSourceMatchesInstruction(
 				source.source, data->int_data) ||
-			(int)data->int_data.size() <= source.source.yIndex)
+			(int)data->int_data.size() <= source.source.xIndex ||
+			(int)data->int_data.size() <= source.source.yIndex ||
+			(writeDirection && (directionIndex < 0 ||
+				(int)data->int_data.size() <= directionIndex ||
+				state.direction < 0 || state.direction >= 4)))
 			return false;
 		pending.push_back({ source.item, source, &state });
 	}
@@ -2661,12 +2681,25 @@ bool CRScenePreviewPage::CommitCharacterStates(
 		ItemData* data = (ItemData*)m_pTreeCtrl->GetItemData(entry.item);
 		const int oldX = data->int_data[entry.source.source.xIndex];
 		const int oldY = data->int_data[entry.source.source.yIndex];
+		const int directionIndex = writeDirection
+			? ccz::scene_preview::position_direction_index(entry.source.source.kind) : -1;
+		const int oldDirection = writeDirection
+			? data->int_data[directionIndex] : 0;
 		data->int_data[entry.source.source.xIndex] = entry.state->x;
 		data->int_data[entry.source.source.yIndex] = entry.state->y;
+		if (writeDirection)
+			data->int_data[directionIndex] = entry.state->direction;
 		pView->UpdateShow(entry.item);
-		if (oldX != entry.state->x || oldY != entry.state->y) {
-			undoEntries.push_back({entry.item, entry.source.source, oldX, oldY,
-				entry.state->x, entry.state->y});
+		if (oldX != entry.state->x || oldY != entry.state->y ||
+			(writeDirection && oldDirection != entry.state->direction)) {
+			CoordinateUndoEntry undoEntry{
+				entry.item, entry.source.source, oldX, oldY,
+				entry.state->x, entry.state->y};
+			undoEntry.directionChanged = writeDirection &&
+				oldDirection != entry.state->direction;
+			undoEntry.oldDirection = oldDirection;
+			undoEntry.newDirection = entry.state->direction;
+			undoEntries.push_back(undoEntry);
 		}
 	}
 
@@ -2801,6 +2834,8 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 			const HTREEITEM item = FindCurrentTreeItem(tree, entry.item);
 			ItemData* data = item != nullptr
 				? reinterpret_cast<ItemData*>(tree.GetItemData(item)) : nullptr;
+			const int directionIndex = entry.directionChanged
+				? ccz::scene_preview::position_direction_index(entry.source.kind) : -1;
 			if (item == nullptr || data == nullptr ||
 				data->id != entry.source.instructionId ||
 				entry.source.xIndex < 0 || entry.source.yIndex < 0 ||
@@ -2809,7 +2844,10 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 				!ccz::scene_preview::PositionSourceMatchesInstruction(
 					entry.source, data->int_data) ||
 				data->int_data[entry.source.xIndex] != entry.newX ||
-				data->int_data[entry.source.yIndex] != entry.newY) {
+				data->int_data[entry.source.yIndex] != entry.newY ||
+				(entry.directionChanged && (directionIndex < 0 ||
+					static_cast<int>(data->int_data.size()) <= directionIndex ||
+					data->int_data[directionIndex] != entry.newDirection))) {
 				AppendDiagnostic(_T("撤回失败：目标指令已被其他编辑改变"));
 				return false;
 			}
@@ -2832,6 +2870,11 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 				tree.GetItemData(entry.item));
 			data->int_data[entry.source.xIndex] = entry.oldX;
 			data->int_data[entry.source.yIndex] = entry.oldY;
+			if (entry.directionChanged) {
+				const int directionIndex =
+					ccz::scene_preview::position_direction_index(entry.source.kind);
+				data->int_data[directionIndex] = entry.oldDirection;
+			}
 			pView->UpdateShow(entry.item);
 		}
 	} else {
@@ -4050,10 +4093,22 @@ void CRScenePreviewPage::OnPaint()
 	CPaintDC dc(this);
 	CRect clientRect;
 	GetClientRect(&clientRect);
-
 	// The canvas ends before the editor-owned condition controls.  Child
 	// windows are therefore never painted over by the scene renderer.
 	const CRect canvasRect = SceneCanvasRect(clientRect);
+	// OnEraseBkgnd is suppressed. Clear only page bands outside the off-screen
+	// canvas, never the canvas itself: clearing the whole client here exposed a
+	// blank frame on every mouse-move repaint before the back-buffer BitBlt.
+	const CRect uncoveredRects[] = {
+		CRect(clientRect.left, clientRect.top, clientRect.right, canvasRect.top),
+		CRect(clientRect.left, canvasRect.bottom, clientRect.right, clientRect.bottom),
+		CRect(clientRect.left, canvasRect.top, canvasRect.left, canvasRect.bottom),
+		CRect(canvasRect.right, canvasRect.top, clientRect.right, canvasRect.bottom)
+	};
+	for (const auto& uncoveredRect : uncoveredRects) {
+		if (uncoveredRect.Width() > 0 && uncoveredRect.Height() > 0)
+			dc.FillSolidRect(uncoveredRect, RGB(32, 32, 32));
+	}
 
 	if (canvasRect.Width() <= 0 || canvasRect.Height() <= 0) return;
 
@@ -4310,8 +4365,19 @@ void CRScenePreviewPage::OnPaint()
 		Gdiplus::Font infoFont(L"Microsoft YaHei", 9);
 		Gdiplus::SolidBrush infoBrush(Gdiplus::Color(200, 200, 200, 200));
 
+		const bool outerScene = renderState.coordinateSpace ==
+			ccz::scene_preview::SceneCoordinateSpace::OuterPixels;
+		const bool innerScene = renderState.coordinateSpace ==
+			ccz::scene_preview::SceneCoordinateSpace::InnerLogical;
+		const wchar_t* sceneLabel = outerScene ? L"外场景" :
+			innerScene ? L"内场景" : L"场景未知";
+		int displayedMapNumber = -1;
+		ccz::scene_preview::try_resolve_background_script_number(
+			renderState.mapImageIndex, displayedMapNumber);
+
 		CString info;
-		info.Format(_T("地图:%d  角色:%d  地图头像:%d"), renderState.mapID,
+		info.Format(_T("%s  地图号:%d  角色:%d  地图头像:%d"), sceneLabel,
+			displayedMapNumber,
 			(int)renderState.characters.size(),
 			(int)renderState.mapPortraits.items().size());
 		if (!m_debugInfo.IsEmpty()) {
@@ -4331,7 +4397,7 @@ void CRScenePreviewPage::OnPaint()
 				m_bPortraitPlaceMode || m_bPortraitMoveMode ||
 				renderState.coordinateSpace == ccz::scene_preview::SceneCoordinateSpace::OuterPixels;
 			const wchar_t* coordinateLabel = outerPixels ?
-				L"外场景像素坐标" : L"内场景逻辑坐标";
+				L"像素坐标" : L"逻辑坐标";
 			CString posStr;
 			if (m_bSnapped && inDragMode) {
 				posStr.Format(_T("  %s:(%d,%d) [吸附]"), coordinateLabel, game.x, game.y);
@@ -4747,7 +4813,7 @@ void CRScenePreviewPage::OnLButtonDown(UINT nFlags, CPoint point)
 		return;
 	}
 
-	// 调整位置模式：放下角色,修改当前有效的出现/移动坐标。
+	// 调整位置模式：确认时修改当前有效的出现/移动指令坐标和朝向。
 	if (m_bAdjustMode && m_adjustCharID >= 0) {
 		ReleaseCapture();
 		CPoint game = m_snappedGamePos; // OnMouseMove中已计算(含吸附)
@@ -4765,7 +4831,7 @@ void CRScenePreviewPage::OnLButtonDown(UINT nFlags, CPoint point)
 			}
 		}
 		if (foundAdjustedState)
-			CommitCharacterStates({ adjustedState });
+			CommitCharacterStates({ adjustedState }, true);
 		m_bAdjustMode = false;
 		m_adjustCharID = -1;
 		m_bSnapped = false;
@@ -5906,7 +5972,7 @@ BOOL CRScenePreviewPage::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 
 	// 调整位置模式
 	if (m_bAdjustMode && m_adjustCharID >= 0) {
-		// 方向/动作调整使用独立指令，不改写位置来源指令中的当前状态。
+		// Shift+滚轮保留动作指令行为；普通滚轮仅暂存朝向，确认时再写回。
 		if (shiftDown) {
 			int action = 0;
 			for (const auto& ch : m_state.characters) {
@@ -5917,14 +5983,13 @@ BOOL CRScenePreviewPage::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 			}
 			InsertActionInstruction(m_adjustCharID, action);
 		} else {
-			int direction = 0;
-			for (const auto& ch : m_state.characters) {
+			for (auto& ch : m_state.characters) {
 				if (ch.id == m_adjustCharID) {
-					direction = (ch.direction + delta + 4) % 4;
+					ch.direction = (ch.direction + delta + 4) % 4;
 					break;
 				}
 			}
-			InsertTurnInstruction(m_adjustCharID, direction);
+			Invalidate();
 		}
 		return TRUE;
 	}

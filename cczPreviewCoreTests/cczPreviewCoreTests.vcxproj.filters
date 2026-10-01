@@ -19,6 +19,7 @@
     </ClInclude>
     <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleEditorOps.h"><Filter>tests</Filter></ClInclude>
     <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleCharacterCatalog.h"><Filter>tests</Filter></ClInclude>
+    <ClInclude Include="..\cczEditor2\TextWrapEditSession.h"><Filter>tests</Filter></ClInclude>
     <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleWritebackAdapter.h"><Filter>tests</Filter></ClInclude>
     <ClCompile Include="tests\test_main.cpp">
       <Filter>tests</Filter>
@@ -36,6 +37,7 @@
     <ClCompile Include="tests\instruction_catalog_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\script_variable_index_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\variable_control_state_tests.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="tests\text_wrap_edit_session_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\free_r_preview_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\free_r_replay_composer_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="tests\battle_mode_classifier_tests.cpp"><Filter>tests</Filter></ClCompile>
@@ -57,6 +59,7 @@
     <ClCompile Include="..\tests\preview_integration\battle_character_catalog_tests.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleWritebackAdapter.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleEditorOps.cpp"><Filter>tests</Filter></ClCompile>
+    <ClCompile Include="..\cczEditor2\TextWrapEditSession.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleCharacterCatalog.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\EditorPreviewAdapter.cpp"><Filter>tests</Filter></ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewAdapter.cpp"><Filter>tests</Filter></ClCompile>

@@ -1587,17 +1587,56 @@ CCZ_TEST(battle_editor_multi_selection_filters_and_removes_one_unit) {
     BattleEditorOps operations(state);
 
     CCZ_REQUIRE(operations.AddSelectionAt({0, 0}).ok);
+    CCZ_REQUIRE(!state.selection.has_value());
     CCZ_REQUIRE(operations.AddSelectionAt({1, 0}).ok);
     CCZ_REQUIRE(operations.AddSelectionAt({2, 0}).ok);
     CCZ_REQUIRE(operations.AddSelectionAt({1, 0}).ok);
     CCZ_REQUIRE_EQ(state.selection_group.size(), std::size_t{3});
+    CCZ_REQUIRE(!state.selection.has_value());
     CCZ_REQUIRE(operations.RemoveSelectionAt({1, 0}).ok);
     CCZ_REQUIRE_EQ(state.selection_group.size(), std::size_t{2});
+    CCZ_REQUIRE(!state.selection.has_value());
     CCZ_REQUIRE(operations.FilterSelectionByDeployment(0x47).ok);
     CCZ_REQUIRE_EQ(state.selection_group.size(), std::size_t{1});
     CCZ_REQUIRE_EQ(state.selection_group.front().cache_id,
                    state.battle.units[2].editor_cache_id);
+    CCZ_REQUIRE(!state.selection.has_value());
     CCZ_REQUIRE(operations.ClearSelectionGroup().ok);
+    CCZ_REQUIRE(state.selection_group.empty());
+    CCZ_REQUIRE(!state.selection.has_value());
+}
+
+CCZ_TEST(battle_editor_toggle_selection_has_no_automatic_primary_or_rotation) {
+    BattleEditorState state = fixture();
+    state.battle.units.clear();
+    state.mode = BattleEditorMode::Select;
+    state.battle.units.push_back(unit(0x4b, 0, 0, 10, 0, 0));
+    state.battle.units.push_back(unit(0x46, 0, 0, 20, 1, 0));
+    state.battle.units.push_back(unit(0x47, 0, 0, 30, 2, 0));
+    BattleEditorOps operations(state);
+
+    CCZ_REQUIRE(operations.SelectAt({0, 0}).ok);
+    const auto added_first = operations.ToggleSelectionAt({1, 0});
+    CCZ_REQUIRE(added_first.ok);
+    CCZ_REQUIRE(added_first.changed);
+    CCZ_REQUIRE_EQ(state.selection_group.size(), std::size_t{1});
+    CCZ_REQUIRE_EQ(state.selection_group.front().cache_id,
+                   state.battle.units[1].editor_cache_id);
+    CCZ_REQUIRE(!state.selection.has_value());
+
+    CCZ_REQUIRE(operations.ToggleSelectionAt({2, 0}).ok);
+    CCZ_REQUIRE_EQ(state.selection_group.size(), std::size_t{2});
+    CCZ_REQUIRE(!state.selection.has_value());
+
+    const auto removed_first = operations.ToggleSelectionAt({1, 0});
+    CCZ_REQUIRE(removed_first.ok);
+    CCZ_REQUIRE(removed_first.changed);
+    CCZ_REQUIRE_EQ(state.selection_group.size(), std::size_t{1});
+    CCZ_REQUIRE_EQ(state.selection_group.front().cache_id,
+                   state.battle.units[2].editor_cache_id);
+    CCZ_REQUIRE(!state.selection.has_value());
+
+    CCZ_REQUIRE(operations.ToggleSelectionAt({2, 0}).ok);
     CCZ_REQUIRE(state.selection_group.empty());
     CCZ_REQUIRE(!state.selection.has_value());
 }
@@ -1771,6 +1810,68 @@ CCZ_TEST(battle_editor_multi_move_cancel_discards_preview_direction) {
     CCZ_REQUIRE(!operations.CanUndo());
 }
 
+CCZ_TEST(battle_editor_single_move_cancel_discards_preview_direction) {
+    BattleEditorState state = fixture();
+    state.battle.units.clear();
+    state.battle.map.width = 8;
+    state.battle.map.height = 5;
+    state.battle.terrain.assign(40, 0);
+    state.mode = BattleEditorMode::Select;
+    state.battle.units.push_back(unit(0x46, 0, 0, 100, 1, 1));
+    state.battle.units[0].direction = 3;
+    state.battle.units[0].editor_origin_fields =
+        state.battle.units[0].raw_fields;
+    prepare_passable_movement_table(state);
+    BattleEditorOps operations(state);
+    CCZ_REQUIRE(operations.AddSelectionAt({1, 1}).ok);
+    const std::uint64_t selected = state.selection_group.front().cache_id;
+
+    CCZ_REQUIRE(operations.BeginPositionAdjustment(selected).ok);
+    CCZ_REQUIRE(operations.CycleDirection(1).ok);
+    const auto preview = operations.PreviewPositionAdjustment({3, 2});
+
+    CCZ_REQUIRE(preview.valid);
+    CCZ_REQUIRE_EQ(preview.unit.direction, 0);
+    CCZ_REQUIRE_EQ(state.battle.units[0].direction, 3);
+    const auto canceled = operations.CancelPositionAdjustment();
+
+    CCZ_REQUIRE(canceled.ok);
+    CCZ_REQUIRE_EQ(state.battle.units[0].direction, 3);
+    CCZ_REQUIRE((state.battle.units[0].position ==
+                 ccz::preview::BattleCoord{1, 1}));
+    CCZ_REQUIRE(!operations.CanUndo());
+}
+
+CCZ_TEST(battle_editor_single_move_commits_preview_direction_with_position) {
+    BattleEditorState state = fixture();
+    state.battle.units.clear();
+    state.battle.map.width = 8;
+    state.battle.map.height = 5;
+    state.battle.terrain.assign(40, 0);
+    state.mode = BattleEditorMode::Select;
+    state.battle.units.push_back(unit(0x46, 0, 0, 100, 1, 1));
+    state.battle.units[0].direction = 3;
+    state.battle.units[0].editor_origin_fields =
+        state.battle.units[0].raw_fields;
+    prepare_passable_movement_table(state);
+    BattleEditorOps operations(state);
+    CCZ_REQUIRE(operations.AddSelectionAt({1, 1}).ok);
+    const std::uint64_t selected = state.selection_group.front().cache_id;
+
+    CCZ_REQUIRE(operations.BeginPositionAdjustment(selected).ok);
+    CCZ_REQUIRE(operations.CycleDirection(1).ok);
+    const auto moved = operations.ConfirmPositionAdjustment({3, 2});
+
+    CCZ_REQUIRE(moved.ok);
+    CCZ_REQUIRE_EQ(state.battle.units[0].direction, 0);
+    CCZ_REQUIRE((state.battle.units[0].position ==
+                 ccz::preview::BattleCoord{3, 2}));
+    CCZ_REQUIRE(operations.Undo().ok);
+    CCZ_REQUIRE_EQ(state.battle.units[0].direction, 3);
+    CCZ_REQUIRE((state.battle.units[0].position ==
+                 ccz::preview::BattleCoord{1, 1}));
+}
+
 CCZ_TEST(battle_editor_multi_move_commits_shared_direction_with_position_once) {
     BattleEditorState state = fixture();
     state.battle.units.clear();
@@ -1863,7 +1964,7 @@ CCZ_TEST(battle_editor_rebase_preserves_multi_selection_by_source_identity) {
 
     CCZ_REQUIRE(rebased.ok);
     CCZ_REQUIRE_EQ(rebased.state.selection_group.size(), std::size_t{2});
-    CCZ_REQUIRE(rebased.state.selection.has_value());
+    CCZ_REQUIRE(!rebased.state.selection.has_value());
     for (const auto& selected : rebased.state.selection_group) {
         CCZ_REQUIRE(selected.cache_id != 0);
         CCZ_REQUIRE(std::any_of(rebased.state.battle.units.begin(),

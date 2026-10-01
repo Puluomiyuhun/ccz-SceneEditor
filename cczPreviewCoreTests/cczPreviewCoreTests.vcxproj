@@ -128,6 +128,7 @@
     <ClInclude Include="..\cczPreviewCore\include\ccz\preview\e5_archive.h" />
     <ClInclude Include="..\cczPreviewCore\include\ccz\preview\battle_movement_terrain.h" />
     <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleMovementTerrainResourceCache.h" />
+    <ClInclude Include="..\cczEditor2\TextWrapEditSession.h" />
     <ClCompile Include="tests\test_main.cpp" />
     <ClCompile Include="tests\dialogue_profile_tests.cpp" />
     <ClCompile Include="tests\dialogue_model_tests.cpp" />
@@ -142,6 +143,7 @@
     <ClCompile Include="tests\instruction_catalog_tests.cpp" />
     <ClCompile Include="tests\script_variable_index_tests.cpp" />
     <ClCompile Include="tests\variable_control_state_tests.cpp" />
+    <ClCompile Include="tests\text_wrap_edit_session_tests.cpp" />
     <ClCompile Include="tests\free_r_preview_tests.cpp" />
     <ClCompile Include="tests\free_r_replay_composer_tests.cpp" />
     <ClCompile Include="tests\battle_mode_classifier_tests.cpp" />
@@ -190,6 +192,9 @@
     </ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\FreeRPreviewResolver.cpp" />
     <ClCompile Include="..\cczEditor2\PreviewIntegration\FreeRReplayComposer.cpp" />
+    <ClCompile Include="..\cczEditor2\TextWrapEditSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\cczPreviewCore\cczPreviewCore.vcxproj">

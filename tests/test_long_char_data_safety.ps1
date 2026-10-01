@@ -47,12 +47,18 @@ Assert-Contains $view 'me->long_char_data_capacity' 'parser does not record the 
 Assert-Contains $doc 'newData->long_char_data_capacity' 'AddInstruction does not update capacity ownership'
 Assert-Contains $doc 'data->long_char_data_capacity' 'HTTP modification does not update capacity ownership'
 
-# The wrap-assist byte threshold is a per-line setting.  It must not be able
-# to create a value that the editor later rejects because the UTF-16 text
-# buffer has a smaller whole-value contract.  The dialog therefore needs both
-# an input limit and a capacity-aware wrap path.
-Assert-Contains $view 'ApplyAutoWrapForStorage' 'wrap dialogs do not route through the storage-capacity guard'
-Assert-Contains $view 'wrapped\.GetLength\(\)[\s\S]{0,120}kLongCharDataMaxLength' 'wrap path does not guard the whole UTF-16 value length'
+# The wrap-assist byte threshold is a per-line setting.  The edit session
+# tracks authored text separately from generated breaks and falls back to
+# unwrapped display text when CRLF expansion would exceed the storage limit.
+$wrapSessionPath = Join-Path $SourceRoot 'TextWrapEditSession.cpp'
+if (-not (Test-Path -LiteralPath $wrapSessionPath)) {
+    throw 'LONG_CHAR_DATA_TEST_FAIL: edit-session wrap implementation is missing'
+}
+$wrapSession = Get-Content -LiteralPath $wrapSessionPath -Raw
+Assert-Contains $view 'ApplyWrapTextChange\(edit1,\s*wrap_state,\s*limit\)' 'wrap dialogs do not apply tracked edit deltas'
+Assert-Contains $view 'InitializeWrapEdit\(edit1,\s*wrap_state,\s*str,\s*limit' 'wrap dialogs do not initialize edit-session state'
+Assert-Contains $wrapSession 'edit_text\.size\(\)\s*>\s*maximum_edit_length' 'wrap session does not guard whole-value edit length'
+Assert-Contains $wrapSession 'format_source\(result\.source_text,\s*0,\s*byte_count\)' 'wrap session does not fall back to unwrapped text when over capacity'
 Assert-Contains $view 'SetLimitText\(\s*static_cast<UINT>\(ccz::editor::kLongCharDataMaxLength\)' 'wrap dialogs do not constrain input to the storage contract'
 $limitCalls = ([regex]::Matches($view, 'SetLongTextInputLimit\(edit1\)')).Count
 if ($limitCalls -lt 3) {

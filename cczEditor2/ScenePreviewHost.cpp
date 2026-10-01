@@ -33,13 +33,40 @@ CScenePreviewWnd::Page CScenePreviewWnd::PageForPath(
 
 void CScenePreviewWnd::ShowPage(Page page)
 {
+	const bool pageChanged = m_activePage != page;
 	m_activePage = page;
-	if (m_rPage.GetSafeHwnd() != nullptr)
-		m_rPage.ShowWindow(page == Page::RScene ? SW_SHOW : SW_HIDE);
-	if (m_sPage.GetSafeHwnd() != nullptr)
-		m_sPage.ShowWindow(page == Page::SBattle ? SW_SHOW : SW_HIDE);
-	if (m_neutralLabel.GetSafeHwnd() != nullptr)
-		m_neutralLabel.ShowWindow(page == Page::Neutral ? SW_SHOW : SW_HIDE);
+	if (m_rPage.GetSafeHwnd() != nullptr) {
+		if (page != Page::RScene) m_rPage.ShowWindow(SW_HIDE);
+	}
+	if (m_sPage.GetSafeHwnd() != nullptr) {
+		if (page != Page::SBattle) m_sPage.ShowWindow(SW_HIDE);
+	}
+	if (m_neutralLabel.GetSafeHwnd() != nullptr) {
+		if (page != Page::Neutral) m_neutralLabel.ShowWindow(SW_HIDE);
+	}
+
+	CWnd* activePage = nullptr;
+	switch (page) {
+	case Page::RScene:
+		activePage = &m_rPage;
+		break;
+	case Page::SBattle:
+		activePage = &m_sPage;
+		break;
+	case Page::Neutral:
+		activePage = &m_neutralLabel;
+		break;
+	}
+	if (activePage == nullptr || activePage->GetSafeHwnd() == nullptr)
+		return;
+
+	activePage->ShowWindow(SW_SHOW);
+	if (pageChanged) {
+		// A hidden page can retain valid pixels from before another preview was
+		// displayed. Repaint the full page and its child controls as one switch.
+		activePage->RedrawWindow(nullptr, nullptr,
+			RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+	}
 }
 
 int CScenePreviewWnd::OnCreate(LPCREATESTRUCT create)

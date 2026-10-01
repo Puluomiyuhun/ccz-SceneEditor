@@ -38,5 +38,18 @@ inline bool try_resolve_background_image_index(
     }
 }
 
+// The status bar shows the one-based number written in the script, while
+// rendering continues to use the zero-based Mmap.e5 image index.
+inline bool try_resolve_background_script_number(
+    int image_index, int& script_number) noexcept {
+    script_number = -1;
+    if (image_index < 0 ||
+        image_index == (std::numeric_limits<int>::max)()) {
+        return false;
+    }
+    script_number = image_index + 1;
+    return true;
+}
+
 }  // namespace scene_preview
 }  // namespace ccz

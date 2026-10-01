@@ -31,6 +31,7 @@ foreach ($marker in @(
 # separate undo item.
 foreach ($marker in @(
         'const int oldX =', 'const int oldY =',
+        'directionChanged', 'oldDirection', 'newDirection',
         'RecordCoordinateUndo(undoLabel',
         'CommitMapPortraitPosition',
         'RecordInsertedUndo(',
@@ -39,6 +40,18 @@ foreach ($marker in @(
         'PositionSourceMatchesInstruction')) {
     if (-not $source.Contains($marker)) {
         throw "PREVIEW_WRITEBACK_UNDO_FAIL: missing transactional marker $marker"
+    }
+}
+
+# R adjust-position writes facing together with coordinates and its grouped
+# undo validates and restores that same direction field.
+foreach ($marker in @(
+        'position_direction_index(entry.source.kind)',
+        'data->int_data[directionIndex] = entry.state->direction',
+        'data->int_data[directionIndex] != entry.newDirection',
+        'data->int_data[directionIndex] = entry.oldDirection')) {
+    if (-not $source.Contains($marker)) {
+        throw "PREVIEW_WRITEBACK_UNDO_FAIL: facing transaction marker missing $marker"
     }
 }
 

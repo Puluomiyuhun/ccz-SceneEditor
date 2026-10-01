@@ -232,8 +232,12 @@ Assert-Text $collapsedToolbar 'm_writebackButton\.MoveWindow\(writebackX, toolba
     'The quick-mode, condition-tree, special-mode and writeback controls must share the collapsed toolbar row.'
 Assert-Text $collapsedToolbar 'controls\.push_back\(\{ &m_quickModeButton[\s\S]*?controls\.push_back\(\{ &m_copyPersonModeButton[\s\S]*?controls\.push_back\(\{ &m_unrestrictedTerrainModeButton[\s\S]*?controls\.push_back\(\{ &m_previewModeButton' `
     'The three checkbox controls must be consecutive before the pushbutton controls in the collapsed toolbar.'
-Assert-Text $page 'BS_AUTOCHECKBOX \| BS_MULTILINE \| BS_VCENTER' `
-    'All three preview-mode checkboxes must vertically center their captions.'
+$modeControls = Get-FunctionBlock $page 'void CSBattlePreviewPage::CreateEditorControls()'
+Assert-Text $modeControls 'm_quickModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER[\s\S]*?m_copyPersonModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER[\s\S]*?m_unrestrictedTerrainModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER' `
+    'All three preview-mode checkboxes must use single-line text with vertical centering.'
+if ($modeControls -match 'm_(quickMode|copyPersonMode|unrestrictedTerrainMode)Button\.Create[\s\S]*?BS_MULTILINE') {
+    throw 'Preview-mode checkbox captions must not wrap onto multiple lines.'
+}
 Assert-Text $collapsedToolbar 'const int toolbarY\s*=\s*kStatusHeaderHeight\s*\+\s*3[\s\S]*?const int toolbarHeight\s*=\s*22' `
     'Collapsed controls must fit inside the reserved toolbar row below the status band.'
 Assert-Text $collapsedToolbar 'm_writebackButton\.ShowWindow\(SW_SHOW\)' `
@@ -270,13 +274,16 @@ Assert-Text $drawCanvas 'Color\(255,\s*255,\s*80,\s*80\)|Color\(255,\s*100,\s*16
 Assert-Text $header 'm_selectionGestureActive|m_selectionDragStarted' `
     'The S canvas must keep independent transient state for left-drag selection.'
 $leftDown = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnLButtonDown('
-Assert-Text $leftDown 'm_selectionGestureActive' `
-    'Normal left-down must defer single selection while detecting a drag.'
+Assert-Text $leftDown 'ToggleSelectionAt\(\*coordinate\)[\s\S]*?ShowSelectionOperationResult\(result\)' `
+    'A unit click must toggle selection immediately on mouse-down without refreshing unrelated editor controls.'
 $leftUp = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnLButtonUp('
-Assert-Text $leftUp 'already_selected[\s\S]*?RemoveSelectionAt\(\*coordinate\)[\s\S]*?AddSelectionAt\(\*coordinate\)' `
-    'A non-drag click must toggle the pointed unit in or out of the multi-selection group.'
-Assert-Text $leftUp 'A single click on an empty cell leaves the current group unchanged' `
-    'A single click on an empty cell must preserve the current group.'
+if ($leftUp -match 'ToggleSelectionAt|HitTestUnit|RemoveSelectionAt\(\*coordinate\)|AddSelectionAt\(\*coordinate\)') {
+    throw 'Mouse-up must not repeat the click hit-test or toggle already handled on mouse-down.'
+}
+$selectionResult = Get-FunctionBlock $page 'void CSBattlePreviewPage::ShowSelectionOperationResult('
+if ($selectionResult -match 'RefreshEditorControls|RefreshSelectedUnitIndex') {
+    throw 'Selection updates must not refresh unrelated controls or rescan a primary unit.'
+}
 $doubleClick = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnLButtonDblClk('
 Assert-Text $doubleClick 'coordinate && !occupied[\s\S]*?ClearSelectionGroup\(\)' `
     'A double-click on an empty cell must clear the entire multi-selection group.'
@@ -308,10 +315,12 @@ Assert-Text $batchParameters 'CBatchParameterWarningDialog[\s\S]*?choose_batch_p
 Assert-Text $page 'IDC_BATTLE_BATCH_OVERWRITE[\s\S]*?BattleBatchWarningChoice::OverwriteAll[\s\S]*?IDC_BATTLE_BATCH_UNIFORM[\s\S]*?BattleBatchWarningChoice::OnlyUniform' `
     'The batch warning buttons must map directly to the two explicit selection policies.'
 $parameterPane = $pane
-Assert-Text $parameterPane 'BS_AUTOCHECKBOX \| BS_MULTILINE \| BS_VCENTER' `
-    'Every checkbox in the parameter pane must use vertical centering.'
-Assert-Text $parameterPane 'm_currentGroup\.SetWindowText\(m_mode == FormMode::Batch[\s\S]*?勾选要修改的参数' `
-    'The batch parameter group must explain that checkboxes select which fields are applied.'
+Assert-Text $parameterPane 'const DWORD checkStyle = child \| BS_AUTOCHECKBOX \| BS_VCENTER;' `
+    'Every checkbox in the parameter pane must use single-line text with vertical centering.'
+Assert-Text $parameterPane 'status\.Format\(L"批量修改 %u 个单位；勾选要修改的参数，其他参数保留原值"' `
+    'The visible batch status must explain that checkboxes select which fields are applied.'
+Assert-Text $parameterPane 'const int rowContext = top \+ 8;' `
+    'The shared parameter forms must not reserve an empty group-caption row above their first control.'
 Assert-Text $parameterPane 'm_unitHiddenBatchValue\.Create\(comboStyle[\s\S]*?m_unitReinforcementBatchValue\.Create\(comboStyle' `
     'Batch hidden and reinforcement values must use dropdowns to avoid confusion with apply checkboxes.'
 Assert-Text $parameterPane 'm_batchApplyDirection\.Create[\s\S]*?m_batchApplyTarget\.Create' `
@@ -411,10 +420,10 @@ Assert-Text $page 'void CBatchParameterWarningDialog::OnUniform\(\)[\s\S]*?EndDi
     'The uniform-only button must return its decision from the modal dialog.'
 Assert-Text $page 'void CBatchParameterWarningDialog::OnCancelClicked\(\)[\s\S]*?EndDialog\(IDCANCEL\)' `
     'The warning dialog must preserve cancel-as-no-change behavior.'
-Assert-Text $page 'BS_AUTOCHECKBOX \| BS_MULTILINE \| BS_VCENTER' `
-    'The preview toolbar checkboxes must vertically center captions in multiline button controls.'
-Assert-Text $pane 'BS_AUTOCHECKBOX \| BS_MULTILINE \| BS_VCENTER' `
-    'The parameter pane checkboxes must vertically center captions in multiline button controls.'
+Assert-Text $page 'm_quickModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER[\s\S]*?m_copyPersonModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER[\s\S]*?m_unrestrictedTerrainModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER' `
+    'The preview toolbar checkboxes must use single-line text with vertical centering.'
+Assert-Text $pane 'const DWORD checkStyle = child \| BS_AUTOCHECKBOX \| BS_VCENTER;' `
+    'The parameter pane checkboxes must use single-line text with vertical centering.'
 Assert-Text $pane 'CComboBox m_defaultsTarget|m_defaultsTarget\.Create\(comboStyle' `
     'The default target character must be selected from a dropdown.'
 Assert-Text $pane 'CComboBox m_unitTarget|m_unitTarget\.Create\(comboStyle' `
@@ -425,7 +434,7 @@ Assert-Text $paneHeader 'CStatic m_parameterPlaceholders\[7\]' `
     'Single/default modes need one placeholder control for every batch parameter column.'
 Assert-Text $pane 'L"— 朝向"[\s\S]*?L"— 目标"[\s\S]*?show\(&placeholder, !batch\)' `
     'Single/default modes must show a noninteractive placeholder in each batch checkbox column.'
-Assert-Text $pane 'const int height = 260;' `
+Assert-Text $pane 'const int height = 240;' `
     'All parameter modes should use the compact height that fits the aligned controls.'
 if ($pane -match 'FormMode::Defaults \? 320') {
     throw 'The defaults panel must not retain the oversized fixed height.'
@@ -437,7 +446,7 @@ Assert-Text $pane 'm_defaultsDirection\.MoveWindow\(104, row1, 132, 180\)' `
 if ([regex]::Matches($pane, 'm_unitDirection\.MoveWindow\(104, row1, 132, 180\)').Count -lt 2) {
     throw 'Single-unit and batch direction fields must share the same grid position.'
 }
-Assert-Text $pane 'label\(0x7FAE, 108, row3, 76\)[\s\S]*?m_unitTarget\.MoveWindow\(188, row3[\s\S]*?label\(0x7FAF, 286, row3, 52\)[\s\S]*?label\(0x7FB0, 430, row3, 52\)' `
-    'Target Data, X, and Y fields must each have explicit labels in the batch row.'
+Assert-Text $pane 'label\(0x7FAE, 108, row3, 76\)[\s\S]*?m_unitTarget\.MoveWindow\(188, row3[\s\S]*?label\(0x7FAF, 318, row3, 20\)[\s\S]*?label\(0x7FB0, 462, row3, 20\)' `
+    'The 武将, X, and Y target fields must each have explicit labels in the batch row.'
 
 Write-Output 'PASS: S role/brush controls are isolated and wired to temporary BattleEditorOps.'

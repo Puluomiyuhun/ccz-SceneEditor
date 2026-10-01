@@ -32,8 +32,8 @@ Assert-Text $window 'for \(int x = 0; x <= ActiveSession\(\)\.editor_state\.batt
 	'battle canvas paints a logical grid'
 Assert-Text $window 'm_hoverCell' `
     'battle canvas paints in-memory hover state'
-Assert-Text $window 'identity_label = instruction == 0x4b[\s\S]*?L"【我军】"[\s\S]*?L"【" \+ std::to_wstring\(unit\.data_id\) \+ L"】"' `
-    'hover identity column distinguishes own faction from real Data IDs'
+Assert-Text $window 'if \(instruction == 0x4b\)[\s\S]*?own_battle_unit_status_label\(battlefield_index\)[\s\S]*?identity_label = label\.identity[\s\S]*?else \{[\s\S]*?identity_label = L"【" \+ std::to_wstring\(unit\.data_id\) \+ L"】"' `
+    'hover identity column uses the own-faction label helper and real Data IDs for other units'
 Assert-Text $window 'label_body = \(battlefield_index >= 0[\s\S]*?\)\s*\+\s*L"\."\s*\+\s*character_name' `
     'all factions use the same battlefield-number and name body layout'
 Assert-Text $window 'MeasureString\(L"【1023】"[\s\S]*?MeasureString\(L"【我军】"[\s\S]*?identity_column_width[\s\S]*?PointF\(hoverOrigin\.X \+ identity_column_width' `

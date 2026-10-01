@@ -229,6 +229,7 @@
     <ClInclude Include="ScenePreviewHost.h" />
     <ClInclude Include="BattlePreviewPage.h" />
     <ClInclude Include="TextWrapAssist.h" />
+    <ClInclude Include="TextWrapEditSession.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="ViewTree.h" />
@@ -282,6 +283,9 @@
     <ClCompile Include="ScenePreviewHost.cpp" />
     <ClCompile Include="BattlePreviewPage.cpp" />
     <ClCompile Include="TextWrapAssist.cpp" />
+    <ClCompile Include="TextWrapEditSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="ViewTree.cpp" />
     <ClCompile Include="PreviewIntegration\EditorTreeSnapshot.cpp" />
     <ClCompile Include="PreviewIntegration\EditorPreviewAdapter.cpp">
@@ -377,6 +381,7 @@
     <Image Include="res\Toolbar.bmp" />
     <Image Include="res\Toolbar256.bmp" />
     <Image Include="res\userimages.bmp" />
+    <Image Include="res\battle_own_portrait.png" />
   </ItemGroup>
   <ItemGroup>
     <None Include="res\cczEditor2.rc2" />

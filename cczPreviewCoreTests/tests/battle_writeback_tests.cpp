@@ -2636,8 +2636,10 @@ CCZ_TEST(battle_editor_position_adjustment_can_change_direction_before_drop) {
     CCZ_REQUIRE_EQ(state.mode, ccz::editor_preview::BattleEditorMode::AdjustPosition);
     CCZ_REQUIRE(ops.CycleDirection(1).ok);
     CCZ_REQUIRE_EQ(state.mode, ccz::editor_preview::BattleEditorMode::AdjustPosition);
+    // Wheel input is staged for the position preview; the cached unit only
+    // receives the new facing when the target is confirmed.
     CCZ_REQUIRE_EQ(ops.FindUnitByCacheId(cache_id)->direction,
-                   (original_direction + 1) % 4);
+                   original_direction);
     CCZ_REQUIRE(ops.ConfirmPositionAdjustment({6, 6}).ok);
 
     const BattleUnit* moved = ops.FindUnitByCacheId(cache_id);

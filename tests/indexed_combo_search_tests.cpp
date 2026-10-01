@@ -18,6 +18,16 @@ int main()
     int selection = -1;
     assert(ccz::editor::ResolveDecimalCode(people, L"174", selection));
     assert(selection == 174);
+
+    // S-preview character rows use the same Data.name display convention as
+    // the battle roster, and direct Data-number input must still resolve it.
+    const std::vector<IndexedOption> sPreviewPeople = {
+        {L"50.云筱", 50, 50},
+    };
+    assert(ccz::editor::ExtractLeadingDecimalCode(L"50.云筱", selection));
+    assert(selection == 50);
+    assert(ccz::editor::ResolveDecimalCode(sPreviewPeople, L"50", selection));
+    assert(selection == 50);
     assert(!ccz::editor::ResolveDecimalCode(people, L"1740", selection));
     assert(!ccz::editor::ResolveDecimalCode(people, L"-1", selection));
     assert(!ccz::editor::ResolveDecimalCode(people, L"999999999999999999999999999999999999999999", selection));

@@ -26,28 +26,35 @@ void add_choice(CComboBox& combo, const wchar_t* label, int value)
 		combo.SetItemData(index, static_cast<DWORD_PTR>(value));
 }
 
-void populate_target_choices(CComboBox& combo,
+void populate_target_choices(CMyComboBox& combo,
 	const std::vector<ccz::editor_preview::BattleCharacterEntry>& characters,
-	int selected_value)
+	int selected_value, std::vector<int>& data_ids)
 {
 	combo.ResetContent();
-	add_choice(combo, L"无目标", -1);
+	data_ids.clear();
+	const auto add_target = [&combo, &data_ids](const wchar_t* label, int value) {
+		const int index = combo.AddString(label);
+		if (index == CB_ERR || index == CB_ERRSPACE) return index;
+		if (index >= static_cast<int>(data_ids.size()))
+			data_ids.resize(static_cast<std::size_t>(index + 1), INT_MIN);
+		data_ids[static_cast<std::size_t>(index)] = value;
+		return index;
+	};
+	add_target(L"无目标", -1);
 	int selected_index = selected_value == -1 ? 0 : CB_ERR;
 	for (const auto& character : characters) {
 		CString label;
 		label.Format(L"%d.%s", character.data_id, character.name.c_str());
-		const int index = combo.AddString(label);
+		const int index = add_target(label, character.data_id);
 		if (index == CB_ERR || index == CB_ERRSPACE) continue;
-		combo.SetItemData(index, static_cast<DWORD_PTR>(character.data_id));
 		if (character.data_id == selected_value) selected_index = index;
 	}
 	if (selected_index == CB_ERR) {
 		CString label;
-		label.Format(L"Data %d（未载入）", selected_value);
-		selected_index = combo.AddString(label);
-		if (selected_index != CB_ERR && selected_index != CB_ERRSPACE)
-			combo.SetItemData(selected_index, static_cast<DWORD_PTR>(selected_value));
+		label.Format(L"%d.未载入", selected_value);
+		selected_index = add_target(label, selected_value);
 	}
+	combo.EnablePersonSearch();
 	if (selected_index != CB_ERR && selected_index != CB_ERRSPACE)
 		combo.SetCurSel(selected_index);
 }
@@ -110,7 +117,7 @@ bool CBattleUnitParametersPane::CreatePane(
 	if (!CreateEx(WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT, className,
 		L"S 战场默认参数", WS_POPUP | WS_CAPTION | WS_SYSMENU |
 			WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-		CRect(0, 0, 860, 260), owner, 0)) return false;
+		CRect(0, 0, 860, 240), owner, 0)) return false;
 	ShowWindow(SW_HIDE);
 	return true;
 }
@@ -129,7 +136,7 @@ void CBattleUnitParametersPane::ShowPane(bool show)
 		if (m_owner != nullptr) m_owner->GetWindowRect(&work);
 		if (work.IsRectEmpty()) SystemParametersInfo(SPI_GETWORKAREA, 0, &work, 0);
 		const int width = 860;
-		const int height = 260;
+		const int height = 240;
 		int x = work.left + (work.Width() - width) / 2;
 		int y = work.top + (work.Height() - height) / 2;
 		x = (std::max)(static_cast<int>(work.left),
@@ -148,6 +155,8 @@ void CBattleUnitParametersPane::ShowDefaultsState(
 	m_mode = FormMode::Defaults;
 	m_batchCacheIds.clear();
 	m_batchSelectionPending = false;
+	if (m_defaultsStatus.GetSafeHwnd() != nullptr)
+		m_defaultsStatus.SetWindowText(L"");
 	UpdateState(state);
 }
 
@@ -170,6 +179,8 @@ void CBattleUnitParametersPane::ShowBatchState(
 	m_batchCacheIds = std::move(cache_ids);
 	m_initialBatchCheckedParameters = checked_parameters;
 	m_batchSelectionPending = true;
+	if (m_unitStatus.GetSafeHwnd() != nullptr)
+		m_unitStatus.SetWindowText(L"");
 	UpdateState(state);
 }
 
@@ -220,7 +231,7 @@ void CBattleUnitParametersPane::UpdateState(
 			? BST_CHECKED : BST_UNCHECKED);
 	SelectComboValue(m_defaultsPolicy, m_defaultsSnapshot.ai_policy);
 	populate_target_choices(m_defaultsTarget, state.characters.entries,
-		m_defaultsSnapshot.target);
+		m_defaultsSnapshot.target, m_defaultsTargetDataIds);
 	UpdateIntegerEdit(m_defaultsTargetX, m_defaultsSnapshot.target_x);
 	UpdateIntegerEdit(m_defaultsTargetY, m_defaultsSnapshot.target_y);
 
@@ -291,12 +302,12 @@ void CBattleUnitParametersPane::UpdateState(
 			unit.reinforcement ? 1 : 0);
 		SetComboValue(m_unitPolicy, unit.ai_policy, L"未知方针 ");
 		populate_target_choices(m_unitTarget, state.characters.entries,
-			unit.target);
+			unit.target, m_unitTargetDataIds);
 		UpdateIntegerEdit(m_unitTargetX, unit.target_x);
 		UpdateIntegerEdit(m_unitTargetY, unit.target_y);
 		CString status;
 		if (m_mode == FormMode::Batch) {
-			status.Format(L"批量修改 %u 个单位的共同参数（不改角色身份和坐标）",
+			status.Format(L"批量修改 %u 个单位；勾选要修改的参数，其他参数保留原值",
 				static_cast<unsigned>(m_unitSnapshots.size()));
 			m_modeInfo.SetWindowText(status);
 		} else {
@@ -305,8 +316,8 @@ void CBattleUnitParametersPane::UpdateState(
 					? unit.editor_deployment_instruction : unit.source_instruction,
 				unit.position.x, unit.position.y);
 			m_modeInfo.SetWindowText(L"角色身份与坐标独立显示；下方参数按统一布局调整。");
+			m_unitStatus.SetWindowText(status);
 		}
-		m_unitStatus.SetWindowText(status);
 	} else {
 		m_unitData.ResetContent();
 		m_unitStatus.SetWindowText(m_mode == FormMode::Batch
@@ -317,7 +328,7 @@ void CBattleUnitParametersPane::UpdateState(
 			: L"当前单位不可用。");
 	}
 	if (m_mode == FormMode::Defaults)
-		m_modeInfo.SetWindowText(L"新增单位默认值；只影响之后新增的单位。");
+		m_modeInfo.SetWindowText(L"新增单位默认值；只影响之后新增的单位，写入字段由出场指令类型决定。");
 	UpdateControlRoles();
 	UpdateDefaultTargetControls();
 	UpdateUnitTargetControls();
@@ -328,9 +339,6 @@ void CBattleUnitParametersPane::UpdateState(
 	SetWindowText(m_mode == FormMode::Defaults ? L"S 战场默认参数"
 		: (m_mode == FormMode::Batch ? L"S 战场批量修改参数"
 			: L"S 战场单体修改参数"));
-	m_currentGroup.SetWindowText(m_mode == FormMode::Batch
-		? L"勾选要修改的参数；其他参数保留原值"
-		: L"单位参数（一次提交、一次撤回）");
 	CRect client;
 	GetClientRect(&client);
 	LayoutControls(client.Width(), client.Height());
@@ -344,10 +352,10 @@ int CBattleUnitParametersPane::OnCreate(LPCREATESTRUCT create)
 	const DWORD editStyle = child | WS_BORDER | ES_AUTOHSCROLL;
 	const DWORD comboStyle = child | WS_VSCROLL | CBS_DROPDOWNLIST;
 	const DWORD buttonStyle = child | BS_PUSHBUTTON;
-	const DWORD checkStyle = child | BS_AUTOCHECKBOX | BS_MULTILINE | BS_VCENTER;
-	if (!m_defaultsGroup.Create(L"新增单位共享参数模板（按出场类别适配）",
+	const DWORD checkStyle = child | BS_AUTOCHECKBOX | BS_VCENTER;
+	if (!m_defaultsGroup.Create(L"",
 		child | BS_GROUPBOX, CRect(0,0,1,1), this, kDefaultsGroupId) ||
-		!m_currentGroup.Create(L"单位参数（一次提交、一次撤回）",
+		!m_currentGroup.Create(L"",
 		child | BS_GROUPBOX, CRect(0,0,1,1), this, kCurrentGroupId) ||
 		!m_defaultsDirection.Create(comboStyle, CRect(0,0,1,1), this, kDefaultsDirectionId) ||
 		!m_defaultsHidden.Create(L"隐藏", checkStyle, CRect(0,0,1,1), this, kDefaultsHiddenId) ||
@@ -401,11 +409,11 @@ int CBattleUnitParametersPane::OnCreate(LPCREATESTRUCT create)
 	// controls and have no effect on the document TreeView.
 	const struct { UINT id; const wchar_t* text; } labels[] = {
 		{0x7FA0,L"朝向"},{0x7FA1,L"等级偏移"},{0x7FA2,L"兵种级别"},
-		{0x7FA3,L"行动方针"},{0x7FA4,L"目标 Data"},{0x7FA5,L"目标 X"},
-		{0x7FA6,L"目标 Y"},{0x7FA7,L"角色 / 槽位"},{0x7FA8,L"坐标 X"},
+		{0x7FA3,L"行动方针"},{0x7FA4,L"武将"},{0x7FA5,L"X"},
+		{0x7FA6,L"Y"},{0x7FA7,L"角色 / 槽位"},{0x7FA8,L"坐标 X"},
 		{0x7FA9,L"坐标 Y"},{0x7FAA,L"朝向"},{0x7FAB,L"等级偏移"},
-		{0x7FAC,L"兵种级别"},{0x7FAD,L"行动方针"},{0x7FAE,L"目标 Data"},
-		{0x7FAF,L"目标 X"},{0x7FB0,L"目标 Y"},
+		{0x7FAC,L"兵种级别"},{0x7FAD,L"行动方针"},{0x7FAE,L"武将"},
+		{0x7FAF,L"X"},{0x7FB0,L"Y"},
 	};
 	m_labels.clear();
 	m_labels.reserve(std::size(labels));
@@ -486,7 +494,7 @@ void CBattleUnitParametersPane::LayoutControls(int cx, int cy)
 	const auto label = [this](UINT id, int x, int y, int w) {
 		if (CWnd* control = GetDlgItem(id)) control->MoveWindow(x,y,w,24);
 	};
-	const int rowContext = top + 28;
+	const int rowContext = top + 8;
 	const int row1 = rowContext + 34;
 	const int row2 = row1 + 34;
 	const int row3 = row2 + 34;
@@ -518,9 +526,9 @@ void CBattleUnitParametersPane::LayoutControls(int cx, int cy)
 		place_placeholder(6, 24, row3, 76);
 		label(0x7FAE, 108, row3, 76);
 		m_defaultsTarget.MoveWindow(188, row3, 126, 180);
-		label(0x7FAF, 286, row3, 52);
+		label(0x7FAF, 318, row3, 20);
 		m_defaultsTargetX.MoveWindow(342, row3, 72, 24);
-		label(0x7FB0, 430, row3, 52);
+		label(0x7FB0, 462, row3, 20);
 		m_defaultsTargetY.MoveWindow(486, row3, 72, 24);
 
 		m_applyDefaults.MoveWindow(24, footer, 172, 28);
@@ -547,9 +555,9 @@ void CBattleUnitParametersPane::LayoutControls(int cx, int cy)
 		m_batchApplyTarget.MoveWindow(24, row3, 76, 24);
 		label(0x7FAE, 108, row3, 76);
 		m_unitTarget.MoveWindow(188, row3, 126, 180);
-		label(0x7FAF, 286, row3, 52);
+		label(0x7FAF, 318, row3, 20);
 		m_unitTargetX.MoveWindow(342, row3, 72, 24);
-		label(0x7FB0, 430, row3, 52);
+		label(0x7FB0, 462, row3, 20);
 		m_unitTargetY.MoveWindow(486, row3, 72, 24);
 
 		m_applyUnit.MoveWindow(24, footer, 172, 28);
@@ -582,9 +590,9 @@ void CBattleUnitParametersPane::LayoutControls(int cx, int cy)
 	place_placeholder(6, 24, row3, 76);
 	label(0x7FAE, 108, row3, 76);
 	m_unitTarget.MoveWindow(188, row3, 126, 180);
-	label(0x7FAF, 286, row3, 52);
+	label(0x7FAF, 318, row3, 20);
 	m_unitTargetX.MoveWindow(342, row3, 72, 24);
-	label(0x7FB0, 430, row3, 52);
+	label(0x7FB0, 462, row3, 20);
 	m_unitTargetY.MoveWindow(486, row3, 72, 24);
 
 	m_applyUnit.MoveWindow(24, footer, 172, 28);
@@ -641,6 +649,15 @@ int CBattleUnitParametersPane::SelectedComboValue(const CComboBox& combo) const
 	const int selection = combo.GetCurSel();
 	return selection == CB_ERR ? INT_MIN
 		: static_cast<int>(combo.GetItemData(selection));
+}
+
+int CBattleUnitParametersPane::SelectedTargetDataId(
+	const CMyComboBox& combo, const std::vector<int>& data_ids) const
+{
+	if (!combo.HasValidIndexedSelection()) return INT_MIN;
+	const int selection = combo.GetCurSel();
+	return selection < 0 || selection >= static_cast<int>(data_ids.size())
+		? INT_MIN : data_ids[static_cast<std::size_t>(selection)];
 }
 
 void CBattleUnitParametersPane::SetComboValue(
@@ -832,8 +849,6 @@ void CBattleUnitParametersPane::UpdateControlRoles()
 			static_cast<CWnd*>(&m_applyDefaults),
 			static_cast<CWnd*>(&m_resetDefaults)})
 			control->EnableWindow(TRUE);
-		m_defaultsStatus.SetWindowText(
-			L"只影响新增单位；按出场指令写入该类型支持的字段。");
 		return;
 	}
 
@@ -897,9 +912,9 @@ void CBattleUnitParametersPane::UpdateControlRoles()
 	label(0x7FAB, m_hasCurrentUnit && !batch);
 	label(0x7FAC, m_hasCurrentUnit && !batch);
 	label(0x7FAD, m_hasCurrentUnit && !batch);
-	label(0x7FAE, m_hasCurrentUnit && !batch);
-	label(0x7FAF, m_hasCurrentUnit && !batch);
-	label(0x7FB0, m_hasCurrentUnit && !batch);
+	label(0x7FAE, m_hasCurrentUnit);
+	label(0x7FAF, m_hasCurrentUnit);
+	label(0x7FB0, m_hasCurrentUnit);
 	for (CButton* control : {&m_batchApplyDirection, &m_batchApplyHidden,
 		&m_batchApplyLevel, &m_batchApplyUnitType, &m_batchApplyReinforcement,
 		&m_batchApplyPolicy, &m_batchApplyTarget}) {
@@ -989,7 +1004,8 @@ void CBattleUnitParametersPane::OnApplyDefaults()
 	}
 	if (policy != m_defaultsSnapshot.ai_policy) profile.ai_policy = policy;
 	if (policy == 3 || policy == 5 || policy == 4 || policy == 6) {
-		target = SelectedComboValue(m_defaultsTarget);
+		target = SelectedTargetDataId(m_defaultsTarget,
+			m_defaultsTargetDataIds);
 		if (target == INT_MIN ||
 			!ReadIntegerEdit(m_defaultsTargetX, targetX) ||
 			!ReadIntegerEdit(m_defaultsTargetY, targetY)) {
@@ -1152,7 +1168,8 @@ void CBattleUnitParametersPane::OnApplyUnit()
 	if (should_apply(ccz::editor_preview::BattleBatchParameter::Target) &&
 		(policy == 3 || policy == 5) &&
 		has(BattleFieldRole::TargetDataId)) {
-		const int target = SelectedComboValue(m_unitTarget);
+		const int target = SelectedTargetDataId(m_unitTarget,
+			m_unitTargetDataIds);
 		if (target == INT_MIN) {
 			SetDiagnostic(L"请从目标角色列表中选择 Data 号");
 			return;

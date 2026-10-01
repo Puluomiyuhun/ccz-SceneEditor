@@ -76,8 +76,8 @@
     }
   ],
   "editor_release": {
-    "path": "workspace/references/ccz-SceneEditor/Release/s.exe",
-    "size": 5693440,
-    "sha256": "C90A16A14158864737A0D08FAA495830A925E0F388FD1F9EC1F859CA0B8D5DDA"
+    "path": "workspace/references/ccz-SceneEditor/cczEditor2/.tmp-r-status-20261001/bin/s.exe",
+    "size": 5740032,
+    "sha256": "55E8DB514236CCD012881EAB25F85E15EADB220DED6B0AF573DC5DB26D027F1C"
   }
 }

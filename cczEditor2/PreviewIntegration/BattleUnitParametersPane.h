@@ -3,6 +3,7 @@
 #include <afxwin.h>
 
 #include "BattleEditorOps.h"
+#include "../CMyComboBox.h"
 
 #include <cstdint>
 #include <functional>
@@ -105,7 +106,8 @@ private:
 	CComboBox m_defaultsType;
 	CButton m_defaultsReinforcement;
 	CComboBox m_defaultsPolicy;
-	CComboBox m_defaultsTarget;
+	CMyComboBox m_defaultsTarget;
+	std::vector<int> m_defaultsTargetDataIds;
 	CEdit m_defaultsTargetX;
 	CEdit m_defaultsTargetY;
 	CButton m_applyDefaults;
@@ -123,7 +125,8 @@ private:
 	CButton m_unitReinforcement;
 	CComboBox m_unitReinforcementBatchValue;
 	CComboBox m_unitPolicy;
-	CComboBox m_unitTarget;
+	CMyComboBox m_unitTarget;
+	std::vector<int> m_unitTargetDataIds;
 	CEdit m_unitTargetX;
 	CEdit m_unitTargetY;
 	CButton m_applyUnit;
@@ -171,6 +174,8 @@ private:
 	bool ReadIntegerEdit(const CEdit& edit, int& value) const;
 	void SelectComboValue(CComboBox& combo, int value);
 	int SelectedComboValue(const CComboBox& combo) const;
+	int SelectedTargetDataId(const CMyComboBox& combo,
+		const std::vector<int>& data_ids) const;
 	void SetComboValue(CComboBox& combo, int value, const wchar_t* fallback_prefix);
 	void AddCommonChoices();
 	void UpdateControlRoles();

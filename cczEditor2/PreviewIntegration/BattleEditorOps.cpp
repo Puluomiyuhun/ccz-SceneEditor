@@ -142,6 +142,7 @@ void clear_character_dependent_state(BattleEditorState& state) {
     state.mode = BattleEditorMode::Select;
     state.mode_before_position_adjustment = BattleEditorMode::Select;
     state.adjusting_cache_id = 0;
+    state.position_adjustment_direction = -1;
     state.placement = {};
     state.placement.instruction_id = deployment_instruction;
     state.placement_defaults = BattlePlacementDefaults{};
@@ -666,7 +667,7 @@ BattleEditorResult BattleEditorOps::SetMode(BattleEditorMode mode) {
     if (state_->mode == BattleEditorMode::AdjustPosition &&
         mode != BattleEditorMode::AdjustPosition) {
         state_->adjusting_cache_id = 0;
-        state_->group_adjustment_direction = -1;
+        state_->position_adjustment_direction = -1;
         state_->hover.reset();
     }
     state_->mode = mode;
@@ -697,7 +698,7 @@ BattleEditorResult BattleEditorOps::CancelPlacementBrush() {
     state_->mode = BattleEditorMode::Select;
     state_->mode_before_position_adjustment = BattleEditorMode::Select;
     state_->adjusting_cache_id = 0;
-    state_->group_adjustment_direction = -1;
+    state_->position_adjustment_direction = -1;
     state_->hover.reset();
     return success(L"战场布置笔刷已取消");
 }
@@ -1105,6 +1106,39 @@ BattleEditorResult BattleEditorOps::SelectAt(
     return success(L"已选择当前战场逻辑格单位");
 }
 
+BattleEditorResult BattleEditorOps::ToggleSelectionAt(
+    const ccz::preview::BattleCoord& coordinate) {
+    if (state_ == nullptr) return failure(L"战场编辑器状态为空");
+    if (state_->mode == BattleEditorMode::Place ||
+        state_->mode == BattleEditorMode::AdjustPosition) {
+        return failure(L"当前编辑模式不支持多选");
+    }
+    const std::vector<std::size_t> indices = UnitsAt(*state_, coordinate);
+    if (indices.empty()) return failure(L"当前战场作用域没有可选单位");
+    if (indices.size() != 1)
+        return failure(L"当前逻辑格存在多个单位，拒绝歧义选择");
+
+    const BattleSelection selected =
+        selection_for(state_->battle.units[indices.front()]);
+    if (!selected.valid()) return failure(L"目标单位缺少稳定缓存身份");
+
+    // Multi-selection has no persistent primary unit. The unit clicked when
+    // a batch operation starts supplies that operation's temporary anchor.
+    state_->selection.reset();
+    const auto existing = std::find_if(
+        state_->selection_group.begin(), state_->selection_group.end(),
+        [&selected](const BattleSelection& item) {
+            return item.cache_id == selected.cache_id;
+        });
+    if (existing != state_->selection_group.end()) {
+        state_->selection_group.erase(existing);
+        return success(L"已将光标指向角色移出多选组", true, 1);
+    }
+
+    state_->selection_group.push_back(selected);
+    return success(L"单位已加入多选组", true, 1);
+}
+
 BattleEditorResult BattleEditorOps::AddSelectionAt(
     const ccz::preview::BattleCoord& coordinate) {
     if (state_ == nullptr) return failure(L"战场编辑器状态为空");
@@ -1119,6 +1153,7 @@ BattleEditorResult BattleEditorOps::AddSelectionAt(
     const BattleSelection selected =
         selection_for(state_->battle.units[indices.front()]);
     if (!selected.valid()) return failure(L"目标单位缺少稳定缓存身份");
+    state_->selection.reset();
     const auto existing = std::find_if(
         state_->selection_group.begin(), state_->selection_group.end(),
         [&selected](const BattleSelection& item) {
@@ -1127,7 +1162,6 @@ BattleEditorResult BattleEditorOps::AddSelectionAt(
     if (existing != state_->selection_group.end())
         return success(L"目标单位已在多选组中");
     state_->selection_group.push_back(selected);
-    if (!state_->selection.has_value()) state_->selection = selected;
     return success(L"单位已加入多选组", true, 1);
 }
 
@@ -1148,17 +1182,7 @@ BattleEditorResult BattleEditorOps::RemoveSelectionAt(
     if (selected == state_->selection_group.end())
         return failure(L"光标指向的角色不在当前选择组");
     state_->selection_group.erase(selected);
-    const bool primary_remains = state_->selection.has_value() &&
-        std::any_of(state_->selection_group.begin(),
-                    state_->selection_group.end(),
-            [this](const BattleSelection& item) {
-                return item.cache_id == state_->selection->cache_id;
-            });
-    if (state_->selection_group.empty()) {
-        state_->selection.reset();
-    } else if (!primary_remains) {
-        state_->selection = state_->selection_group.front();
-    }
+    state_->selection.reset();
     return success(L"已将光标指向角色移出多选组", true, 1);
 }
 
@@ -1171,8 +1195,6 @@ BattleEditorResult BattleEditorOps::FilterSelectionByDeployment(
     }
     if (state_->selection_group.empty())
         return failure(L"当前没有多选角色可筛选");
-    const std::uint64_t old_primary = state_->selection.has_value()
-        ? state_->selection->cache_id : 0;
     std::vector<BattleSelection> filtered;
     filtered.reserve(state_->selection_group.size());
     for (const BattleSelection& selected : state_->selection_group) {
@@ -1184,21 +1206,10 @@ BattleEditorResult BattleEditorOps::FilterSelectionByDeployment(
                 : unit->source_instruction;
         if (deployment == instruction_id) filtered.push_back(selection_for(*unit));
     }
+    state_->selection.reset();
     if (filtered.size() == state_->selection_group.size())
         return success(L"多选组已符合当前阵营筛选");
     state_->selection_group = std::move(filtered);
-    const auto primary = std::find_if(
-        state_->selection_group.begin(), state_->selection_group.end(),
-        [old_primary](const BattleSelection& item) {
-            return item.cache_id == old_primary;
-        });
-    if (primary != state_->selection_group.end()) {
-        state_->selection = *primary;
-    } else if (state_->selection_group.empty()) {
-        state_->selection.reset();
-    } else {
-        state_->selection = state_->selection_group.front();
-    }
     return success(L"多选组已按阵营筛选", true,
                    state_->selection_group.size());
 }
@@ -1303,7 +1314,8 @@ BattleEditorResult BattleEditorOps::BeginPositionAdjustment(
             [cache_id](const BattleSelection& item) {
                 return item.cache_id == cache_id;
             });
-    int group_direction = -1;
+    int adjustment_direction = HasRole(*unit, BattleFieldRole::Direction)
+        ? WrappedDirection(unit->direction) : -1;
     if (group_anchor) {
         for (const BattleSelection& selected : state_->selection_group) {
             const BattleUnit* member = FindUnitByCacheId(selected.cache_id);
@@ -1312,13 +1324,13 @@ BattleEditorResult BattleEditorOps::BeginPositionAdjustment(
                 return failure(L"多选组中有单位不支持统一调整朝向");
             }
         }
-        group_direction = WrappedDirection(unit->direction);
+        adjustment_direction = WrappedDirection(unit->direction);
     }
     if (!group_anchor) state_->selection_group.clear();
     state_->selection = selection_for(*unit);
     state_->mode_before_position_adjustment = state_->mode;
     state_->adjusting_cache_id = cache_id;
-    state_->group_adjustment_direction = group_direction;
+    state_->position_adjustment_direction = adjustment_direction;
     state_->mode = BattleEditorMode::AdjustPosition;
     state_->hover = unit->position;
     return success(L"位置调整已开始；落点只修改暂存缓存", true,
@@ -1379,8 +1391,8 @@ BattlePlacementPreview BattleEditorOps::PreviewPositionAdjustment(
         BattleUnit destination = *member;
         destination.position = {member->position.x + delta_x,
                                 member->position.y + delta_y};
-        if (move_group && state_->group_adjustment_direction >= 0)
-            destination.direction = state_->group_adjustment_direction;
+        if (state_->position_adjustment_direction >= 0)
+            destination.direction = state_->position_adjustment_direction;
         if (!ccz::preview::is_battle_coord_in_bounds(
                 destination.position, state_->battle.map.width,
                 state_->battle.map.height)) {
@@ -1478,7 +1490,7 @@ BattleEditorResult BattleEditorOps::ConfirmPositionAdjustment(
     proposed.selection = selection_for(*anchor);
     proposed.mode = proposed.mode_before_position_adjustment;
     proposed.adjusting_cache_id = 0;
-    proposed.group_adjustment_direction = -1;
+    proposed.position_adjustment_direction = -1;
     proposed.hover = coordinate;
     if (changed_count == 0) {
         *state_ = std::move(proposed);
@@ -1500,7 +1512,7 @@ BattleEditorResult BattleEditorOps::CancelPositionAdjustment() {
     }
     state_->mode = state_->mode_before_position_adjustment;
     state_->adjusting_cache_id = 0;
-    state_->group_adjustment_direction = -1;
+    state_->position_adjustment_direction = -1;
     state_->hover.reset();
     return success(L"已取消位置与朝向调整；预览未写入缓存");
 }
@@ -1719,16 +1731,19 @@ BattleEditorResult BattleEditorOps::DeleteAt(
 BattleEditorResult BattleEditorOps::CycleDirection(int delta) {
     if (state_ == nullptr) return failure(L"战场编辑器状态为空");
     if (delta == 0) return success(L"战场方向未变化");
-    const bool adjusting_group =
+    const bool adjusting_position =
         state_->mode == BattleEditorMode::AdjustPosition &&
-        state_->adjusting_cache_id != 0 &&
-        state_->selection_group.size() > 1 &&
-        state_->group_adjustment_direction >= 0;
-    if (adjusting_group) {
-        state_->group_adjustment_direction = WrappedDirection(
-            state_->group_adjustment_direction + delta);
-        return success(L"多选移动预览朝向已统一调整；确认后整组应用", true,
-                       state_->selection_group.size());
+        state_->adjusting_cache_id != 0;
+    if (adjusting_position) {
+        if (state_->position_adjustment_direction < 0)
+            return failure(L"当前单位不支持调整朝向");
+        state_->position_adjustment_direction = WrappedDirection(
+            state_->position_adjustment_direction + delta);
+        const bool adjusting_group = state_->selection_group.size() > 1;
+        return success(adjusting_group
+                ? L"多选移动预览朝向已统一调整；确认后整组应用"
+                : L"单体位置预览朝向已调整；确认后应用",
+            true, adjusting_group ? state_->selection_group.size() : 1U);
     }
     if (!state_->selection.has_value() ||
         state_->mode == BattleEditorMode::Place) {
@@ -1958,7 +1973,7 @@ BattleEditorDraftRebaseResult RebaseBattleEditorDraft(
     rebased.mouse_direction = draft.mouse_direction;
     rebased.document_modified = draft.document_modified;
     rebased.adjusting_cache_id = 0;
-    rebased.group_adjustment_direction = -1;
+    rebased.position_adjustment_direction = -1;
     rebased.hover.reset();
 
     std::map<std::uint64_t, std::uint64_t> cache_id_remap;

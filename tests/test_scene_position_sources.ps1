@@ -31,6 +31,7 @@ Assert-Contains $source 'PortraitMove' 'portrait move source kind is missing'
 Assert-Contains $source 'recordActor' 'actor source tracker is missing'
 Assert-Contains $source 'recordPortrait' 'portrait source tracker is missing'
 Assert-Contains $source 'hidePortrait' 'portrait hide reset is missing'
+Assert-Contains $source 'position_direction_index' 'actor position source facing index mapping is missing'
 
 Assert-Contains $coordinate 'OuterPixels' 'outer pixel coordinate space is missing'
 Assert-Contains $coordinate 'InnerLogical' 'inner logical coordinate space is missing'
@@ -53,6 +54,26 @@ Assert-Contains $preview 'CommitMapPortraitPosition' 'portrait position commit i
 # 5.1, whose no-BOM script decoding follows the system code page.
 Assert-Contains $preview 'OuterPixels' 'outer coordinate label branch is missing'
 Assert-Contains $preview 'ID_SCENE_ADJUST' 'portrait adjustment menu command is missing'
+
+# R adjust-position wheel input must stage facing in preview state. The final
+# confirmation is the only point that writes facing into the position source.
+$wheelStart = $preview.IndexOf('BOOL CRScenePreviewPage::OnMouseWheel')
+$wheelEnd = $preview.IndexOf('HTREEITEM CRScenePreviewPage::FindAppearInstruction', $wheelStart)
+if ($wheelStart -lt 0 -or $wheelEnd -le $wheelStart) {
+    throw 'SCENE_POSITION_SOURCE_TEST_FAIL: R mouse wheel handler boundaries are missing'
+}
+$wheelMethod = $preview.Substring($wheelStart, $wheelEnd - $wheelStart)
+$wheelAdjustMatch = [regex]::Match($wheelMethod,
+    '(?s)if\s*\(m_bAdjustMode\s*&&\s*m_adjustCharID\s*>=\s*0\)\s*\{(.*?)\n\t\}')
+if (-not $wheelAdjustMatch.Success) {
+    throw 'SCENE_POSITION_SOURCE_TEST_FAIL: R adjust-position wheel branch is missing'
+}
+Assert-Contains $wheelAdjustMatch.Groups[1].Value 'ch\.direction\s*=\s*\(ch\.direction\s*\+\s*delta\s*\+\s*4\)\s*%\s*4' 'R adjust-position wheel does not stage facing'
+if ($wheelAdjustMatch.Groups[1].Value -match 'InsertTurnInstruction') {
+    throw 'SCENE_POSITION_SOURCE_TEST_FAIL: R adjust-position wheel writes turn instructions before confirmation'
+}
+Assert-Contains $preview 'CommitCharacterStates\(\{\s*adjustedState\s*\},\s*true\)' 'R adjust-position confirmation does not commit staged facing'
+Assert-Contains $preview 'position_direction_index\(entry\.source\.source\.kind\)' 'position writeback does not use the source-facing index'
 
 # Position-only writeback must use the tracked source indices, not hard-code 0x30.
 Assert-Contains $preview 'entry\.source\.source\.xIndex' 'position writeback does not use source X index'

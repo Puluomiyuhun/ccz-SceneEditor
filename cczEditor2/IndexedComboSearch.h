@@ -48,9 +48,12 @@ inline bool ParseDecimalCode(const std::wstring& text, int& value)
 
 inline bool ExtractLeadingDecimalCode(const std::wstring& label, int& value)
 {
-    const size_t separator = label.find(L':');
-    if (separator == std::wstring::npos || separator == 0) return false;
-    return ParseDecimalCode(label.substr(0, separator), value);
+	// Character pickers use both legacy `id:name` labels and the S-preview
+	// roster's `id.name` format.  Accept both so numeric direct input keeps
+	// resolving the same indexed character without changing its display text.
+	const size_t separator = label.find_first_of(L":.");
+	if (separator == std::wstring::npos || separator == 0) return false;
+	return ParseDecimalCode(label.substr(0, separator), value);
 }
 
 inline wchar_t FoldCase(wchar_t ch)

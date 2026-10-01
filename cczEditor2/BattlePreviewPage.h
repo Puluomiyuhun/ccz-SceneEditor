@@ -174,6 +174,7 @@ private:
 		ccz::editor_preview::BattleParameterPreviewMode mode);
 	void EnsurePortraitAssets();
 	Gdiplus::Bitmap* GetUnitPortrait(int data_id);
+	Gdiplus::Bitmap* GetOwnFactionPlaceholderPortrait();
 	void DrawHoveredUnitCard(Gdiplus::Graphics& graphics,
 		const ccz::preview::BattleCoord& coordinate,
 		const CPoint& pointer, float cell);
@@ -197,6 +198,8 @@ private:
 	void OpenBatchUnitParameters();
 	void BindSelectedDeployment();
 	void ShowOperationResult(
+		const ccz::editor_preview::BattleEditorResult& result);
+	void ShowSelectionOperationResult(
 		const ccz::editor_preview::BattleEditorResult& result);
 	void StampAt(const ccz::preview::BattleCoord& coordinate);
 	void SetSidebarVisible(bool visible);
@@ -306,6 +309,8 @@ private:
 	std::map<int, Gdiplus::Bitmap*> m_unitSprites;
 	std::map<int, std::unique_ptr<Gdiplus::Bitmap>> m_unitPortraits;
 	std::set<int> m_failedPortraitDataIds;
+	std::unique_ptr<Gdiplus::Bitmap> m_ownFactionPlaceholderPortrait;
+	bool m_ownFactionPlaceholderPortraitLoaded{};
 	std::wstring m_unitSpritePath;
 	std::uint64_t m_unitSpriteRevision{};
 	std::wstring m_portraitRootKey;

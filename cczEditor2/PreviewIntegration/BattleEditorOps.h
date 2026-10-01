@@ -163,9 +163,9 @@ struct BattleEditorState {
     std::vector<BattleSelection> selection_group;
     std::uint64_t next_cache_id{1};
     std::uint64_t adjusting_cache_id{};
-    // Batch move mirrors R preview: every member previews with the anchor's
-    // direction, and the shared direction is committed only on drop.
-    int group_adjustment_direction{-1};
+    // Position adjustment stages direction for the preview (shared by the
+    // selected group when present) and commits it only on confirmation.
+    int position_adjustment_direction{-1};
     std::optional<ccz::preview::BattleCoord> hover;
     bool direction_locked{};
     bool copy_person_mode{};
@@ -252,6 +252,8 @@ public:
         const ccz::preview::BattleCoord& coordinate) const;
     BattleEditorResult Place(const ccz::preview::BattleCoord& coordinate);
     BattleEditorResult SelectAt(const ccz::preview::BattleCoord& coordinate);
+    BattleEditorResult ToggleSelectionAt(
+        const ccz::preview::BattleCoord& coordinate);
     BattleEditorResult AddSelectionAt(
         const ccz::preview::BattleCoord& coordinate);
     BattleEditorResult RemoveSelectionAt(

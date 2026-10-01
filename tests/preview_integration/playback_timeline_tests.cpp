@@ -35,7 +35,8 @@ InstructionCatalog catalog() {
                    {0x13, L"case"},       {0x14, L"对话"},
                    {0x09, L"延时"},        {0x29, L"地图头像显示"},
                    {0x2a, L"地图头像移动"}, {0x30, L"武将出现"},
-                   {0x32, L"武将移动"}, {0x1c, L"绘图"}};
+                   {0x32, L"武将移动"}, {0x33, L"武将转向"},
+                   {0x34, L"武将动作"}, {0x1c, L"绘图"}};
     return value;
 }
 
@@ -158,6 +159,27 @@ CCZ_TEST(playback_timeline_classifies_outer_portrait_move_and_delay) {
     CCZ_REQUIRE_EQ(timeline.events[0].kind, PlaybackSegmentKind::Instant);
     CCZ_REQUIRE_EQ(timeline.events[1].kind, PlaybackSegmentKind::Instant);
     CCZ_REQUIRE_EQ(timeline.events[2].kind, PlaybackSegmentKind::PortraitMove);
+    CCZ_REQUIRE_EQ(timeline.events[2].duration_units, std::int32_t{1});
+}
+
+CCZ_TEST(playback_timeline_holds_character_turn_and_action_instructions) {
+    ReplayOptions options;
+    const LogicalNodeKey target = L"action";
+    const SectionExecutionModel model = model_for(
+        {raw_node(L"boundary", 0x00),
+         raw_node(L"appear", 0x30, {}, {1, 10, 10, 2, 0}),
+         raw_node(L"turn", 0x33, {}, {1, 0, 3, 0, 0}),
+         raw_node(L"action", 0x34, {}, {1, 6, 0, 0, 0})},
+        target, options);
+
+    const PlaybackTimeline timeline = build_playback_timeline(
+        model, target, PlaybackRange::StartToTarget, options);
+
+    CCZ_REQUIRE(timeline.complete);
+    CCZ_REQUIRE_EQ(timeline.events.size(), std::size_t{3});
+    CCZ_REQUIRE_EQ(timeline.events[1].kind, PlaybackSegmentKind::Hold);
+    CCZ_REQUIRE_EQ(timeline.events[1].duration_units, std::int32_t{1});
+    CCZ_REQUIRE_EQ(timeline.events[2].kind, PlaybackSegmentKind::Hold);
     CCZ_REQUIRE_EQ(timeline.events[2].duration_units, std::int32_t{1});
 }
 

@@ -21,10 +21,12 @@
 #endif
 #include "MainFrm.h"
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <string>
 #include "myTool.h"
 #include "TextWrapAssist.h"
+#include "TextWrapEditSession.h"
 #pragma comment(lib, "version.lib")
 #include <atlimage.h>
 
@@ -2714,83 +2716,101 @@ bool StoreLongCharDataOrReport(ItemData* data, const CString& text)
 	return true;
 }
 
-CString ApplyAutoWrapForStorage(const CString& text, int limit)
+int Cp936ByteCountForText(std::wstring_view text)
 {
-	CString wrapped = ccz::text_wrap::ApplyAutoWrap(text, limit);
-	int lineBreakCount = 0;
-	for (int i = 0; i < wrapped.GetLength(); ++i)
-	{
-		if (wrapped[i] == L'\n')
-			++lineBreakCount;
-	}
-	// The stored EEX value uses LF, but the edit control uses CRLF.  Reserve
-	// one extra code unit per generated/manual line break for the UI limit.
-	if (wrapped.GetLength() + lineBreakCount <=
-		static_cast<int>(ccz::editor::kLongCharDataMaxLength))
-		return wrapped;
-
-	// The byte threshold controls each line, while the EEX text field has a
-	// separate whole-value UTF-16 contract.  Do not make the dialog's live
-	// helper create a value that the save path must reject; preserve the user's
-	// text and let manual line breaks remain untouched.
-	return text;
+	if (text.empty())
+		return 0;
+	const int length = static_cast<int>((std::min)(
+		text.size(), static_cast<std::size_t>((std::numeric_limits<int>::max)())));
+	const int bytes = WideCharToMultiByte(
+		936, 0, text.data(), length, nullptr, 0, nullptr, nullptr);
+	return bytes > 0 ? bytes : length;
 }
 
-CString ToEditLineBreaks(const CString& text)
+std::wstring_view ToWideView(const CString& text)
+{
+	return std::wstring_view(text.GetString(), static_cast<std::size_t>(text.GetLength()));
+}
+
+CString ToCString(const std::wstring& text)
+{
+	return CString(text.data(), static_cast<int>(text.size()));
+}
+
+CString ToStorageLineBreaks(const CString& text)
 {
 	CString result;
-	result.Preallocate(text.GetLength() + 8);
+	result.Preallocate(text.GetLength());
 	for (int i = 0; i < text.GetLength(); ++i)
-	{
-		if (text[i] == L'\r')
-		{
-			result += L'\r';
-			if (i + 1 < text.GetLength() && text[i + 1] == L'\n')
-			{
-				result += L'\n';
-				++i;
-			}
-		}
-		else if (text[i] == L'\n')
-		{
-			result += L"\r\n";
-		}
-		else
-		{
+		if (text[i] != L'\r')
 			result += text[i];
-		}
-	}
 	return result;
 }
 
-void ApplyWrapToEdit(CEdit& edit, int limit)
+void SetWrapEditText(CEdit& edit, const ccz::text_wrap::EditTextUpdate& update)
 {
-	if (limit <= 0)
-		return;
-
+	CString newText = ToCString(update.state.edit_text);
 	CString current;
 	edit.GetWindowTextW(current);
-	CString wrapped = ApplyAutoWrapForStorage(current, limit);
-	CString editText = ToEditLineBreaks(wrapped);
-	if (editText == current)
-		return;
+	if (newText != current)
+	{
+		edit.SetWindowTextW(newText);
+		edit.SetSel(static_cast<int>(update.selection_start),
+			static_cast<int>(update.selection_end));
+	}
+}
 
+void InitializeWrapEdit(CEdit& edit, ccz::text_wrap::EditTextState& state,
+	const CString& source, int limit, bool enabled)
+{
+	state = ccz::text_wrap::CreateEditTextState(
+		ToWideView(source), enabled ? limit : 0, Cp936ByteCountForText,
+		ccz::editor::kLongCharDataMaxLength);
+	CString editText = ToCString(state.edit_text);
+	CString current;
+	edit.GetWindowTextW(current);
+	if (editText != current)
+	{
+		edit.SetWindowTextW(editText);
+		edit.SetSel(0, 0);
+	}
+}
+
+void ApplyWrapToEdit(CEdit& edit, ccz::text_wrap::EditTextState& state, int limit)
+{
 	int selectionStart = 0;
 	int selectionEnd = 0;
 	edit.GetSel(selectionStart, selectionEnd);
-	const int maxSelection = current.GetLength();
-	selectionStart = (std::max)(0, (std::min)(selectionStart, maxSelection));
-	selectionEnd = (std::max)(selectionStart, (std::min)(selectionEnd, maxSelection));
+	auto update = ccz::text_wrap::RewrapEditText(
+		state, static_cast<std::size_t>((std::max)(0, selectionStart)),
+		static_cast<std::size_t>((std::max)(0, selectionEnd)), limit,
+		Cp936ByteCountForText, ccz::editor::kLongCharDataMaxLength);
+	state = update.state;
+	SetWrapEditText(edit, update);
+}
 
-	// ApplyAutoWrap only inserts characters, so wrapping the two prefixes maps
-	// the old selection to the new text without forcing the caret to the end.
-	const int mappedStart = ToEditLineBreaks(ApplyAutoWrapForStorage(
-		current.Left(selectionStart), limit)).GetLength();
-	const int mappedEnd = ToEditLineBreaks(ApplyAutoWrapForStorage(
-		current.Left(selectionEnd), limit)).GetLength();
+void ApplyWrapTextChange(CEdit& edit, ccz::text_wrap::EditTextState& state, int limit)
+{
+	CString current;
+	edit.GetWindowTextW(current);
+	int selectionStart = 0;
+	int selectionEnd = 0;
+	edit.GetSel(selectionStart, selectionEnd);
+	auto update = ccz::text_wrap::ApplyEditTextChange(
+		state, ToWideView(current),
+		static_cast<std::size_t>((std::max)(0, selectionStart)),
+		static_cast<std::size_t>((std::max)(0, selectionEnd)), limit,
+		Cp936ByteCountForText, ccz::editor::kLongCharDataMaxLength);
+	state = update.state;
+	SetWrapEditText(edit, update);
+}
 
-	edit.SetWindowTextW(editText);
-	edit.SetSel(mappedStart, mappedEnd);
+void AdoptWrapEditText(CEdit& edit, ccz::text_wrap::EditTextState& state)
+{
+	CString current;
+	edit.GetWindowTextW(current);
+	state = ccz::text_wrap::AdoptEditTextAsSource(
+		ToWideView(current), ccz::editor::kLongCharDataMaxLength);
 }
 }
 
@@ -2823,12 +2843,10 @@ BOOL Dialog_2::OnInitDialog()
 		SetWrapLimitText(wrap_bytes, limit);
 		if (pView->cur_code == 22)
 			wrap_mode.SetWindowTextW(wrap_history_mode ? L"历史信息" : L"普通信息");
-		if (wrap_enable.GetCheck() == BST_CHECKED)
-		{
-			wrap_updating = true;
-			ApplyWrapToEdit(edit1, limit);
-			wrap_updating = false;
-		}
+		wrap_updating = true;
+		InitializeWrapEdit(edit1, wrap_state, str, limit,
+			wrap_enable.GetCheck() == BST_CHECKED);
+		wrap_updating = false;
 	}
 	return TRUE;
 }
@@ -2856,13 +2874,16 @@ void Dialog_2::OnBnClickedOk()
 		SetWrapLimitText(wrap_bytes, limit);
 		const bool wrapEnabled = wrap_enable.GetCheck() == BST_CHECKED;
 		if (wrapEnabled)
-			str = ApplyAutoWrapForStorage(str, limit);
-		for (int i = 0; i < str.GetLength(); i++)
 		{
-			if (str[i] == '\r') {
-				str.Delete(i);
-				i++;
-			}
+			wrap_updating = true;
+			ApplyWrapTextChange(edit1, wrap_state, limit);
+			wrap_updating = false;
+			str = ToCString(wrap_state.storage_text);
+		}
+		else
+		{
+			AdoptWrapEditText(edit1, wrap_state);
+			str = ToStorageLineBreaks(str);
 		}
 		if (!StoreLongCharDataOrReport(data, str)) return;
 		ccz::text_wrap::SaveLimit(pView->cur_code, wrap_history_mode, limit);
@@ -2896,17 +2917,17 @@ void Dialog_2::OnBnClickedWrapMode()
 	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(
 		pView->cur_code, wrap_history_mode, true) ? BST_CHECKED : BST_UNCHECKED);
 	wrap_mode.SetWindowTextW(wrap_history_mode ? L"历史信息" : L"普通信息");
+	wrap_updating = true;
 	if (wrap_enable.GetCheck() == BST_CHECKED)
-	{
-		wrap_updating = true;
-		ApplyWrapToEdit(edit1, limit);
-		wrap_updating = false;
-	}
+		ApplyWrapToEdit(edit1, wrap_state, limit);
+	else
+		AdoptWrapEditText(edit1, wrap_state);
+	wrap_updating = false;
 }
 
 void Dialog_2::OnBnClickedWrapEnable()
 {
-	if (!wrap_supported || wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+	if (!wrap_supported || wrap_updating)
 		return;
 
 	CcczEditor2View* pView = (CcczEditor2View*)(((CMainFrame*)AfxGetMainWnd())->MDIGetActive()->GetActiveView());
@@ -2918,13 +2939,16 @@ void Dialog_2::OnBnClickedWrapEnable()
 	const int limit = ccz::text_wrap::ParseLimit(
 		limitText, ccz::text_wrap::DefaultLimit(pView->cur_code, wrap_history_mode));
 	wrap_updating = true;
-	ApplyWrapToEdit(edit1, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+		ApplyWrapToEdit(edit1, wrap_state, limit);
+	else
+		AdoptWrapEditText(edit1, wrap_state);
 	wrap_updating = false;
 }
 
 void Dialog_2::OnEnChangeWrapText()
 {
-	if (!wrap_supported || wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+	if (!wrap_supported || wrap_updating)
 		return;
 
 	CcczEditor2View* pView = (CcczEditor2View*)(((CMainFrame*)AfxGetMainWnd())->MDIGetActive()->GetActiveView());
@@ -2936,7 +2960,10 @@ void Dialog_2::OnEnChangeWrapText()
 	const int limit = ccz::text_wrap::ParseLimit(
 		limitText, ccz::text_wrap::DefaultLimit(pView->cur_code, wrap_history_mode));
 	wrap_updating = true;
-	ApplyWrapToEdit(edit1, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+		ApplyWrapTextChange(edit1, wrap_state, limit);
+	else
+		AdoptWrapEditText(edit1, wrap_state);
 	wrap_updating = false;
 }
 BEGIN_MESSAGE_MAP(Dialog_4, myDialog)
@@ -3365,12 +3392,10 @@ BOOL Dialog_21::OnInitDialog()
 	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(21, false, true) ? BST_CHECKED : BST_UNCHECKED);
 	const int limit = ccz::text_wrap::LoadLimit(21, false);
 	SetWrapLimitText(wrap_bytes, limit);
-	if (wrap_enable.GetCheck() == BST_CHECKED)
-	{
-		wrap_updating = true;
-		ApplyWrapToEdit(edit1, limit);
-		wrap_updating = false;
-	}
+	wrap_updating = true;
+	InitializeWrapEdit(edit1, wrap_state, str, limit,
+		wrap_enable.GetCheck() == BST_CHECKED);
+	wrap_updating = false;
 	return TRUE;
 }
 
@@ -3388,13 +3413,16 @@ void Dialog_21::OnBnClickedOk()
 	SetWrapLimitText(wrap_bytes, limit);
 	const bool wrapEnabled = wrap_enable.GetCheck() == BST_CHECKED;
 	if (wrapEnabled)
-		str = ApplyAutoWrapForStorage(str, limit);
-	for (int i = 0; i < str.GetLength(); i++)
 	{
-		if (str[i] == '\r') {
-			str.Delete(i);
-			i++;
-		}
+		wrap_updating = true;
+		ApplyWrapTextChange(edit1, wrap_state, limit);
+		wrap_updating = false;
+		str = ToCString(wrap_state.storage_text);
+	}
+	else
+	{
+		AdoptWrapEditText(edit1, wrap_state);
+		str = ToStorageLineBreaks(str);
 	}
 	if (!StoreLongCharDataOrReport(data, str)) return;
 	ccz::text_wrap::SaveLimit(21, false, limit);
@@ -3411,7 +3439,7 @@ void Dialog_21::OnBnClickedOk()
 
 void Dialog_21::OnBnClickedWrapEnable()
 {
-	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+	if (wrap_updating)
 		return;
 
 	CString limitText;
@@ -3419,13 +3447,16 @@ void Dialog_21::OnBnClickedWrapEnable()
 	const int limit = ccz::text_wrap::ParseLimit(
 		limitText, ccz::text_wrap::DefaultLimit(21, false));
 	wrap_updating = true;
-	ApplyWrapToEdit(edit1, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+		ApplyWrapToEdit(edit1, wrap_state, limit);
+	else
+		AdoptWrapEditText(edit1, wrap_state);
 	wrap_updating = false;
 }
 
 void Dialog_21::OnEnChangeWrapText()
 {
-	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+	if (wrap_updating)
 		return;
 
 	CString limitText;
@@ -3433,7 +3464,10 @@ void Dialog_21::OnEnChangeWrapText()
 	const int limit = ccz::text_wrap::ParseLimit(
 		limitText, ccz::text_wrap::DefaultLimit(21, false));
 	wrap_updating = true;
-	ApplyWrapToEdit(edit1, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+		ApplyWrapTextChange(edit1, wrap_state, limit);
+	else
+		AdoptWrapEditText(edit1, wrap_state);
 	wrap_updating = false;
 }
 
@@ -3981,12 +4015,10 @@ BOOL Dialog_44::OnInitDialog()
 	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(44, false, true) ? BST_CHECKED : BST_UNCHECKED);
 	const int limit = ccz::text_wrap::LoadLimit(44, false);
 	SetWrapLimitText(wrap_bytes, limit);
-	if (wrap_enable.GetCheck() == BST_CHECKED)
-	{
-		wrap_updating = true;
-		ApplyWrapToEdit(edit1, limit);
-		wrap_updating = false;
-	}
+	wrap_updating = true;
+	InitializeWrapEdit(edit1, wrap_state, str, limit,
+		wrap_enable.GetCheck() == BST_CHECKED);
+	wrap_updating = false;
 	return TRUE;
 }
 
@@ -4004,13 +4036,16 @@ void Dialog_44::OnBnClickedOk()
 	SetWrapLimitText(wrap_bytes, limit);
 	const bool wrapEnabled = wrap_enable.GetCheck() == BST_CHECKED;
 	if (wrapEnabled)
-		str = ApplyAutoWrapForStorage(str, limit);
-	for (int i = 0; i < str.GetLength(); i++)
 	{
-		if (str[i] == '\r') {
-			str.Delete(i);
-			i++;
-		}
+		wrap_updating = true;
+		ApplyWrapTextChange(edit1, wrap_state, limit);
+		wrap_updating = false;
+		str = ToCString(wrap_state.storage_text);
+	}
+	else
+	{
+		AdoptWrapEditText(edit1, wrap_state);
+		str = ToStorageLineBreaks(str);
 	}
 	if (!StoreLongCharDataOrReport(data, str)) return;
 	ccz::text_wrap::SaveLimit(44, false, limit);
@@ -4026,7 +4061,7 @@ void Dialog_44::OnBnClickedOk()
 
 void Dialog_44::OnBnClickedWrapEnable()
 {
-	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+	if (wrap_updating)
 		return;
 
 	CString limitText;
@@ -4034,13 +4069,16 @@ void Dialog_44::OnBnClickedWrapEnable()
 	const int limit = ccz::text_wrap::ParseLimit(
 		limitText, ccz::text_wrap::DefaultLimit(44, false));
 	wrap_updating = true;
-	ApplyWrapToEdit(edit1, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+		ApplyWrapToEdit(edit1, wrap_state, limit);
+	else
+		AdoptWrapEditText(edit1, wrap_state);
 	wrap_updating = false;
 }
 
 void Dialog_44::OnEnChangeWrapText()
 {
-	if (wrap_enable.GetCheck() != BST_CHECKED || wrap_updating)
+	if (wrap_updating)
 		return;
 
 	CString limitText;
@@ -4048,7 +4086,10 @@ void Dialog_44::OnEnChangeWrapText()
 	const int limit = ccz::text_wrap::ParseLimit(
 		limitText, ccz::text_wrap::DefaultLimit(44, false));
 	wrap_updating = true;
-	ApplyWrapToEdit(edit1, limit);
+	if (wrap_enable.GetCheck() == BST_CHECKED)
+		ApplyWrapTextChange(edit1, wrap_state, limit);
+	else
+		AdoptWrapEditText(edit1, wrap_state);
 	wrap_updating = false;
 }
 

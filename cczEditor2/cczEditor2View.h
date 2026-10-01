@@ -4,6 +4,7 @@
 
 #pragma once
 #include "CMyComboBox.h"
+#include "TextWrapEditSession.h"
 #include <vector>
 
 class CcczEditor2View : public CTreeView
@@ -408,6 +409,7 @@ public:
 	bool wrap_history_mode = false;
 	bool wrap_supported = false;
 	bool wrap_updating = false;
+	ccz::text_wrap::EditTextState wrap_state;
 	bool ctrl_on;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
@@ -632,6 +634,7 @@ public:
 	CButton wrap_enable;
 	CEdit wrap_bytes;
 	bool wrap_updating = false;
+	ccz::text_wrap::EditTextState wrap_state;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
 	afx_msg void OnBnClickedWrapEnable();
@@ -938,6 +941,7 @@ public:
 	CButton wrap_enable;
 	CEdit wrap_bytes;
 	bool wrap_updating = false;
+	ccz::text_wrap::EditTextState wrap_state;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
 	afx_msg void OnBnClickedWrapEnable();

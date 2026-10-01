@@ -70,6 +70,7 @@
 #define IDR_THEME_MENU                  200
 #define ID_SET_STYLE                    201
 #define IDR_cczEditor2TYPE2             201
+#define IDR_BATTLE_OWN_PORTRAIT          392
 #define ID_VIEW_APPLOOK_WIN_2000        205
 #define ID_VIEW_APPLOOK_OFF_XP          206
 #define ID_VIEW_APPLOOK_WIN_XP          207
@@ -319,7 +320,7 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        392
+#define _APS_NEXT_RESOURCE_VALUE        393
 #define _APS_NEXT_COMMAND_VALUE         40062
 #define _APS_NEXT_CONTROL_VALUE         1030
 #define _APS_NEXT_SYMED_VALUE           311

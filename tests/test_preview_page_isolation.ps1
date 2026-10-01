@@ -47,6 +47,26 @@ Assert-Text $hostSource 'L"请加载R剧本或S剧本"' `
     'neutral preview state asks the user to load an R or S script'
 Assert-Text $hostSource 'SW_HIDE|ShowWindow\(SW_' `
     'host switches child-page visibility without replacing the dock pane'
+$showPageStart = $hostSource.IndexOf('void CScenePreviewWnd::ShowPage(')
+$showPageEnd = $hostSource.IndexOf('int CScenePreviewWnd::OnCreate(', $showPageStart)
+if ($showPageStart -lt 0 -or $showPageEnd -le $showPageStart) {
+    throw 'PREVIEW_PAGE_ISOLATION_FAIL: cannot isolate the page-switch repaint path'
+}
+$showPage = $hostSource.Substring($showPageStart, $showPageEnd - $showPageStart)
+Assert-Text $showPage 'RedrawWindow\([\s\S]*RDW_INVALIDATE[\s\S]*RDW_ALLCHILDREN[\s\S]*RDW_UPDATENOW' `
+    'page activation synchronously redraws the page and its child controls'
+$rPaintStart = $rSource.IndexOf('void CRScenePreviewPage::OnPaint()')
+$rPaintEnd = $rSource.IndexOf('// ========== 武将列表', $rPaintStart)
+if ($rPaintStart -lt 0 -or $rPaintEnd -le $rPaintStart) {
+    throw 'PREVIEW_PAGE_ISOLATION_FAIL: cannot isolate the R canvas paint path'
+}
+$rPaint = $rSource.Substring($rPaintStart, $rPaintEnd - $rPaintStart)
+Assert-NotText $rPaint 'FillSolidRect\(clientRect,\s*RGB\(32,\s*32,\s*32\)\)' `
+    'R page does not erase the entire client directly before every buffered paint'
+Assert-Text $rPaint 'uncoveredRects[\s\S]*?FillSolidRect\(uncoveredRect' `
+    'R page clears only uncovered bands outside the buffered canvas'
+Assert-Text $rPaint 'memDC\.CreateCompatibleDC[\s\S]*?BitBlt\(canvasRect\.left' `
+    'R canvas is rendered to a back buffer and then blitted to its page region'
 Assert-Text $hostSource 'InitCharList' 'existing character list API remains forwarded for R compatibility'
 Assert-NotText $hostSource 'm_sPage->InitCharList|m_sPage\.InitCharList' `
     'host never forwards the R character table to S'

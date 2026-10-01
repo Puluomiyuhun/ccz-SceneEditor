@@ -57,4 +57,15 @@ Assert-Contains $view 'data->int_data\[data->int_data\[0\]\s*\+\s*1\]\s*\+\s*1' 
 Assert-Contains $view 'data->int_data\[0\]\s*==\s*2' 'interior-scene serialized index contract changed'
 Assert-Contains $view 'data->int_data\[data->int_data\[0\]\s*\+\s*1\]\s*\+\s*41' 'interior-scene serialized offset changed'
 
+$statusStart = $preview.IndexOf('// 状态信息')
+$statusEnd = $preview.IndexOf('// Keep the controls visually grouped', $statusStart)
+if ($statusStart -lt 0 -or $statusEnd -le $statusStart) {
+    throw 'SCENE_BACKGROUND_TEST_FAIL: R status text block not found'
+}
+$statusBlock = $preview.Substring($statusStart, $statusEnd - $statusStart)
+Assert-Contains $statusBlock 'try_resolve_background_script_number\(\s*renderState\.mapImageIndex,\s*displayedMapNumber\)' 'status bar does not restore the direct script map number'
+Assert-Contains $statusBlock 'info\.Format\(_T\("%s\s+地图号:%d\s+角色:%d\s+地图头像:%d"\),\s*sceneLabel,\s*displayedMapNumber' 'scene label is not first or map number label is incorrect'
+Assert-Contains $statusBlock 'L"外场景"[\s\S]*?L"内场景"' 'status bar does not distinguish outer and interior scenes'
+Assert-Contains $statusBlock 'L"像素坐标"\s*:\s*L"逻辑坐标"' 'coordinate labels do not match their coordinate spaces'
+
 'SCENE_BACKGROUND_TEST_PASS'
