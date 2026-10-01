@@ -3,6 +3,7 @@
 #include "BattleConditionTreeAdapter.h"
 #include "BattleBitmapCachePolicy.h"
 #include "BattleEditorOps.h"
+#include "BattleMapOperations.h"
 #include "BattlePreviewAdapter.h"
 #include "BattleWritebackAdapter.h"
 
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace ccz::editor_preview {
@@ -66,6 +68,14 @@ struct BattlePreviewUiState {
 	std::uint64_t selected_unit_cache_id{};
 };
 
+struct BattleMapOperationUiState {
+	BattleMapToolMode tool_mode{BattleMapToolMode::None};
+	int selected_obstacle_type{};
+	BattleObstacleDraftQueue obstacle_drafts;
+	std::optional<ccz::preview::BattleUnit> move_operation_unit;
+	int revive_operation_data_id{-1};
+};
+
 struct BattlePreviewConditionWorkspace {
 	BattleEditorState state;
 	std::unique_ptr<BattleEditorOps> operations;
@@ -97,6 +107,7 @@ struct BattlePreviewDocumentSession {
 	ccz::preview::ScriptVariableIndex condition_variable_index;
 	ccz::preview::LogicalNodeKey condition_activation_target;
 	BattlePreviewUiState ui;
+	BattleMapOperationUiState map_operations;
 	std::wstring diagnostic;
 	std::wstring quick_mode_diagnostic;
 	bool native_writeback_rebase_required{};

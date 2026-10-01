@@ -6,6 +6,7 @@ $page = Get-Content -LiteralPath (Join-Path $repo 'cczEditor2/BattlePreviewPage.
 $hostHeader = Get-Content -LiteralPath (Join-Path $repo 'cczEditor2/ScenePreviewHost.h') -Raw -Encoding UTF8
 $previewHost = Get-Content -LiteralPath (Join-Path $repo 'cczEditor2/ScenePreviewHost.cpp') -Raw -Encoding UTF8
 $view = Get-Content -LiteralPath (Join-Path $repo 'cczEditor2/cczEditor2View.cpp') -Raw -Encoding UTF8
+$sessionHeader = Get-Content -LiteralPath (Join-Path $repo 'cczEditor2/PreviewIntegration/BattlePreviewSession.h') -Raw -Encoding UTF8
 
 function Assert-Text([string]$text, [string]$pattern, [string]$message) {
     if ($text -notmatch $pattern) { throw "BATTLE_PREVIEW_SESSION_FAIL: $message" }
@@ -21,6 +22,12 @@ function Get-Block([string]$text, [string]$start, [string]$end) {
 }
 
 $refreshBlock = Get-Block $page 'bool CSBattlePreviewPage::RequestPreviewRefresh(' 'bool CSBattlePreviewPage::ConfirmDiscardTemporaryChanges()'
+$quickRefreshBlock = Get-Block $page 'bool CSBattlePreviewPage::RequestQuickModeRefresh(' 'bool CSBattlePreviewPage::SetQuickModeEnabled('
+$mapMenuBlock = Get-Block $page 'void CSBattlePreviewPage::ShowBattleMapOperationsMenu()' 'void CSBattlePreviewPage::CancelBattleMapTool('
+$cancelEditorModeBlock = Get-Block $page 'void CSBattlePreviewPage::CancelConflictingBattleEditorMode()' 'void CSBattlePreviewPage::ShowBattleMapOperationsMenu()'
+$saveSessionBlock = Get-Block $page 'void CSBattlePreviewPage::SaveActiveSessionUiState()' 'void CSBattlePreviewPage::RestoreActiveSessionUiState()'
+$restoreSessionBlock = Get-Block $page 'void CSBattlePreviewPage::RestoreActiveSessionUiState()' 'void CSBattlePreviewPage::UnbindSession()'
+$unbindBlock = Get-Block $page 'void CSBattlePreviewPage::UnbindSession()' 'int CSBattlePreviewPage::OnCreate('
 $hostRefreshBlock = Get-Block $previewHost 'bool CScenePreviewWnd::RequestPreviewRefresh(' 'void CScenePreviewWnd::PrepareForTreeRebuild('
 $parkBlock = Get-Block $previewHost 'void CScenePreviewWnd::PrepareForTreeRebuild(' 'void CScenePreviewWnd::InvalidatePendingPreviewRefresh('
 $selectionBlock = Get-Block $view 'void CcczEditor2View::OnTvnSelchanged(' 'bool CcczEditor2View::RefreshScenePreview()'
@@ -35,8 +42,24 @@ Assert-Text $refreshBlock 'BuildBattlePreviewInput[\s\S]*document_revision\s*==\
     'selection-only changes retain the session when its document revision and Section are unchanged'
 Assert-Text $page 'ConfirmDiscardTemporaryChanges\(\)[\s\S]*MB_YESNO[\s\S]*MB_DEFBUTTON2' `
     'discarding pending temporary edits requires an explicit default-No prompt'
-Assert-Text $page 'bool CSBattlePreviewPage::ConfirmDiscardSessionChanges\([\s\S]*workspace\.second->operations->CanUndo\(\)[\s\S]*if\s*\(!hasTemporaryUndo\)\s*return true' `
-    'the discard prompt is driven by pending temporary editor undo history'
+Assert-Text $sessionHeader 'struct BattleMapOperationUiState[\s\S]*BattleMapToolMode[\s\S]*BattleObstacleDraftQueue[\s\S]*move_operation_unit[\s\S]*revive_operation_data_id' `
+    'map-operation tool state and obstacle drafts belong to their document session'
+Assert-Text $saveSessionBlock 'mapOperations\.tool_mode\s*=\s*m_battleMapToolMode[\s\S]*mapOperations\.obstacle_drafts\s*=\s*m_obstacleDrafts[\s\S]*mapOperations\.move_operation_unit\s*=\s*m_moveOperationUnit' `
+	'parking a document saves its map-operation state independently'
+Assert-Text $restoreSessionBlock 'm_battleMapToolMode\s*=\s*mapOperations\.tool_mode[\s\S]*m_obstacleDrafts\s*=\s*mapOperations\.obstacle_drafts[\s\S]*m_moveOperationUnit\s*=\s*mapOperations\.move_operation_unit' `
+	'reactivating a document restores only that document map-operation state'
+Assert-Text $unbindBlock 'SaveActiveSessionUiState\(\)[\s\S]*m_obstacleDrafts\.Clear\(\)[\s\S]*m_moveOperationUnit\.reset\(\)' `
+	'parking a document clears page-local operation data after persisting it'
+Assert-Text $quickRefreshBlock 'm_obstacleDrafts\.empty\(\)[\s\S]*MarkSessionStale[\s\S]*障碍物.*保留' `
+	'a changed or unresolvable Scene1 baseline cannot silently discard staged obstacles'
+Assert-Text $page 'bool CSBattlePreviewPage::ConfirmDiscardSessionChanges\([\s\S]*workspace\.second->operations->CanUndo\(\)[\s\S]*hasMapOperationState[\s\S]*if\s*\(!hasTemporaryUndo\s*&&\s*!hasMapOperationState\)\s*return true' `
+	'the discard prompt covers both temporary editor undo history and staged map operations'
+Assert-Text $pageHeader 'CancelConflictingBattleEditorMode\(\)' `
+	'map-operation menu exposes one shared cancellation path for placement and position adjustment'
+Assert-Text $mapMenuBlock 'command == kMoveTo \|\| command == kReviveTo[\s\S]*command == kObstaclePlacement\)[\s\S]*CancelConflictingBattleEditorMode\(\)' `
+	'move, revive, and obstacle tools all leave the unit placement/adjustment mode before starting'
+Assert-Text $cancelEditorModeBlock 'BattleEditorMode::AdjustPosition[\s\S]*CancelPositionAdjustment\(\)[\s\S]*BattleEditorMode::Place[\s\S]*CancelPlacementBrush\(\)' `
+	'canceling an adjustment that returns to placement also cancels the placement brush'
 Assert-Text $hostHeader 'bool RequestPreviewRefresh\(' `
     'preview host propagates rejected session transitions to the view'
 Assert-Text $hostRefreshBlock 'Page::RScene[\s\S]*ParkActiveSBattleDocument\(\)[\s\S]*ShowPage\(page\)' `

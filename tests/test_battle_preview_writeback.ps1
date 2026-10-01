@@ -61,7 +61,9 @@ Assert-Text $document 'data->int_data\[k - long_char_sum\]' 'EEX save serializes
 Assert-Text $document 'f\.Write\(int2ch\(data->int_data\[k - long_char_sum\], 4\), 4\)' 'EEX save emits the 0x4B coordinate fields as native four-byte values'
 Assert-Text $view 'InsertBattleInstructionAt' 'native battle insertion API is separate from generic insertion'
 Assert-Text $view 'intData.size\(\) != expectedSize' 'native battle insertion rejects truncated field vectors'
-Assert-Text $view 'instructionId != 0x46' 'native battle insertion is restricted to deployment commands'
+Assert-Text $view 'case 0x32:\s*case 0x55:\s*expectedSize = 6U; break;' 'native battle insertion accepts the six-field move and revive commands'
+Assert-Text $view 'case 0x58:\s*expectedSize = 7U; break;' 'native battle insertion accepts the seven-field obstacle command'
+Assert-Text $view 'sectionEntryEventBoundary = instructionId == 0x32[\s\S]*isSection' 'map operations can be anchored directly before a Section event container'
 Assert-Text $view 'fileName.Left\(2\).*L"S_"' 'native battle insertion rejects non-S scripts'
 Assert-Text $view 'fileName.Left\(2\).*L"S-"' 'native battle insertion accepts only explicit S script prefixes'
 Assert-Text $view 'wcscpy_s\(show, code\[id\]\)' 'tree items retain their native instruction label'
@@ -69,8 +71,8 @@ Assert-Text $view 'data->int_data = std::move\(intData\)' 'new deployment fields
 if ($view -match 'wcscat_s\(show, L"槽位:"\)') {
     throw 'BATTLE_WRITEBACK_FAIL: 0x4B display label must not be rewritten with placement fields'
 }
-Assert-Text $page 'DeleteBattleNode[\s\S]{0,600}CanDeleteBattleWritebackNativeNode' 'MFC transaction bridge shares the 0x4B/0x46/0x47 delete policy used by rollback and undo'
-Assert-Text $page 'RestoreBattleNodeBefore[\s\S]{0,500}CanDeleteBattleWritebackNativeNode[\s\S]{0,1000}make_unique<ItemData>[\s\S]{0,120}node\.int_data\.size\(\)' 'MFC transaction rollback restores each deployment type using its full native vector'
+Assert-Text $page 'DeleteBattleNode[\s\S]{0,600}CanDeleteBattleWritebackNativeNode' 'MFC transaction bridge shares the exact-size deployment and map-operation delete policy used by rollback and undo'
+Assert-Text $page 'RestoreBattleNodeBefore[\s\S]{0,500}CanDeleteBattleWritebackNativeNode[\s\S]{0,1000}make_unique<ItemData>[\s\S]{0,120}node\.int_data\.size\(\)' 'MFC transaction rollback restores supported instructions using their full native vectors'
 Assert-Text $pageHeader 'BuildPendingWritebackPlan' 'S page exposes a value-only writeback preflight'
 Assert-Text $pageHeader '(?s)private:.*?bool ApplyPendingNativeWritebackForCurrentSection' 'the S page exposes its current Section through a private native writeback entry'
 Assert-Text $page 'BuildBattleWritebackSectionSnapshot' 'preflight revalidates baseline against a fresh capture'
@@ -227,6 +229,8 @@ $expectedTests = @(
     'battle_writeback_native_transaction_rolls_back_when_a_late_insert_fails',
     'battle_writeback_native_transaction_inserts_under_nested_condition_event',
     'battle_writeback_native_transaction_inserts_all_three_new_unit_types',
+    'battle_writeback_native_transaction_inserts_and_undoes_map_operations_in_order',
+    'battle_writeback_native_transaction_rejects_map_operation_in_internal_info_group',
     'battle_writeback_native_transaction_rolls_back_after_first_insert_when_second_fails',
     'battle_writeback_native_transaction_rejects_stale_undo_without_mutating',
     'battle_writeback_native_transaction_rolls_back_a_partial_undo',

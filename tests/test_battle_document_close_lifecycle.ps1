@@ -58,8 +58,8 @@ Assert-Contract $canClose 'ConfirmDiscardSessionChanges' `
     'preview drafts from an inactive S document still receive a close prompt'
 Assert-NotContract $confirmSession 'hasNativeUndo|native_writeback_transaction\.undo_available\(\)' `
     'a committed native writeback undo record alone does not trigger the preview-draft discard prompt'
-Assert-Contract $confirmSession 'if\s*\(!hasTemporaryUndo\)\s*return true' `
-    'only an actual pending preview draft triggers the preview-draft discard prompt'
+Assert-Contract $confirmSession 'hasMapOperationState[\s\S]*if\s*\(!hasTemporaryUndo\s*&&\s*!hasMapOperationState\)\s*return true' `
+	'pending preview drafts and staged map operations trigger the discard prompt'
 Assert-Contract $cancelClose 'm_closeApprovalDocumentIds\.erase\(documentId\)' `
     'a canceled save clears only that document close approval'
 Assert-Contract $closeDocument 'm_sBattleSessions\.Erase\(documentId\)' `

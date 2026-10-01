@@ -215,7 +215,15 @@ bool key_in_scope(const ccz::preview::LogicalNodeKey& key,
 }
 
 std::size_t native_vector_size(std::uint16_t instruction) {
-    return instruction == 0x4b ? 20U : 1000U;
+    switch (instruction) {
+    case 0x4b: return 20U;
+    case 0x46:
+    case 0x47: return 1000U;
+    case 0x32:
+    case 0x55: return 6U;
+    case 0x58: return 7U;
+    default: return 0U;
+    }
 }
 
 std::size_t record_count(const BattleFieldSpec& spec) {
@@ -364,6 +372,19 @@ bool is_battle_deployment(std::uint16_t instruction_id) {
            instruction_id == 0x47;
 }
 
+bool is_battle_map_operation(std::uint16_t instruction_id) {
+    return instruction_id == 0x32 || instruction_id == 0x55 ||
+           instruction_id == 0x58;
+}
+
+bool is_map_operation_insert_valid(std::uint16_t instruction_id,
+    const std::vector<std::int32_t>& int_data, int map_width,
+    int map_height, std::wstring& diagnostic) {
+    BattleMapOperationInstruction instruction{
+        instruction_id, int_data, map_width, map_height};
+    return ValidateBattleMapOperationInstruction(instruction, diagnostic);
+}
+
 std::wstring normalized_path(std::wstring path) {
     std::replace(path.begin(), path.end(), L'/', L'\\');
     while (path.size() > 1 && path.back() == L'\\') path.pop_back();
@@ -419,6 +440,30 @@ bool index_captured_nodes(
         if (!index_captured_nodes(child, index, diagnostic)) return false;
     }
     return true;
+}
+
+struct SelectedCapturedInstruction {
+    const ccz::editor_preview::CapturedEditorNode* parent{};
+    const ccz::editor_preview::CapturedEditorNode* selected{};
+    std::size_t child_index{};
+    std::size_t matches{};
+};
+
+void find_selected_captured_instruction(
+    const ccz::editor_preview::CapturedEditorNode& node,
+    const ccz::editor_preview::CapturedEditorNode* parent,
+    std::size_t child_index, std::uintptr_t selected_handle,
+    SelectedCapturedInstruction& result) {
+    if (node.runtime_handle == selected_handle) {
+        ++result.matches;
+        result.parent = parent;
+        result.selected = &node;
+        result.child_index = child_index;
+    }
+    for (std::size_t index = 0; index < node.children.size(); ++index) {
+        find_selected_captured_instruction(node.children[index], &node,
+            index, selected_handle, result);
+    }
 }
 
 struct CapturedDeployment {
@@ -529,8 +574,14 @@ bool CanDeleteBattleWritebackNativeNode(
     const bool is_single_unit = node.instruction_id == 0x4b;
     const bool is_multi_unit_page = node.instruction_id == 0x46 ||
         node.instruction_id == 0x47;
-    const std::size_t expected_size = is_single_unit ? 20U : 1000U;
-    return node.handle != 0 && (is_single_unit || is_multi_unit_page) &&
+    const bool is_map_operation =
+        node.instruction_id == 0x32 || node.instruction_id == 0x55 ||
+        node.instruction_id == 0x58;
+    const std::size_t expected_size = is_single_unit ? 20U
+        : is_multi_unit_page ? 1000U
+        : node.instruction_id == 0x58 ? 7U : 6U;
+    return node.handle != 0 &&
+        (is_single_unit || is_multi_unit_page || is_map_operation) &&
         node.int_data.size() == expected_size && !node.has_children &&
         !node.has_long_text && !node.has_structural_links;
 }
@@ -1728,6 +1779,102 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
     return result;
 }
 
+BattleWritebackNativeBatch BuildBattleWritebackInsertBatchAfterSelection(
+    const BattlePreviewCapture& current,
+    const std::vector<BattleMapOperationInstruction>& instructions) {
+    BattleWritebackNativeBatch result;
+    const auto fail_batch = [&result](const wchar_t* message) {
+        result = {};
+        result.diagnostic = message;
+        return result;
+    };
+    if (!current.ok || current.mode.mode != ccz::preview::PreviewMode::Battle ||
+        current.input.document_path.empty() ||
+        current.snapshot.document_path.empty() ||
+        normalized_path(current.input.document_path) !=
+            normalized_path(current.snapshot.document_path) ||
+        current.snapshot.document_roots.empty() ||
+        current.snapshot.selected_handle == 0 || instructions.empty()) {
+        return fail_batch(L"地图操作预检失败：S 预览、完整文档树或选中指令无效");
+    }
+    std::wstring file_name = normalized_path(current.input.document_path);
+    const std::size_t separator = file_name.find_last_of(L'\\');
+    if (separator != std::wstring::npos) file_name.erase(0, separator + 1);
+    for (wchar_t& character : file_name)
+        character = static_cast<wchar_t>(std::towupper(character));
+    if (file_name.rfind(L"S_", 0) != 0 && file_name.rfind(L"S-", 0) != 0) {
+        return fail_batch(L"地图操作预检失败：当前文档不是 S 剧本");
+    }
+
+    std::unordered_map<std::uintptr_t,
+        const ccz::editor_preview::CapturedEditorNode*> captured_by_handle;
+    std::wstring capture_diagnostic;
+    for (const auto& root : current.snapshot.document_roots) {
+        if (!index_captured_nodes(root, captured_by_handle,
+                capture_diagnostic)) {
+            return fail_batch(L"地图操作预检失败：完整剧本树句柄为空或重复");
+        }
+    }
+    SelectedCapturedInstruction anchor;
+    for (const auto& root : current.snapshot.document_roots) {
+        find_selected_captured_instruction(root, nullptr, 0,
+            current.snapshot.selected_handle, anchor);
+    }
+    if (anchor.matches != 1 || anchor.parent == nullptr ||
+        anchor.selected == nullptr || anchor.selected->ordinal < 0 ||
+        anchor.selected->instruction_id <= 0 ||
+        anchor.selected->instruction_id == 1 ||
+        anchor.selected->instruction_id == 3 ||
+        !anchor.selected->children.empty() ||
+        anchor.parent->runtime_handle == 0 ||
+        anchor.child_index + 1 >= anchor.parent->children.size()) {
+        return fail_batch(L"地图操作预检失败：请在完整剧本树中选中一条普通叶子指令作为写入锚点");
+    }
+    if (anchor.parent->instruction_id == 2) {
+        return fail_batch(L"地图操作预检失败：选中指令位于 2 号内部信息分组中；请改选分组外的指令，避免破坏我军出场专用分组");
+    }
+    const auto& siblings = anchor.parent->children;
+    const auto& terminal = siblings.back();
+    const bool section_entry = anchor.parent->instruction_id == -2;
+    if (terminal.instruction_id != 0 || terminal.runtime_handle == 0 ||
+        (!section_entry && !terminal.children.empty()) ||
+        (section_entry && !terminal.children.empty() &&
+            terminal.instruction_id != 0)) {
+        return fail_batch(L"地图操作预检失败：锚点所属节点缺少合法的末尾事件边界");
+    }
+
+    try {
+        result.changes.reserve(instructions.size());
+        for (const auto& instruction : instructions) {
+            std::wstring instruction_diagnostic;
+            if (!ValidateBattleMapOperationInstruction(instruction,
+                    instruction_diagnostic)) {
+                result.changes.clear();
+                result.diagnostic = instruction_diagnostic;
+                return result;
+            }
+            BattleWritebackNativeChange change;
+            change.kind = BattleWritebackChangeKind::InsertInstruction;
+            change.instruction_id = instruction.instruction_id;
+            change.parent_handle = anchor.parent->runtime_handle;
+            change.insert_after_handle = anchor.selected->runtime_handle;
+            change.insert_before_handle =
+                siblings[anchor.child_index + 1].runtime_handle;
+            change.insert_terminal_handle = terminal.runtime_handle;
+            change.source_ordinal = -1;
+            change.int_data = instruction.int_data;
+            change.map_width = instruction.map_width;
+            change.map_height = instruction.map_height;
+            result.changes.push_back(std::move(change));
+        }
+    } catch (...) {
+        return fail_batch(L"地图操作预检失败：无法分配有序原生插入批次");
+    }
+    result.ok = true;
+    result.diagnostic = L"地图操作已绑定到当前选中指令之后；原生事务尚未执行";
+    return result;
+}
+
 bool BattleWritebackNativeTransaction::Apply(
     const BattleWritebackNativeBatch& batch,
     BattleWritebackNativeHost& host, std::wstring& diagnostic) {
@@ -1778,18 +1925,33 @@ bool BattleWritebackNativeTransaction::Apply(
             const BattleWritebackNativeChange& change = batch.changes[index];
             const bool four_b_group =
                 change.kind == BattleWritebackChangeKind::InsertFourBGroup;
-            if (!is_battle_deployment(change.instruction_id) ||
-                (four_b_group
-                    ? change.instruction_id != 0x4b ||
-                        !change.int_data.empty() ||
-                        change.group_label != L"我军出场" ||
-                        change.group_records.empty() ||
-                        std::any_of(change.group_records.begin(),
-                            change.group_records.end(), [](const auto& record) {
-                                return record.size() != 20U;
-                            })
-                    : change.int_data.size() !=
-                        native_vector_size(change.instruction_id))) {
+            const bool map_operation =
+                is_battle_map_operation(change.instruction_id);
+            const bool valid_four_b_group = four_b_group &&
+                change.instruction_id == 0x4b && change.int_data.empty() &&
+                change.group_label == L"我军出场" &&
+                !change.group_records.empty() &&
+                std::none_of(change.group_records.begin(),
+                    change.group_records.end(), [](const auto& record) {
+                        return record.size() != 20U;
+                    });
+            const bool valid_map_insert = map_operation &&
+                change.kind == BattleWritebackChangeKind::InsertInstruction &&
+                is_map_operation_insert_valid(change.instruction_id,
+                    change.int_data, change.map_width, change.map_height,
+                    diagnostic);
+            const bool valid_deployment_change =
+                is_battle_deployment(change.instruction_id) &&
+                (four_b_group ? valid_four_b_group
+                    : change.int_data.size() ==
+                        native_vector_size(change.instruction_id));
+            if ((!valid_deployment_change && !valid_map_insert) ||
+                (map_operation && !valid_map_insert)) {
+                if (diagnostic.empty())
+                    diagnostic = L"S 战场事务拒绝：指令类型或完整字段长度无效";
+                return false;
+            }
+            if (four_b_group && !valid_four_b_group) {
                 diagnostic = L"S 战场事务拒绝：指令类型或完整字段长度无效";
                 return false;
             }
@@ -1899,13 +2061,28 @@ bool BattleWritebackNativeTransaction::Apply(
             before.parent_handle != change.parent_handle ||
             terminal.instruction_id != 0 ||
             terminal.parent_handle != change.parent_handle ||
-            terminal.has_children || terminal.has_long_text ||
-            terminal.has_structural_links ||
+            terminal.has_long_text ||
             terminal.next_sibling_handle != 0 ||
             before.previous_sibling_handle != change.insert_after_handle ||
             (change.insert_before_handle == terminal_handle &&
              before.instruction_id != 0)) {
             diagnostic = L"S 战场事务拒绝：插入父节点、同级位置或末尾终止锚点已变化";
+            return false;
+        }
+        if (is_battle_map_operation(change.instruction_id) &&
+            parent.instruction_id == 2) {
+            diagnostic = L"S 战场事务拒绝：地图操作不能插入 0x02 内部信息分组";
+            return false;
+        }
+        const bool section_entry_event_boundary =
+            is_battle_map_operation(change.instruction_id) &&
+            parent.instruction_id == static_cast<std::uint16_t>(-2) &&
+            terminal.has_children;
+        if ((!section_entry_event_boundary &&
+                (terminal.has_children || terminal.has_structural_links)) ||
+            (section_entry_event_boundary &&
+                (!terminal.has_children || terminal.instruction_id != 0))) {
+            diagnostic = L"S 战场事务拒绝：Section 入口事件边界不符合地图操作插入条件";
             return false;
         }
         std::uintptr_t following = change.insert_before_handle;
@@ -2282,7 +2459,6 @@ bool BattleWritebackNativeTransaction::Undo(
         diagnostic = L"S 战场撤回拒绝：提交后剧本文档内容已变化，撤回记录已陈旧";
         return false;
     }
-
     std::unordered_set<std::uintptr_t> checked_handles;
     for (const AppliedOperation& operation : undo_.operations) {
         if (operation.kind == BattleWritebackChangeKind::UpdateInstruction ||

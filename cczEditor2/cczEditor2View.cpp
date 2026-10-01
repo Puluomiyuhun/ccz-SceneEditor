@@ -1953,13 +1953,19 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 	int instructionId, HTREEITEM parent, HTREEITEM hInsertAfter,
 	std::vector<int> intData)
 {
-	// Battle records use editor instruction IDs 0x4B (20 native integers),
-	// 0x46/0x47 (1000 native integers each).  Do not route these through the
-	// generic 20-field insertion helper, which intentionally has different
-	// selection/dirty behavior and a truncating copy contract.
-	const std::size_t expectedSize = instructionId == 0x4b ? 20U : 1000U;
-	if ((instructionId != 0x4b && instructionId != 0x46 &&
-		instructionId != 0x47) || intData.size() != expectedSize || !parent)
+	// Keep the S-only deployment and map-operation forms out of the generic
+	// insertion helper, which has a truncating field-copy contract.
+	std::size_t expectedSize = 0;
+	switch (instructionId) {
+	case 0x4b: expectedSize = 20U; break;
+	case 0x46:
+	case 0x47: expectedSize = 1000U; break;
+	case 0x32:
+	case 0x55: expectedSize = 6U; break;
+	case 0x58: expectedSize = 7U; break;
+	default: break;
+	}
+	if (expectedSize == 0 || intData.size() != expectedSize || !parent)
 		return nullptr;
 
 	// This native tree bridge is reserved for S-battle deployment writeback.
@@ -1981,9 +1987,9 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 	ItemData* parentData = reinterpret_cast<ItemData*>(tree.GetItemData(parent));
 	if (parentData == nullptr)
 		return nullptr;
-	// Nested S deployment events may be children of a predicate or else
-	// instruction. Accept those containers only when their final child is the
-	// native 0x00 event terminator.
+	// Nested S events end in a leaf 0x00 event terminator. A Section-entry map
+	// operation may instead be a direct Section child immediately before a
+	// top-level 0x00 event container, which owns the event's child instructions.
 	HTREEITEM lastChild = tree.GetChildItem(parent);
 	if (lastChild == nullptr) return nullptr;
 	for (HTREEITEM sibling = tree.GetNextSiblingItem(lastChild);
@@ -1992,8 +1998,12 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 	}
 	ItemData* terminalData = reinterpret_cast<ItemData*>(
 		tree.GetItemData(lastChild));
+	const bool sectionEntryEventBoundary = instructionId == 0x32 ||
+		instructionId == 0x55 || instructionId == 0x58;
+	const bool isSection = parentData->id == -2;
 	if (terminalData == nullptr || terminalData->id != 0 ||
-		tree.GetChildItem(lastChild) != nullptr)
+		(tree.GetChildItem(lastChild) != nullptr &&
+			!(sectionEntryEventBoundary && isSection)))
 		return nullptr;
 	// The value batch uses zero for the native tree's TVI_FIRST sentinel.
 	// Normalize that representation before sibling validation/insertion.

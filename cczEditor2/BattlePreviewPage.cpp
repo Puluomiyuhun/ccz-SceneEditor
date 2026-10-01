@@ -75,6 +75,10 @@ constexpr UINT kVariableControlButtonId = 0xA111;
 constexpr UINT kPreviewModeButtonId = 0xA112;
 constexpr UINT kUnitParametersButtonId = 0xA113;
 constexpr UINT kPreviewModeMenuFirstId = 0xA120;
+constexpr UINT kBattleMapOperationsId = 0xA114;
+constexpr UINT kObstacleTypeFirstId = 0xA115;
+constexpr UINT kObstacleTypeLastId = 0xA117;
+constexpr UINT kClearObstacleDraftsId = 0xA118;
 constexpr UINT kConditionActionMessage = WM_APP + 0x38A;
 constexpr UINT kSearchId = 0xA107;
 constexpr UINT kDeploymentComboId = 0xA108;
@@ -1549,6 +1553,101 @@ const ccz::preview::ExecutionNode* find_execution_node_by_runtime_handle(
 
 }
 
+void CBattleObstacleButton::SetSelected(bool selected)
+{
+	if (m_selected == selected) return;
+	m_selected = selected;
+	if (GetSafeHwnd() != nullptr) Invalidate(FALSE);
+}
+
+void CBattleObstacleButton::DrawItem(LPDRAWITEMSTRUCT draw_item)
+{
+	if (draw_item == nullptr || draw_item->hDC == nullptr) return;
+	Gdiplus::Graphics graphics(draw_item->hDC);
+	graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+	const Gdiplus::RectF bounds(
+		static_cast<float>(draw_item->rcItem.left),
+		static_cast<float>(draw_item->rcItem.top),
+		static_cast<float>(draw_item->rcItem.right - draw_item->rcItem.left),
+		static_cast<float>(draw_item->rcItem.bottom - draw_item->rcItem.top));
+	const bool disabled = (draw_item->itemState & ODS_DISABLED) != 0;
+	const bool pressed = (draw_item->itemState & ODS_SELECTED) != 0;
+	const Gdiplus::Color fill = disabled
+		? Gdiplus::Color(255, 224, 224, 224)
+		: m_selected ? Gdiplus::Color(255, 214, 235, 255)
+		: pressed ? Gdiplus::Color(255, 230, 238, 246)
+		: Gdiplus::Color(255, 250, 250, 250);
+	Gdiplus::SolidBrush background(fill);
+	Gdiplus::Pen border(m_selected ? Gdiplus::Color(255, 30, 125, 220)
+		: Gdiplus::Color(255, 145, 145, 145), m_selected ? 2.0f : 1.0f);
+	graphics.FillRectangle(&background, bounds);
+	graphics.DrawRectangle(&border, bounds);
+	const float cx = bounds.X + bounds.Width * 0.5f;
+	const float iconTop = bounds.Y + 3.0f;
+	Gdiplus::SolidBrush flame(Gdiplus::Color(255, 226, 80, 25));
+	Gdiplus::SolidBrush flameCore(Gdiplus::Color(255, 255, 194, 48));
+	Gdiplus::SolidBrush hull(Gdiplus::Color(255, 127, 77, 36));
+	Gdiplus::SolidBrush sail(Gdiplus::Color(255, 245, 228, 173));
+	Gdiplus::Pen mast(Gdiplus::Color(255, 74, 54, 34), 2.0f);
+	const auto draw_flame = [&](float center_x, float top, float scale) {
+		Gdiplus::PointF outer[] = {
+			{center_x - 8.0f * scale, top + 18.0f * scale},
+			{center_x - 6.0f * scale, top + 9.0f * scale},
+			{center_x - 2.0f * scale, top + 12.0f * scale},
+			{center_x + 1.0f * scale, top + 2.0f * scale},
+			{center_x + 4.0f * scale, top + 11.0f * scale},
+			{center_x + 7.0f * scale, top + 7.0f * scale},
+			{center_x + 8.0f * scale, top + 18.0f * scale},
+		};
+		graphics.FillPolygon(&flame, outer, static_cast<INT>(std::size(outer)));
+		Gdiplus::PointF inner[] = {
+			{center_x - 4.0f * scale, top + 18.0f * scale},
+			{center_x - 1.0f * scale, top + 11.0f * scale},
+			{center_x + 2.0f * scale, top + 14.0f * scale},
+			{center_x + 4.0f * scale, top + 18.0f * scale},
+		};
+		graphics.FillPolygon(&flameCore, inner,
+			static_cast<INT>(std::size(inner)));
+	};
+	const auto draw_boat = [&](float center_x, float top, float scale) {
+		Gdiplus::PointF hull_points[] = {
+			{center_x - 13.0f * scale, top + 16.0f * scale},
+			{center_x + 13.0f * scale, top + 16.0f * scale},
+			{center_x + 8.0f * scale, top + 22.0f * scale},
+			{center_x - 8.0f * scale, top + 22.0f * scale},
+		};
+		graphics.FillPolygon(&hull, hull_points,
+			static_cast<INT>(std::size(hull_points)));
+		graphics.DrawLine(&mast, center_x, top + 3.0f * scale,
+			center_x, top + 16.0f * scale);
+		Gdiplus::PointF sail_points[] = {
+			{center_x - 1.0f * scale, top + 4.0f * scale},
+			{center_x - 10.0f * scale, top + 14.0f * scale},
+			{center_x - 1.0f * scale, top + 14.0f * scale},
+		};
+		graphics.FillPolygon(&sail, sail_points,
+			static_cast<INT>(std::size(sail_points)));
+	};
+	if (m_obstacleType == 0) draw_flame(cx, iconTop, 1.0f);
+	else if (m_obstacleType == 1) draw_boat(cx, iconTop, 1.0f);
+	else {
+		draw_boat(cx, iconTop + 3.0f, 0.9f);
+		draw_flame(cx, iconTop - 2.0f, 0.65f);
+	}
+	const wchar_t* label = m_obstacleType == 0 ? L"火 (0)"
+		: m_obstacleType == 1 ? L"船 (1)" : L"火船 (2)";
+	Gdiplus::Font font(L"Microsoft YaHei", 11.0f,
+		Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+	Gdiplus::SolidBrush text(disabled ? Gdiplus::Color(255, 130, 130, 130)
+		: Gdiplus::Color(255, 35, 35, 35));
+	Gdiplus::StringFormat centered;
+	centered.SetAlignment(Gdiplus::StringAlignmentCenter);
+	centered.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+	graphics.DrawString(label, -1, &font,
+		Gdiplus::RectF(bounds.X + 1.0f, bounds.Y + bounds.Height - 20.0f,
+			bounds.Width - 2.0f, 18.0f), &centered, &text);
+}
+
 void CBattlePrimaryActionButton::DrawItem(LPDRAWITEMSTRUCT draw_item)
 {
 	if (draw_item == nullptr || draw_item->hDC == nullptr) return;
@@ -1670,6 +1769,12 @@ BEGIN_MESSAGE_MAP(CSBattlePreviewPage, CWnd)
 	ON_MESSAGE(kConditionActionMessage,
 		&CSBattlePreviewPage::OnConditionActionMessage)
 	ON_BN_CLICKED(kWritebackId, &CSBattlePreviewPage::OnWriteback)
+	ON_BN_CLICKED(kBattleMapOperationsId,
+		&CSBattlePreviewPage::OnBattleMapOperationsClicked)
+	ON_CONTROL_RANGE(BN_CLICKED, kObstacleTypeFirstId,
+		kObstacleTypeLastId, &CSBattlePreviewPage::OnObstacleTypeClicked)
+	ON_BN_CLICKED(kClearObstacleDraftsId,
+		&CSBattlePreviewPage::OnClearObstacleDrafts)
 END_MESSAGE_MAP()
 
 CSBattlePreviewPage::~CSBattlePreviewPage()
@@ -1900,6 +2005,12 @@ void CSBattlePreviewPage::SaveActiveSessionUiState()
 		m_searchEdit.GetWindowText(search);
 		ui.search_text = search.GetString();
 	}
+	auto& mapOperations = session.map_operations;
+	mapOperations.tool_mode = m_battleMapToolMode;
+	mapOperations.selected_obstacle_type = m_selectedObstacleType;
+	mapOperations.obstacle_drafts = m_obstacleDrafts;
+	mapOperations.move_operation_unit = m_moveOperationUnit;
+	mapOperations.revive_operation_data_id = m_reviveOperationDataId;
 	session.document_path = m_documentPath.GetString();
 	session.diagnostic = m_diagnostic.GetString();
 	session.quick_mode_diagnostic = m_quickModeDiagnostic.GetString();
@@ -1916,6 +2027,7 @@ void CSBattlePreviewPage::RestoreActiveSessionUiState()
 	if (m_activeSession == nullptr) return;
 	auto& session = *m_activeSession;
 	auto& ui = session.ui;
+	const auto& mapOperations = session.map_operations;
 	if (!ui.initialized) {
 		ui.quick_mode_enabled = AfxGetApp()->GetProfileInt(
 			_T("S Battle Preview"), _T("QuickMode"), 1) != 0;
@@ -1926,6 +2038,11 @@ void CSBattlePreviewPage::RestoreActiveSessionUiState()
 	m_scrollY = ui.scroll_y;
 	m_sidebarVisible = ui.sidebar_visible;
 	m_brushTabActive = ui.brush_tab_active;
+	m_battleMapToolMode = mapOperations.tool_mode;
+	m_selectedObstacleType = mapOperations.selected_obstacle_type;
+	m_obstacleDrafts = mapOperations.obstacle_drafts;
+	m_moveOperationUnit = mapOperations.move_operation_unit;
+	m_reviveOperationDataId = mapOperations.revive_operation_data_id;
 	m_diagnostic = session.diagnostic.c_str();
 	m_quickModeDiagnostic = session.quick_mode_diagnostic.c_str();
 	if (ui.initialized && session.has_baseline) {
@@ -1992,6 +2109,11 @@ void CSBattlePreviewPage::UnbindSession()
 		ReleaseCapture();
 	SaveActiveSessionUiState();
 	ReleaseActiveBitmapPins();
+	m_battleMapToolMode = BattleMapToolMode::None;
+	m_selectedObstacleType = 0;
+	m_obstacleDrafts.Clear();
+	m_moveOperationUnit.reset();
+	m_reviveOperationDataId = -1;
 	m_panActive = false;
 	m_leftStampActive = false;
 	m_selectionGestureActive = false;
@@ -2072,6 +2194,12 @@ void CSBattlePreviewPage::CreateEditorControls()
 		!m_writebackButton.Create(_T("写回"),
 			WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
 			CRect(0, 0, 1, 1), this, kWritebackId) ||
+		!m_battleMapOperationsButton.Create(_T("地图编辑 ▾"), buttonStyle,
+			CRect(0, 0, 1, 1), this, kBattleMapOperationsId) ||
+		!m_clearObstacleDraftsButton.Create(_T("清空"), buttonStyle,
+			CRect(0, 0, 1, 1), this, kClearObstacleDraftsId) ||
+		!m_mapOperationStatus.Create(_T(""), controlStyle | SS_LEFT,
+			CRect(0, 0, 1, 1), this, 0) ||
 		!m_searchEdit.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
 			CRect(0, 0, 1, 1), this, kSearchId) ||
 		!m_deploymentCombo.Create(controlStyle | WS_VSCROLL | CBS_DROPDOWNLIST,
@@ -2083,6 +2211,16 @@ void CSBattlePreviewPage::CreateEditorControls()
 			CRect(0, 0, 1, 1), this, kPageLabelId)) {
 		AppendDiagnostic(L"S 战场角色侧栏控件创建失败");
 		return;
+	}
+	for (int type = 0; type < 3; ++type) {
+		m_obstacleTypeButtons[type].SetObstacleType(type);
+		m_obstacleTypeButtons[type].SetSelected(type == m_selectedObstacleType);
+		if (!m_obstacleTypeButtons[type].Create(_T(""),
+			WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, CRect(0, 0, 1, 1), this,
+			kObstacleTypeFirstId + type)) {
+			AppendDiagnostic(L"S 战场障碍物缩略图控件创建失败");
+			return;
+		}
 	}
 	m_showSidebarButton.ShowWindow(SW_HIDE);
 	const bool uiFontCreated = m_uiFont.CreateFont(20, 0, 0, 0,
@@ -2110,6 +2248,12 @@ void CSBattlePreviewPage::CreateEditorControls()
 		m_variableControlButton.SetFont(&m_uiFont);
 		m_previewModeButton.SetFont(&m_uiFont);
 		m_unitParametersButton.SetFont(&m_uiFont);
+		m_battleMapOperationsButton.SetFont(&m_uiFont);
+		m_battleMapOperationsButton.SetFont(&m_uiFont);
+		m_clearObstacleDraftsButton.SetFont(&m_toolbarFont);
+		m_mapOperationStatus.SetFont(&m_toolbarFont);
+		for (auto& button : m_obstacleTypeButtons)
+			button.SetFont(&m_toolbarFont);
 		m_writebackButton.SetFont(writebackFontCreated
 			? &m_writebackFont : &m_uiFont);
 		m_searchEdit.SetFont(&m_uiFont);
@@ -2317,10 +2461,78 @@ void CSBattlePreviewPage::LayoutEditorControls()
 		}
 		m_writebackButton.MoveWindow(left, y, width, 22);
 		y += 26;
-		m_searchEdit.MoveWindow(left, y, width, 22);
+		m_battleMapOperationsButton.MoveWindow(left, y, width, 22);
 		y += 26;
-		m_deploymentCombo.MoveWindow(left, y, width, 160);
-		y += 28;
+		const bool obstacleMode = m_battleMapToolMode ==
+			BattleMapToolMode::ObstaclePlace;
+		const bool exclusiveMapTool = obstacleMode ||
+			m_battleMapToolMode == BattleMapToolMode::MovePickUnit ||
+			m_battleMapToolMode == BattleMapToolMode::MovePickTarget ||
+			m_battleMapToolMode == BattleMapToolMode::RevivePickTarget;
+		const bool showOperationStatus =
+			m_battleMapToolMode != BattleMapToolMode::None ||
+			!m_obstacleDrafts.empty();
+		if (showOperationStatus) {
+			CString status;
+			switch (m_battleMapToolMode) {
+			case BattleMapToolMode::MovePickUnit:
+				status = _T("移动至：点击地图上的现存武将");
+				break;
+			case BattleMapToolMode::MovePickTarget:
+				status.Format(_T("移动至：Data %d，点击目标格；不检查占格"),
+					m_moveOperationUnit ? m_moveOperationUnit->data_id : -1);
+				break;
+			case BattleMapToolMode::RevivePickCharacter:
+				status = _T("复活至：从角色列表选择武将，再点击目标格");
+				break;
+			case BattleMapToolMode::RevivePickTarget:
+				status.Format(_T("复活至：Data %d，点击目标格；不检查占格"),
+					m_reviveOperationDataId);
+				break;
+			case BattleMapToolMode::ObstaclePlace:
+				status.Format(_T("障碍物：左键放置；已暂存 %u 个，写回提交"),
+					static_cast<unsigned>(m_obstacleDrafts.items().size()));
+				break;
+			case BattleMapToolMode::None:
+			default:
+				status.Format(_T("障碍物已暂存 %u 个；可继续放置或写回提交"),
+					static_cast<unsigned>(m_obstacleDrafts.items().size()));
+				break;
+			}
+			m_mapOperationStatus.SetWindowText(status);
+			m_mapOperationStatus.MoveWindow(left, y, width - 58, 22);
+			m_clearObstacleDraftsButton.MoveWindow(left + width - 54,
+				y, 54, 22);
+			m_mapOperationStatus.ShowWindow(SW_SHOW);
+			m_clearObstacleDraftsButton.ShowWindow(
+				m_obstacleDrafts.empty() ? SW_HIDE : SW_SHOW);
+			y += 26;
+		} else {
+			m_mapOperationStatus.ShowWindow(SW_HIDE);
+			m_clearObstacleDraftsButton.ShowWindow(SW_HIDE);
+		}
+		if (obstacleMode) {
+			const int gap = 3;
+			const int buttonWidth = (width - 2 * gap) / 3;
+			for (int type = 0; type < 3; ++type) {
+				m_obstacleTypeButtons[type].MoveWindow(left + type *
+					(buttonWidth + gap), y,
+					type == 2 ? width - 2 * (buttonWidth + gap)
+						: buttonWidth, 48);
+				m_obstacleTypeButtons[type].ShowWindow(SW_SHOW);
+			}
+			y += 52;
+		} else {
+			m_searchEdit.MoveWindow(left, y, width, 22);
+			y += 26;
+			m_deploymentCombo.MoveWindow(left, y, width, 160);
+			y += 28;
+			m_characterTabButton.ShowWindow(SW_SHOW);
+			m_brushTabButton.ShowWindow(SW_SHOW);
+			for (auto& button : m_obstacleTypeButtons)
+				button.ShowWindow(SW_HIDE);
+			m_clearObstacleDraftsButton.ShowWindow(SW_HIDE);
+		}
 		const int bottom = client.bottom - 8;
 		const int undoY = (std::max)(y, bottom - 54);
 		m_characterList.MoveWindow(left, y, width, (std::max)(0, undoY - y - 3));
@@ -2346,9 +2558,32 @@ void CSBattlePreviewPage::LayoutEditorControls()
 			static_cast<CWnd*>(&m_unrestrictedTerrainModeButton),
 			static_cast<CWnd*>(&m_previewModeButton),
 			static_cast<CWnd*>(&m_unitParametersButton),
+			static_cast<CWnd*>(&m_battleMapOperationsButton),
 			static_cast<CWnd*>(&m_searchEdit), static_cast<CWnd*>(&m_deploymentCombo),
 			static_cast<CWnd*>(&m_characterList), static_cast<CWnd*>(&m_pageLabel)}) {
 			if (control->GetSafeHwnd() != nullptr) control->ShowWindow(SW_SHOW);
+		}
+		if (exclusiveMapTool) {
+			m_searchEdit.ShowWindow(SW_HIDE);
+			m_deploymentCombo.ShowWindow(SW_HIDE);
+			m_characterList.ShowWindow(SW_HIDE);
+			m_previousPageButton.ShowWindow(SW_HIDE);
+			m_nextPageButton.ShowWindow(SW_HIDE);
+			m_pageLabel.ShowWindow(SW_HIDE);
+			m_characterTabButton.ShowWindow(SW_HIDE);
+			m_brushTabButton.ShowWindow(SW_HIDE);
+			m_mapOperationStatus.ShowWindow(showOperationStatus
+				? SW_SHOW : SW_HIDE);
+			m_clearObstacleDraftsButton.ShowWindow(
+				m_obstacleDrafts.empty() ? SW_HIDE : SW_SHOW);
+			for (auto& button : m_obstacleTypeButtons)
+				button.ShowWindow(obstacleMode ? SW_SHOW : SW_HIDE);
+		} else {
+			m_clearObstacleDraftsButton.ShowWindow(
+				m_obstacleDrafts.empty() ? SW_HIDE : SW_SHOW);
+			m_mapOperationStatus.ShowWindow(SW_HIDE);
+			for (auto& button : m_obstacleTypeButtons)
+				button.ShowWindow(SW_HIDE);
 		}
 	} else {
 		for (CWnd* control : {static_cast<CWnd*>(&m_characterTabButton),
@@ -2363,12 +2598,17 @@ void CSBattlePreviewPage::LayoutEditorControls()
 			static_cast<CWnd*>(&m_unrestrictedTerrainModeButton),
 			static_cast<CWnd*>(&m_previewModeButton),
 			static_cast<CWnd*>(&m_unitParametersButton),
+			static_cast<CWnd*>(&m_battleMapOperationsButton),
 			static_cast<CWnd*>(&m_searchEdit), static_cast<CWnd*>(&m_deploymentCombo),
 			static_cast<CWnd*>(&m_characterList), static_cast<CWnd*>(&m_pageLabel)}) {
 			if (control->GetSafeHwnd() != nullptr) control->ShowWindow(SW_HIDE);
 		}
 		m_activationButton.ShowWindow(SW_HIDE);
 		m_variableControlButton.ShowWindow(SW_HIDE);
+		m_mapOperationStatus.ShowWindow(SW_HIDE);
+		m_clearObstacleDraftsButton.ShowWindow(SW_HIDE);
+		for (auto& button : m_obstacleTypeButtons)
+			button.ShowWindow(SW_HIDE);
 		const int buttonWidth = 96;
 		m_showSidebarButton.MoveWindow(
 			(std::max)(0, static_cast<int>(client.right) - buttonWidth - 8), 6,
@@ -2406,6 +2646,7 @@ void CSBattlePreviewPage::LayoutCollapsedControlToolbar()
 	controls.push_back({ &m_unrestrictedTerrainModeButton, 100 });
 	controls.push_back({ &m_previewModeButton, 100 });
 	controls.push_back({ &m_unitParametersButton, 78 });
+	controls.push_back({ &m_battleMapOperationsButton, 92 });
 	if (ActiveSession().condition_button_visible)
 		controls.push_back({ &m_conditionTreeButton, 76 });
 	else
@@ -2491,6 +2732,14 @@ void CSBattlePreviewPage::RefreshEditorControls()
 		ActiveSession().editor_state.battle.map.projection_valid;
 	if ((m_previewModeButton.IsWindowEnabled() != FALSE) != previewModeEnabled)
 		m_previewModeButton.EnableWindow(previewModeEnabled);
+	const bool mapOperationsEnabled = m_editorOps != nullptr &&
+		ActiveSession().ui.quick_mode_enabled &&
+		ActiveSession().editor_state.battle.map.projection_valid &&
+		ActiveSession().baseline_capture.ok && !ActiveSession().stale &&
+		!ActiveSession().native_writeback_rebase_required;
+	if ((m_battleMapOperationsButton.IsWindowEnabled() != FALSE) !=
+		mapOperationsEnabled)
+		m_battleMapOperationsButton.EnableWindow(mapOperationsEnabled);
 	if (m_copyPersonModeButton.GetSafeHwnd() != nullptr &&
 		(m_copyPersonModeButton.GetCheck() == BST_CHECKED) !=
 			ActiveSession().ui.copy_person_mode) {
@@ -2831,7 +3080,7 @@ bool CSBattlePreviewPage::RequestQuickModeRefresh(
 			ActiveSession().baseline_capture.snapshot.section_path,
 			requestedPath.GetString(), freshPinnedSection, diagnostic)) {
 			ActiveSession().native_writeback_transaction.Clear();
-			if (HasPendingPreviewDrafts()) {
+			if (HasPendingPreviewChanges()) {
 				m_sourceTreeWindow = nullptr;
 				MarkSessionStale(
 					L"快速模式无法再定位原 Scene1 节点。当前布置已保留，但旧来源的写回与撤回已暂停；切换模式并确认丢弃后可重新读取。");
@@ -2888,7 +3137,7 @@ bool CSBattlePreviewPage::RequestQuickModeRefresh(
 
 	auto resolution = ccz::editor_preview::ResolveScene1BattleSection(
 		std::move(documentSnapshot));
-	if (!resolution.resolved && HasPendingPreviewDrafts()) {
+	if (!resolution.resolved && HasPendingPreviewChanges()) {
 		MarkSessionStale(L"Scene1 来源无法重新解析。当前临时布置已保留，写入已暂停：" +
 			resolution.diagnostic);
 		return true;
@@ -2902,6 +3151,12 @@ bool CSBattlePreviewPage::RequestQuickModeRefresh(
 		m_sourceTreeWindow = requestedTree;
 		m_quickModeDiagnostic = resolution.diagnostic.c_str();
 		Invalidate(FALSE);
+		return true;
+	}
+	if (!m_obstacleDrafts.empty() ||
+		m_battleMapToolMode != BattleMapToolMode::None ||
+		m_moveOperationUnit.has_value() || m_reviveOperationDataId >= 0) {
+		MarkSessionStale(L"Scene1 来源或地图基线已变化。当前地图操作状态和已暂存的障碍物坐标均已保留，写入已暂停；请检查后重新读取基线。");
 		return true;
 	}
 
@@ -2986,9 +3241,16 @@ bool CSBattlePreviewPage::ConfirmDiscardSessionChanges(
 				workspace.second->operations != nullptr &&
 				workspace.second->operations->CanUndo();
 		});
-	if (!hasTemporaryUndo) return true;
+	const bool hasMapOperationState = &session == m_activeSession
+		? HasPendingMapOperationState()
+		: session.map_operations.tool_mode !=
+				ccz::editor_preview::BattleMapToolMode::None ||
+			session.map_operations.move_operation_unit.has_value() ||
+			session.map_operations.revive_operation_data_id >= 0 ||
+			!session.map_operations.obstacle_drafts.empty();
+	if (!hasTemporaryUndo && !hasMapOperationState) return true;
 	const wchar_t* message =
-		L"当前 S 战场有尚未写入剧本的临时布置或修改。重载预览、切换剧本或模式、关闭来源窗口会丢弃这些编辑状态。是否继续？";
+		L"当前 S 战场有尚未写入剧本的临时布置、地图操作或修改。重载预览、切换剧本或模式、关闭来源窗口会丢弃这些编辑状态。是否继续？";
 	return AfxMessageBox(message,
 		MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
 }
@@ -3004,9 +3266,17 @@ bool CSBattlePreviewPage::HasPendingPreviewDrafts() const
 		});
 }
 
+bool CSBattlePreviewPage::HasPendingMapOperationState() const
+{
+	return m_battleMapToolMode != BattleMapToolMode::None ||
+		m_moveOperationUnit.has_value() || m_reviveOperationDataId >= 0 ||
+		!m_obstacleDrafts.empty();
+}
+
 bool CSBattlePreviewPage::HasPendingPreviewChanges() const
 {
 	return HasPendingPreviewDrafts() ||
+		HasPendingMapOperationState() ||
 		ActiveSession().native_writeback_transaction.undo_available();
 }
 
@@ -3107,7 +3377,9 @@ bool CSBattlePreviewPage::ApplyPendingNativeWritebackForCurrentSection(
 
 bool CSBattlePreviewPage::ApplyPendingNativeWritebackTransaction(
 	CcczEditor2View& view, HTREEITEM selectedItem,
-	std::wstring& diagnostic, bool requireNonemptyBatch)
+	std::wstring& diagnostic, bool requireNonemptyBatch,
+	const std::vector<ccz::editor_preview::BattleMapOperationInstruction>*
+		mapOperations)
 {
 	diagnostic.clear();
 	#if defined(_DEBUG) && defined(CCZ_S_BATTLE_PREVIEW_PERF)
@@ -3117,6 +3389,14 @@ bool CSBattlePreviewPage::ApplyPendingNativeWritebackTransaction(
 	CcczEditor2Doc* document = view.GetDocument();
 	if (ActiveSession().stale) {
 		diagnostic = L"S 战场原生写回拒绝：当前预览来源已过期，临时布置已保留；请切换模式并确认丢弃后重新读取";
+		return false;
+	}
+	if (mapOperations != nullptr && !ActiveSession().ui.quick_mode_enabled) {
+		diagnostic = L"S 地图操作拒绝：请先启用快速模式，以已加载的 Scene1 作为地图基线";
+		return false;
+	}
+	if (mapOperations != nullptr && HasPendingPreviewDrafts()) {
+		diagnostic = L"S 地图操作拒绝：请先写回或撤销尚未提交的单位布置改动";
 		return false;
 	}
 	if (document == nullptr || document->pathName == nullptr ||
@@ -3203,8 +3483,16 @@ bool CSBattlePreviewPage::ApplyPendingNativeWritebackTransaction(
 
 	ccz::editor_preview::BattleWritebackPlanBuild plan;
 	ccz::editor_preview::BattleWritebackNativeBatch batch;
-	if (!BuildPendingWritebackPlan(capture, plan, diagnostic, &batch))
+	if (mapOperations != nullptr) {
+		batch = ccz::editor_preview::BuildBattleWritebackInsertBatchAfterSelection(
+			capture, *mapOperations);
+		if (!batch.ok) {
+			diagnostic = batch.diagnostic;
+			return false;
+		}
+	} else if (!BuildPendingWritebackPlan(capture, plan, diagnostic, &batch)) {
 		return false;
+	}
 	CCZ_BATTLE_PREVIEW_PERF(writebackPerf.RecordPlan(batch));
 	if (requireNonemptyBatch && batch.changes.empty()) {
 		diagnostic = L"S 战场写回预检通过，但当前没有需要提交的布阵改动";
@@ -3423,6 +3711,11 @@ void CSBattlePreviewPage::ClearDocument()
 	m_selectedUnit.reset();
 	m_hoverCell.reset();
 	m_lastStampCell.reset();
+	m_battleMapToolMode = BattleMapToolMode::None;
+	m_moveOperationUnit.reset();
+	m_reviveOperationDataId = -1;
+	m_obstacleDrafts.Clear();
+	ActiveSession().map_operations = {};
 	ActiveSession().baseline_capture = {};
 	ActiveSession().map_asset_key = {};
 	ActiveSession().unit_mov_asset_key = {};
@@ -5167,6 +5460,179 @@ void CSBattlePreviewPage::DrawCanvas(
 			}
 		}
 	}
+	if (projection && m_battleMapToolMode != BattleMapToolMode::None) {
+		const auto draw_target_outline = [&](
+			const ccz::preview::BattleCoord& coordinate,
+			const Gdiplus::Color& color) {
+			Gdiplus::Pen outline(color, (std::max)(2.0f, m_zoom * 2.0f));
+			outline.SetDashStyle(Gdiplus::DashStyleDash);
+			graphics.DrawRectangle(&outline,
+				Gdiplus::RectF(ox + coordinate.x * cell + 2.0f,
+					oy + coordinate.y * cell + 2.0f,
+					(std::max)(1.0f, cell - 4.0f),
+					(std::max)(1.0f, cell - 4.0f)));
+		};
+		const auto draw_obstacle_marker = [&](
+			const ccz::preview::BattleCoord& coordinate, int type,
+			int count, BYTE alpha) {
+			const float pad = (std::max)(2.0f, cell * 0.12f);
+			const Gdiplus::RectF bounds(ox + coordinate.x * cell + pad,
+				oy + coordinate.y * cell + pad,
+				(std::max)(8.0f, cell - pad * 2.0f),
+				(std::max)(8.0f, cell - pad * 2.0f));
+			Gdiplus::SolidBrush plate(Gdiplus::Color(alpha, 28, 24, 18));
+			Gdiplus::Pen border(Gdiplus::Color(alpha, 255, 200, 76),
+				(std::max)(1.3f, m_zoom * 1.5f));
+			border.SetDashStyle(count > 1
+				? Gdiplus::DashStyleSolid : Gdiplus::DashStyleDash);
+			graphics.FillRectangle(&plate, bounds);
+			graphics.DrawRectangle(&border, bounds);
+			const float centerX = bounds.X + bounds.Width * 0.5f;
+			const float centerY = bounds.Y + bounds.Height * 0.47f;
+			const float scale = (std::min)(1.0f,
+				(std::min)(bounds.Width, bounds.Height) / 38.0f);
+			Gdiplus::SolidBrush flame(Gdiplus::Color(alpha, 228, 77, 20));
+			Gdiplus::SolidBrush flameCore(Gdiplus::Color(alpha, 255, 207, 56));
+			Gdiplus::SolidBrush hull(Gdiplus::Color(alpha, 166, 104, 43));
+			Gdiplus::SolidBrush sail(Gdiplus::Color(alpha, 255, 239, 187));
+			Gdiplus::Pen mast(Gdiplus::Color(alpha, 92, 59, 34),
+				(std::max)(1.0f, scale * 1.6f));
+			const auto drawFlame = [&](float cx, float cy, float factor) {
+				Gdiplus::PointF points[] = {
+					{cx - 8.0f * factor, cy + 7.0f * factor},
+					{cx - 6.0f * factor, cy - 1.0f * factor},
+					{cx - 2.0f * factor, cy + 2.0f * factor},
+					{cx + 1.0f * factor, cy - 9.0f * factor},
+					{cx + 4.0f * factor, cy + 1.0f * factor},
+					{cx + 7.0f * factor, cy - 3.0f * factor},
+					{cx + 8.0f * factor, cy + 7.0f * factor}};
+				graphics.FillPolygon(&flame, points,
+					static_cast<INT>(std::size(points)));
+				Gdiplus::PointF core[] = {
+					{cx - 3.0f * factor, cy + 7.0f * factor},
+					{cx - 1.0f * factor, cy + 1.0f * factor},
+					{cx + 2.0f * factor, cy + 3.0f * factor},
+					{cx + 4.0f * factor, cy + 7.0f * factor}};
+				graphics.FillPolygon(&flameCore, core,
+					static_cast<INT>(std::size(core)));
+			};
+			const auto drawBoat = [&](float cx, float cy, float factor) {
+				Gdiplus::PointF boat[] = {
+					{cx - 12.0f * factor, cy + 5.0f * factor},
+					{cx + 12.0f * factor, cy + 5.0f * factor},
+					{cx + 7.0f * factor, cy + 11.0f * factor},
+					{cx - 7.0f * factor, cy + 11.0f * factor}};
+				graphics.FillPolygon(&hull, boat,
+					static_cast<INT>(std::size(boat)));
+				graphics.DrawLine(&mast, cx, cy - 11.0f * factor,
+					cx, cy + 5.0f * factor);
+				Gdiplus::PointF sailPoints[] = {
+					{cx - 1.0f * factor, cy - 9.0f * factor},
+					{cx - 9.0f * factor, cy + 2.0f * factor},
+					{cx - 1.0f * factor, cy + 2.0f * factor}};
+				graphics.FillPolygon(&sail, sailPoints,
+					static_cast<INT>(std::size(sailPoints)));
+			};
+			if (type == 0) drawFlame(centerX, centerY, scale);
+			else if (type == 1) drawBoat(centerX, centerY, scale);
+			else {
+				drawBoat(centerX, centerY + 3.0f * scale, scale * 0.78f);
+				drawFlame(centerX, centerY - 4.0f * scale, scale * 0.68f);
+			}
+			if (count > 1) {
+				Gdiplus::Font countFont(L"Microsoft YaHei", 7.0f,
+					Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+				Gdiplus::SolidBrush countBackground(
+					Gdiplus::Color(230, 24, 24, 24));
+				Gdiplus::SolidBrush countText(Gdiplus::Color(255, 255, 255, 255));
+				const Gdiplus::RectF countRect(bounds.X + bounds.Width - 17.0f,
+					bounds.Y + 1.0f, 15.0f, 12.0f);
+				graphics.FillRectangle(&countBackground, countRect);
+				graphics.DrawString((L"x" + std::to_wstring(count)).c_str(), -1,
+					&countFont, countRect, nullptr, &countText);
+			}
+		};
+		std::map<std::pair<int, int>, std::pair<int, int>> stagedByCoordinate;
+		for (const auto& draft : m_obstacleDrafts.items()) {
+			auto& marker = stagedByCoordinate[{draft.coordinate.x,
+				draft.coordinate.y}];
+			marker = {draft.type, marker.second + 1};
+		}
+		for (const auto& entry : stagedByCoordinate) {
+			draw_obstacle_marker({entry.first.first, entry.first.second},
+				entry.second.first, entry.second.second, 220);
+		}
+		if (m_hoverCell && !m_panActive) {
+			if (m_battleMapToolMode == BattleMapToolMode::MovePickUnit) {
+				const auto hit = HitTestUnit(*m_hoverCell);
+				if (hit && *hit < state.battle.units.size())
+					draw_target_outline(*m_hoverCell,
+						Gdiplus::Color(245, 74, 230, 145));
+			} else if (m_battleMapToolMode ==
+				BattleMapToolMode::MovePickTarget) {
+				draw_target_outline(*m_hoverCell,
+					Gdiplus::Color(245, 255, 205, 70));
+				if (m_moveOperationUnit) {
+					const auto ghost = *m_moveOperationUnit;
+					const float centerX = ox + (m_hoverCell->x + 0.5f) * cell;
+					const float baseY = oy + (m_hoverCell->y + 1.0f) * cell;
+					const int size = (std::max)(8, static_cast<int>(
+						std::lround(kCellPixels * m_zoom)));
+					ccz::editor_preview::BattleAssetCache::UnitSpriteRef spriteRef;
+					Gdiplus::Bitmap* sprite = GetUnitSprite(
+						ghost, ghost.direction, &spriteRef);
+					if (sprite && sprite->GetLastStatus() == Gdiplus::Ok) {
+						Gdiplus::ColorMatrix alpha = {
+							1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0,
+							0,0,0,0.52f,0, 0,0,0,0,1};
+						Gdiplus::ImageAttributes attributes;
+						attributes.SetColorMatrix(&alpha);
+						const int dx = static_cast<int>(std::lround(centerX)) - size / 2;
+						const int dy = static_cast<int>(std::lround(baseY)) - size;
+						if (spriteRef.flip_x) {
+							Gdiplus::Matrix oldTransform;
+							graphics.GetTransform(&oldTransform);
+							Gdiplus::Matrix flip;
+							flip.Translate(static_cast<float>(dx + size),
+								static_cast<float>(dy));
+							flip.Scale(-1.0f, 1.0f);
+							graphics.SetTransform(&flip);
+							graphics.DrawImage(sprite, Gdiplus::Rect(0, 0, size, size),
+								0, 0, 48, 48, Gdiplus::UnitPixel, &attributes);
+							graphics.SetTransform(&oldTransform);
+						} else {
+							graphics.DrawImage(sprite, Gdiplus::Rect(dx, dy, size, size),
+								0, 0, 48, 48, Gdiplus::UnitPixel, &attributes);
+						}
+					}
+				}
+			} else if (m_battleMapToolMode ==
+				BattleMapToolMode::RevivePickTarget) {
+				draw_target_outline(*m_hoverCell,
+					Gdiplus::Color(245, 75, 224, 218));
+				Gdiplus::SolidBrush marker(Gdiplus::Color(210, 18, 94, 105));
+				Gdiplus::Pen markerBorder(Gdiplus::Color(255, 96, 243, 234), 2.0f);
+				Gdiplus::Font markerFont(L"Microsoft YaHei", 8.0f,
+					Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+				Gdiplus::SolidBrush markerText(Gdiplus::Color(255, 255, 255, 255));
+				const float markerSize = (std::max)(22.0f,
+					(std::min)(cell - 6.0f, 38.0f));
+				const Gdiplus::RectF markerBounds(
+					ox + (m_hoverCell->x + 0.5f) * cell - markerSize * 0.5f,
+					oy + (m_hoverCell->y + 0.5f) * cell - markerSize * 0.5f,
+					markerSize, markerSize);
+				graphics.FillEllipse(&marker, markerBounds);
+				graphics.DrawEllipse(&markerBorder, markerBounds);
+				const std::wstring reviveLabel = L"复" +
+					std::to_wstring(m_reviveOperationDataId);
+				graphics.DrawString(reviveLabel.c_str(), -1, &markerFont,
+					markerBounds, nullptr, &markerText);
+			} else if (m_battleMapToolMode ==
+				BattleMapToolMode::ObstaclePlace) {
+				draw_obstacle_marker(*m_hoverCell, m_selectedObstacleType, 1, 150);
+			}
+		}
+	}
 	if (projection && m_hoverCell && !m_panActive)
 		DrawHoveredUnitCard(graphics, *m_hoverCell, m_hoverPoint, cell);
 	Gdiplus::SolidBrush banner(Gdiplus::Color(220, 20, 20, 20));
@@ -5374,6 +5840,82 @@ void CSBattlePreviewPage::OnLButtonDown(UINT, CPoint point)
 	SetFocus();
 	const auto coordinate = BattleCoordFromScreen(point);
 	if (!coordinate) return;
+	const auto mapTool = m_battleMapToolMode;
+	if (mapTool == BattleMapToolMode::MovePickUnit) {
+		const auto hit = HitTestUnit(*coordinate);
+		if (!hit || *hit >= ActiveSession().editor_state.battle.units.size()) {
+			m_diagnostic = _T("移动至：请点击一个已显示的武将");
+			Invalidate(FALSE);
+			return;
+		}
+		const auto& unit = ActiveSession().editor_state.battle.units[*hit];
+		if (!unit.fields_decoded || unit.editor_pending_delete ||
+			ccz::editor_preview::IsBattleFixedEmptySlot(unit) ||
+			unit.data_id < 0 || unit.data_id > 1023) {
+			m_diagnostic = _T("移动至：该单位没有可确认的武将 Data 号，无法生成 0x32 指令");
+			Invalidate(FALSE);
+			return;
+		}
+		m_moveOperationUnit = unit;
+		m_battleMapToolMode = BattleMapToolMode::MovePickTarget;
+		m_diagnostic = _T("移动至：点击目标格；朝向沿用单位当前朝向，不检查目标格占用");
+		RefreshEditorControls();
+		Invalidate(FALSE);
+		return;
+	}
+	if (mapTool == BattleMapToolMode::MovePickTarget) {
+		if (!m_moveOperationUnit) {
+			m_diagnostic = _T("移动至：来源单位已失效，请重新选择");
+			m_battleMapToolMode = BattleMapToolMode::MovePickUnit;
+			RefreshEditorControls();
+			Invalidate(FALSE);
+			return;
+		}
+		ccz::editor_preview::BattleMapOperationInstruction instruction;
+		std::wstring diagnostic;
+		const auto& map = ActiveSession().editor_state.battle.map;
+		if (!ccz::editor_preview::BuildBattleMoveToInstruction(
+			m_moveOperationUnit->data_id, *coordinate,
+			m_moveOperationUnit->direction, map.width, map.height,
+			instruction, diagnostic)) {
+			AppendDiagnostic(diagnostic);
+			return;
+		}
+		if (ApplyBattleMapOperations({instruction}, diagnostic))
+			CancelBattleMapTool();
+		return;
+	}
+	if (mapTool == BattleMapToolMode::RevivePickCharacter) {
+		m_diagnostic = _T("复活至：请先从右侧角色列表选择武将");
+		Invalidate(FALSE);
+		return;
+	}
+	if (mapTool == BattleMapToolMode::RevivePickTarget) {
+		ccz::editor_preview::BattleMapOperationInstruction instruction;
+		std::wstring diagnostic;
+		const auto& map = ActiveSession().editor_state.battle.map;
+		if (!ccz::editor_preview::BuildBattleReviveToInstruction(
+			m_reviveOperationDataId, *coordinate, map.width, map.height,
+			instruction, diagnostic)) {
+			AppendDiagnostic(diagnostic);
+			return;
+		}
+		if (ApplyBattleMapOperations({instruction}, diagnostic))
+			CancelBattleMapTool();
+		return;
+	}
+	if (mapTool == BattleMapToolMode::ObstaclePlace) {
+		const auto& map = ActiveSession().editor_state.battle.map;
+		if (!m_obstacleDrafts.Add(m_selectedObstacleType, *coordinate,
+			map.width, map.height)) {
+			m_diagnostic = _T("障碍物：无法把障碍放在当前地图范围之外");
+		} else {
+			m_diagnostic = _T("障碍物已暂存；写回按钮会把全部暂存项一次提交");
+		}
+		RefreshEditorControls();
+		Invalidate(FALSE);
+		return;
+	}
 	if (m_editorOps && ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::AdjustPosition) {
 		ShowOperationResult(m_editorOps->ConfirmPositionAdjustment(*coordinate));
@@ -5460,6 +6002,7 @@ void CSBattlePreviewPage::OnLButtonUp(UINT, CPoint point)
 
 void CSBattlePreviewPage::OnLButtonDblClk(UINT, CPoint point)
 {
+	if (m_battleMapToolMode != BattleMapToolMode::None) return;
 	if (!m_editorOps || ActiveSession().editor_state.mode !=
 		ccz::editor_preview::BattleEditorMode::Select) return;
 	const auto coordinate = BattleCoordFromScreen(point);
@@ -5483,6 +6026,10 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 {
 	SetFocus();
 	m_hoverPoint = point;
+	if (m_battleMapToolMode != BattleMapToolMode::None) {
+		CancelBattleMapTool();
+		return;
+	}
 	if (m_editorOps && ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::Place) {
 		m_leftStampActive = false;
@@ -5598,6 +6145,11 @@ void CSBattlePreviewPage::OnContextMenu(CWnd*, CPoint)
 void CSBattlePreviewPage::OnKeyDown(UINT character, UINT repeat_count,
 	UINT flags)
 {
+	if (character == VK_ESCAPE &&
+		m_battleMapToolMode != BattleMapToolMode::None) {
+		CancelBattleMapTool();
+		return;
+	}
 	if (character == VK_ESCAPE && m_editorOps && ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::AdjustPosition) {
 		ShowOperationResult(m_editorOps->CancelPositionAdjustment());
@@ -5648,6 +6200,19 @@ void CSBattlePreviewPage::OnCharacterSelectionChanged()
 	const int selected = m_characterList.GetCurSel();
 	if (selected == LB_ERR) return;
 	const int dataId = static_cast<int>(m_characterList.GetItemData(selected));
+	if (m_battleMapToolMode == BattleMapToolMode::RevivePickCharacter) {
+		if (dataId < 0 || dataId > 1023) {
+			m_diagnostic = _T("复活至：所选角色 Data 号无效");
+			Invalidate(FALSE);
+			return;
+		}
+		m_reviveOperationDataId = dataId;
+		m_battleMapToolMode = BattleMapToolMode::RevivePickTarget;
+		RefreshEditorControls();
+		Invalidate(FALSE);
+		return;
+	}
+	if (m_battleMapToolMode != BattleMapToolMode::None) return;
 	const auto result = m_brushTabActive
 		? m_editorOps->SelectMinionBrush(dataId)
 		: m_editorOps->SelectCharacter(dataId);
@@ -5668,6 +6233,7 @@ void CSBattlePreviewPage::OnCharacterTab()
 
 void CSBattlePreviewPage::OnBrushTab()
 {
+	if (m_battleMapToolMode == BattleMapToolMode::RevivePickCharacter) return;
 	m_brushTabActive = true;
 	RefreshCharacterList();
 	RefreshEditorControls();
@@ -5764,6 +6330,38 @@ void CSBattlePreviewPage::OnWriteback()
 		? DYNAMIC_DOWNCAST(CcczEditor2View, child->GetActiveView()) : nullptr;
 	if (view == nullptr) {
 		diagnostic = L"S 战场写回拒绝：没有活动的原生剧本文档";
+	} else if (!m_obstacleDrafts.empty() && !HasPendingPreviewDrafts()) {
+		const auto& map = ActiveSession().editor_state.battle.map;
+		std::vector<ccz::editor_preview::BattleMapOperationInstruction>
+			instructions;
+		try {
+			instructions.reserve(m_obstacleDrafts.items().size());
+			for (const auto& draft : m_obstacleDrafts.items()) {
+				ccz::editor_preview::BattleMapOperationInstruction instruction;
+				if (!ccz::editor_preview::BuildBattleObstacleInstruction(
+					draft.type, draft.coordinate, map.width, map.height,
+					instruction, diagnostic)) break;
+				instructions.push_back(std::move(instruction));
+			}
+		} catch (...) {
+			diagnostic = L"S 障碍物写回拒绝：无法准备有序写入列表";
+		}
+		if (diagnostic.empty() && instructions.size() ==
+			m_obstacleDrafts.items().size() &&
+			ApplyBattleMapOperations(instructions, diagnostic)) {
+			m_obstacleDrafts.Clear();
+			CancelBattleMapTool();
+			m_diagnostic = diagnostic.c_str();
+			diagnostic.clear();
+		}
+	} else if (!m_obstacleDrafts.empty()) {
+		const HTREEITEM section = reinterpret_cast<HTREEITEM>(
+			ActiveSession().baseline_capture.snapshot.section_root.runtime_handle);
+		if (ApplyPendingNativeWritebackTransaction(*view, section,
+			diagnostic, false)) {
+			m_diagnostic = L"单位布置已写回；障碍物暂存仍保留，请再次点击写回障碍";
+			diagnostic.clear();
+		}
 	} else if (ApplyPendingNativeWritebackForCurrentSection(*view, diagnostic)) {
 		CString status = L"布阵改动已写入编辑器内存中的剧本树；请使用编辑器正常保存以写入磁盘。\n";
 		status += diagnostic.c_str();
@@ -5771,6 +6369,142 @@ void CSBattlePreviewPage::OnWriteback()
 		diagnostic.clear();
 	}
 	if (!diagnostic.empty()) AppendDiagnostic(diagnostic);
+	RefreshEditorControls();
+	Invalidate(FALSE);
+}
+
+void CSBattlePreviewPage::CancelConflictingBattleEditorMode()
+{
+	if (m_editorOps == nullptr) return;
+	if (ActiveSession().editor_state.mode ==
+		ccz::editor_preview::BattleEditorMode::AdjustPosition) {
+		ShowOperationResult(m_editorOps->CancelPositionAdjustment());
+	}
+	// CancelPositionAdjustment may restore the placement mode that was active
+	// before adjustment began. Leave that mode as well before starting a map
+	// operation, otherwise its next click would resume the old unit tool.
+	if (ActiveSession().editor_state.mode ==
+		ccz::editor_preview::BattleEditorMode::Place) {
+		ShowOperationResult(m_editorOps->CancelPlacementBrush());
+		RefreshCharacterListIfDeploymentChanged();
+	}
+}
+
+void CSBattlePreviewPage::ShowBattleMapOperationsMenu()
+{
+	CMenu menu;
+	if (!menu.CreatePopupMenu()) return;
+	constexpr UINT kMoveTo = 1;
+	constexpr UINT kReviveTo = 2;
+	constexpr UINT kObstaclePlacement = 3;
+	constexpr UINT kCancelTool = 4;
+	menu.AppendMenu(MF_STRING, kMoveTo, _T("移动至"));
+	menu.AppendMenu(MF_STRING, kReviveTo, _T("复活至"));
+	CString obstacleLabel;
+	if (m_obstacleDrafts.empty()) {
+		obstacleLabel = _T("添加障碍物");
+	} else {
+		obstacleLabel.Format(_T("添加障碍物（已暂存 %u 个）"),
+			static_cast<unsigned>(m_obstacleDrafts.items().size()));
+	}
+	menu.AppendMenu(MF_STRING, kObstaclePlacement, obstacleLabel);
+	if (m_battleMapToolMode != BattleMapToolMode::None) {
+		menu.AppendMenu(MF_SEPARATOR);
+		menu.AppendMenu(MF_STRING, kCancelTool, _T("退出当前地图工具"));
+	}
+	CRect button;
+	m_battleMapOperationsButton.GetWindowRect(&button);
+	const UINT command = menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON |
+		TPM_RETURNCMD, button.left, button.bottom, this);
+	if (command == kMoveTo || command == kReviveTo ||
+		command == kObstaclePlacement)
+		CancelConflictingBattleEditorMode();
+	if (command == kMoveTo) {
+		m_battleMapToolMode = BattleMapToolMode::MovePickUnit;
+		m_moveOperationUnit.reset();
+		m_reviveOperationDataId = -1;
+	} else if (command == kReviveTo) {
+		m_battleMapToolMode = BattleMapToolMode::RevivePickCharacter;
+		m_moveOperationUnit.reset();
+		m_reviveOperationDataId = -1;
+		m_brushTabActive = false;
+		SetSidebarVisible(true);
+		RefreshCharacterList();
+	} else if (command == kObstaclePlacement) {
+		m_battleMapToolMode = BattleMapToolMode::ObstaclePlace;
+		m_moveOperationUnit.reset();
+		m_reviveOperationDataId = -1;
+		SetSidebarVisible(true);
+	} else if (command == kCancelTool) {
+		CancelBattleMapTool();
+	}
+	if (command != 0) {
+		RefreshEditorControls();
+		Invalidate(FALSE);
+	}
+}
+
+void CSBattlePreviewPage::CancelBattleMapTool(bool preserveObstacles)
+{
+	m_battleMapToolMode = BattleMapToolMode::None;
+	m_moveOperationUnit.reset();
+	m_reviveOperationDataId = -1;
+	if (!preserveObstacles) m_obstacleDrafts.Clear();
+	RefreshEditorControls();
+	Invalidate(FALSE);
+}
+
+bool CSBattlePreviewPage::ApplyBattleMapOperations(
+	const std::vector<ccz::editor_preview::BattleMapOperationInstruction>&
+		instructions, std::wstring& diagnostic)
+{
+	diagnostic.clear();
+	if (!ActiveSession().ui.quick_mode_enabled ||
+		ActiveSession().stale ||
+		ActiveSession().native_writeback_rebase_required) {
+		diagnostic = L"S 地图操作拒绝：快速模式基线不可写入，请重新读取 Scene1";
+		AppendDiagnostic(diagnostic);
+		return false;
+	}
+	CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
+	CMDIChildWnd* child = frame != nullptr ? frame->MDIGetActive() : nullptr;
+	CcczEditor2View* view = child != nullptr
+		? DYNAMIC_DOWNCAST(CcczEditor2View, child->GetActiveView()) : nullptr;
+	if (view == nullptr) {
+		diagnostic = L"S 地图操作拒绝：没有活动的原生剧本文档";
+		AppendDiagnostic(diagnostic);
+		return false;
+	}
+	const bool applied = ApplyPendingNativeWritebackTransaction(*view,
+		view->GetTreeCtrl().GetSelectedItem(), diagnostic, true, &instructions);
+	if (applied) m_diagnostic = diagnostic.c_str();
+	else if (!diagnostic.empty()) AppendDiagnostic(diagnostic);
+	RefreshEditorControls();
+	Invalidate(FALSE);
+	return applied;
+}
+
+void CSBattlePreviewPage::OnBattleMapOperationsClicked()
+{
+	ShowBattleMapOperationsMenu();
+}
+
+void CSBattlePreviewPage::OnObstacleTypeClicked(UINT controlId)
+{
+	if (controlId < kObstacleTypeFirstId ||
+		controlId > kObstacleTypeLastId) return;
+	m_selectedObstacleType = static_cast<int>(
+		controlId - kObstacleTypeFirstId);
+	for (int type = 0; type < 3; ++type)
+		m_obstacleTypeButtons[type].SetSelected(
+			type == m_selectedObstacleType);
+	RefreshEditorControls();
+	Invalidate(FALSE);
+}
+
+void CSBattlePreviewPage::OnClearObstacleDrafts()
+{
+	m_obstacleDrafts.Clear();
 	RefreshEditorControls();
 	Invalidate(FALSE);
 }

@@ -3,6 +3,7 @@
 #include <ccz/preview/battle_preview.h>
 
 #include "BattlePreviewAdapter.h"
+#include "BattleMapOperations.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -127,6 +128,10 @@ struct BattleWritebackNativeChange {
     std::uintptr_t insert_after_handle{};
     std::uintptr_t insert_before_handle{};
     std::uintptr_t insert_terminal_handle{};
+    // Present only for 0x32/0x55/0x58 insertions; it lets the native
+    // transaction repeat the map-bound check before touching the TreeView.
+    int map_width{};
+    int map_height{};
     int source_ordinal{-1};
     // Full preimage captured at the same time as the runtime handle. It lets
     // the transaction reject stale targets and is also its exact rollback data.
@@ -149,6 +154,14 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
     const BattleWritebackPlanBuild& plan,
     const BattlePreviewCapture& current,
     const ccz::preview::LogicalNodeKey& scope_key);
+
+// Build ordered insert-only changes after the editor's current selected
+// ordinary S instruction. The full document snapshot is used for the anchor,
+// so a quick-mode Scene1 preview may still insert after a command in another
+// Scene without changing the preview's pinned map baseline.
+BattleWritebackNativeBatch BuildBattleWritebackInsertBatchAfterSelection(
+    const BattlePreviewCapture& current,
+    const std::vector<BattleMapOperationInstruction>& instructions);
 
 struct BattleWritebackNativeNodeSnapshot {
     std::uintptr_t handle{};

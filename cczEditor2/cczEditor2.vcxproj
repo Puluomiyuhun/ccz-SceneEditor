@@ -306,6 +306,9 @@
     <ClCompile Include="PreviewIntegration\BattleWritebackAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleMapOperations.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="PreviewIntegration\BattleEditorOps.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

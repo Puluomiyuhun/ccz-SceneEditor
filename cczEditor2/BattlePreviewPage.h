@@ -61,6 +61,20 @@ private:
 	bool m_tracking{};
 };
 
+class CBattleObstacleButton : public CButton
+{
+public:
+	void SetObstacleType(int type) noexcept { m_obstacleType = type; }
+	void SetSelected(bool selected);
+
+protected:
+	void DrawItem(LPDRAWITEMSTRUCT draw_item) override;
+
+private:
+	int m_obstacleType{};
+	bool m_selected{};
+};
+
 class CSBattlePreviewPage : public CWnd
 {
 public:
@@ -127,11 +141,15 @@ protected:
 	afx_msg void OnPreviewModeClicked();
 	afx_msg LRESULT OnConditionActionMessage(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnWriteback();
+	afx_msg void OnBattleMapOperationsClicked();
+	afx_msg void OnObstacleTypeClicked(UINT control_id);
+	afx_msg void OnClearObstacleDrafts();
 	afx_msg void OnHideSidebar();
 	afx_msg void OnShowSidebar();
 	DECLARE_MESSAGE_MAP()
 
 private:
+	using BattleMapToolMode = ccz::editor_preview::BattleMapToolMode;
 	#if defined(_DEBUG) && defined(CCZ_S_BATTLE_PREVIEW_PERF)
 	struct BattlePreviewPerfCounters {
 		std::uint64_t full_document_captures{};
@@ -169,6 +187,12 @@ private:
 	bool m_perfAwaitingFirstPaint{};
 	#endif
 	void CreateEditorControls();
+	void CancelConflictingBattleEditorMode();
+	void ShowBattleMapOperationsMenu();
+	void CancelBattleMapTool(bool preserve_obstacles = true);
+	bool ApplyBattleMapOperations(
+		const std::vector<ccz::editor_preview::BattleMapOperationInstruction>&
+			instructions, std::wstring& diagnostic);
 	void ShowPreviewModeMenu();
 	void SetParameterPreviewMode(
 		ccz::editor_preview::BattleParameterPreviewMode mode);
@@ -183,6 +207,7 @@ private:
 	void SaveActiveSessionUiState();
 	void RestoreActiveSessionUiState();
 	bool HasPendingPreviewDrafts() const;
+	bool HasPendingMapOperationState() const;
 	bool HasPendingPreviewChanges() const;
 	void MarkSessionStale(const std::wstring& diagnostic);
 	void LayoutEditorControls();
@@ -226,7 +251,9 @@ private:
 		CcczEditor2View& view, std::wstring& diagnostic);
 	bool ApplyPendingNativeWritebackTransaction(
 		CcczEditor2View& view, HTREEITEM selected_item,
-		std::wstring& diagnostic, bool require_nonempty_batch);
+		std::wstring& diagnostic, bool require_nonempty_batch,
+		const std::vector<ccz::editor_preview::BattleMapOperationInstruction>*
+			map_operations = nullptr);
 	bool RebaseBattlePreviewAfterNativeWriteback(
 		CcczEditor2View& view, HTREEITEM selected_item,
 		std::wstring& diagnostic,
@@ -282,6 +309,10 @@ private:
 	CButton m_activationButton;
 	CButton m_variableControlButton;
 	CButton m_unitParametersButton;
+	CButton m_battleMapOperationsButton;
+	CBattleObstacleButton m_obstacleTypeButtons[3];
+	CButton m_clearObstacleDraftsButton;
+	CStatic m_mapOperationStatus;
 	CBattlePreviewModeButton m_previewModeButton;
 	CConditionTreePane m_conditionTreePane;
 	CVariableControlPane m_variableControlPane;
@@ -341,4 +372,9 @@ private:
 	int m_panStartScrollY = 0;
 	std::optional<std::size_t> m_selectedUnit;
 	std::optional<ccz::preview::BattleCoord> m_hoverCell;
+	BattleMapToolMode m_battleMapToolMode{BattleMapToolMode::None};
+	std::optional<ccz::preview::BattleUnit> m_moveOperationUnit;
+	int m_reviveOperationDataId{-1};
+	int m_selectedObstacleType{};
+	ccz::editor_preview::BattleObstacleDraftQueue m_obstacleDrafts;
 };

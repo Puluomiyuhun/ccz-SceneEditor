@@ -4,6 +4,7 @@
 #include <ccz/preview/battle_preview.h>
 #include "../../cczEditor2/PreviewIntegration/BattlePreviewAdapter.h"
 #include "../../cczEditor2/PreviewIntegration/BattleEditorOps.h"
+#include "../../cczEditor2/PreviewIntegration/BattleMapOperations.h"
 #include "../../cczEditor2/PreviewIntegration/BattleWritebackAdapter.h"
 #include "../../cczEditor2/PreviewIntegration/BattleWritebackQaGate.h"
 
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <utility>
 
 namespace {
 
@@ -856,13 +858,17 @@ public:
         std::uintptr_t after_handle, std::uint16_t instruction_id,
         const std::vector<std::int32_t>& int_data, int ordinal,
         std::uintptr_t& inserted_handle) override {
-        if (FailOnce(L"insert")) return false;
-        const auto parent = nodes.find(parent_handle);
-        const std::size_t expected = instruction_id == 0x4b ? 20U : 1000U;
-        if (parent == nodes.end() || children.find(parent_handle) == children.end() ||
-            int_data.size() != expected ||
-            (instruction_id != 0x4b && instruction_id != 0x46 &&
-             instruction_id != 0x47)) return false;
+		if (FailOnce(L"insert")) return false;
+		const auto parent = nodes.find(parent_handle);
+		const std::size_t expected = instruction_id == 0x4b ? 20U
+			: instruction_id == 0x46 || instruction_id == 0x47 ? 1000U
+			: instruction_id == 0x58 ? 7U
+			: instruction_id == 0x32 || instruction_id == 0x55 ? 6U : 0U;
+		if (parent == nodes.end() || children.find(parent_handle) == children.end() ||
+			int_data.size() != expected ||
+			(instruction_id != 0x4b && instruction_id != 0x46 &&
+			 instruction_id != 0x47 && instruction_id != 0x32 &&
+			 instruction_id != 0x55 && instruction_id != 0x58)) return false;
         auto& siblings = children[parent_handle];
         std::size_t index = 0;
         if (after_handle != 0) {
@@ -1119,6 +1125,13 @@ public:
         const auto found = nodes.find(handle);
         return found == nodes.end() ? std::vector<std::int32_t>{}
                                     : found->second.int_data;
+    }
+
+    void SetInstructionId(std::uintptr_t handle, std::uint16_t instruction) {
+        const auto found = nodes.find(handle);
+        if (found == nodes.end()) return;
+        found->second.instruction_id = instruction;
+        RefreshRevision();
     }
 
     std::uintptr_t Child(std::uintptr_t parent, std::size_t index) const {
@@ -1679,6 +1692,78 @@ CCZ_TEST(battle_writeback_native_transaction_inserts_all_three_new_unit_types) {
 
     CCZ_REQUIRE(transaction.Undo(host, diagnostic));
     CCZ_REQUIRE_EQ(host.Children(10).size(), std::size_t(3));
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_inserts_and_undoes_map_operations_in_order) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    const std::vector<std::pair<std::uint16_t,
+        std::vector<std::int32_t>>> operations = {
+        {0x32, {0, 47, 0, 8, 12, 2}},
+        {0x55, {0, 103, 0, 8, 12, -1}},
+        {0x58, {2, 0, 26, 8, 12, 0, 0}},
+    };
+    for (const auto& operation : operations) {
+        BattleWritebackNativeChange insertion;
+        insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+        insertion.instruction_id = operation.first;
+        insertion.parent_handle = 10;
+        insertion.insert_after_handle = 12;
+        insertion.insert_before_handle = 13;
+        insertion.source_ordinal = -1;
+        insertion.int_data = operation.second;
+        insertion.map_width = 19;
+        insertion.map_height = 18;
+        batch.changes.push_back(std::move(insertion));
+    }
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    const auto committed = host.Children(10);
+    CCZ_REQUIRE_EQ(committed.size(), std::size_t(6));
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+        BattleWritebackNativeNodeSnapshot inserted;
+        CCZ_REQUIRE(host.CaptureNode(committed[index + 2], inserted));
+        CCZ_REQUIRE_EQ(inserted.instruction_id, operations[index].first);
+        CCZ_REQUIRE_EQ(inserted.int_data, operations[index].second);
+    }
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10),
+        (std::vector<std::uintptr_t>{11, 12, 13}));
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_rejects_map_operation_in_internal_info_group) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(10, 2);
+    const auto original_children = host.Children(10);
+    const auto original_data = host.Data(11);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE(diagnostic.find(L"内部信息分组") != std::wstring::npos);
+    CCZ_REQUIRE_EQ(host.Children(10), original_children);
+    CCZ_REQUIRE_EQ(host.Data(11), original_data);
     CCZ_REQUIRE(!transaction.undo_available());
 }
 

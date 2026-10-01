@@ -167,6 +167,10 @@
     <ClCompile Include="tests\battle_movement_terrain_resource_cache_tests.cpp" />
     <ClCompile Include="tests\battle_interaction_tests.cpp" />
     <ClCompile Include="tests\battle_writeback_tests.cpp" />
+    <ClCompile Include="tests\battle_map_operation_tests.cpp" />
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleMapOperations.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\tests\preview_integration\battle_editor_ops_tests.cpp" />
     <ClCompile Include="..\tests\preview_integration\battle_character_catalog_tests.cpp" />
     <ClCompile Include="..\cczEditor2\PreviewIntegration\EditorPreviewAdapter.cpp">
