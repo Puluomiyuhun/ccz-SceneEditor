@@ -1641,6 +1641,22 @@ CCZ_TEST(battle_editor_toggle_selection_has_no_automatic_primary_or_rotation) {
     CCZ_REQUIRE(!state.selection.has_value());
 }
 
+CCZ_TEST(battle_editor_toggle_selection_clears_matching_single_selection) {
+    BattleEditorState state = fixture();
+    state.battle.units.clear();
+    state.mode = BattleEditorMode::Select;
+    state.battle.units.push_back(unit(0x4b, 0, 0, 10, 0, 0));
+    BattleEditorOps operations(state);
+
+    CCZ_REQUIRE(operations.SelectAt({0, 0}).ok);
+    const auto removed = operations.ToggleSelectionAt({0, 0});
+
+    CCZ_REQUIRE(removed.ok);
+    CCZ_REQUIRE(removed.changed);
+    CCZ_REQUIRE(!state.selection.has_value());
+    CCZ_REQUIRE(state.selection_group.empty());
+}
+
 CCZ_TEST(battle_editor_batch_parameter_edit_is_atomic_and_undoes_as_one) {
     BattleEditorState state = fixture();
     state.battle.units.clear();

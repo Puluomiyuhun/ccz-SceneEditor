@@ -27,6 +27,7 @@
 #include "myTool.h"
 #include "TextWrapAssist.h"
 #include "TextWrapEditSession.h"
+#include "PreviewIntegration/PreviewWritebackGate.h"
 #pragma comment(lib, "version.lib")
 #include <atlimage.h>
 
@@ -1928,6 +1929,13 @@ HTREEITEM CcczEditor2View::InsertInstructionAt(int id, HTREEITEM hAfter, const i
 {
 	CTreeCtrl& m_TreeCtrl = GetTreeCtrl();
 	if (!hAfter) return nullptr;
+	ItemData* afterData = reinterpret_cast<ItemData*>(m_TreeCtrl.GetItemData(hAfter));
+	if (afterData == nullptr) return nullptr;
+	if (ccz::editor_preview::IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(
+		afterData->id)) {
+		AfxMessageBox(TEXT("不允许在事件结束或子事件设定后面添加指令"), MB_ICONERROR);
+		return nullptr;
+	}
 
 	HTREEITEM parent = m_TreeCtrl.GetParentItem(hAfter);
 	if (!parent) parent = TVI_ROOT;
@@ -2011,6 +2019,14 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 	if (hInsertAfter != TVI_FIRST && hInsertAfter != TVI_LAST &&
 		tree.GetParentItem(hInsertAfter) != parent)
 		return nullptr;
+	if (hInsertAfter != TVI_FIRST && hInsertAfter != TVI_LAST) {
+		ItemData* predecessorData = reinterpret_cast<ItemData*>(
+			tree.GetItemData(hInsertAfter));
+		if (predecessorData == nullptr ||
+			ccz::editor_preview::IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(
+				predecessorData->id))
+			return nullptr;
+	}
 
 	std::unique_ptr<ItemData> data;
 	try {

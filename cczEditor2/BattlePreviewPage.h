@@ -141,7 +141,7 @@ protected:
 	afx_msg void OnPreviewModeClicked();
 	afx_msg LRESULT OnConditionActionMessage(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnWriteback();
-	afx_msg void OnBattleMapOperationsClicked();
+	afx_msg void OnObstaclePageClicked();
 	afx_msg void OnObstacleTypeClicked(UINT control_id);
 	afx_msg void OnClearObstacleDrafts();
 	afx_msg void OnHideSidebar();
@@ -188,7 +188,6 @@ private:
 	#endif
 	void CreateEditorControls();
 	void CancelConflictingBattleEditorMode();
-	void ShowBattleMapOperationsMenu();
 	void CancelBattleMapTool(bool preserve_obstacles = true);
 	bool ApplyBattleMapOperations(
 		const std::vector<ccz::editor_preview::BattleMapOperationInstruction>&
@@ -211,6 +210,7 @@ private:
 	bool HasPendingPreviewChanges() const;
 	void MarkSessionStale(const std::wstring& diagnostic);
 	void LayoutEditorControls();
+	void LayoutObstacleSidebar(const CRect& client);
 	void LayoutCollapsedControlToolbar();
 	void RefreshEditorControls();
 	void RefreshCharacterList();
@@ -237,6 +237,10 @@ private:
 		HWND source_tree_window = nullptr);
 	bool ActivateConditionScope(
 		const ccz::editor_preview::BattleConditionScope& scope);
+	bool CaptureRoleOperationUnits(std::uint64_t anchor_cache_id,
+		bool include_selection_group,
+		std::vector<ccz::preview::BattleUnit>& units,
+		std::size_t& anchor_index, std::wstring& diagnostic);
 	void RefreshConditionTree();
 	void UpdateConditionActivationTarget(std::uintptr_t runtime_handle);
 	LRESULT ApplyConditionActionAndRefresh(
@@ -309,7 +313,7 @@ private:
 	CButton m_activationButton;
 	CButton m_variableControlButton;
 	CButton m_unitParametersButton;
-	CButton m_battleMapOperationsButton;
+	CButton m_obstaclePageButton;
 	CBattleObstacleButton m_obstacleTypeButtons[3];
 	CButton m_clearObstacleDraftsButton;
 	CStatic m_mapOperationStatus;
@@ -373,8 +377,11 @@ private:
 	std::optional<std::size_t> m_selectedUnit;
 	std::optional<ccz::preview::BattleCoord> m_hoverCell;
 	BattleMapToolMode m_battleMapToolMode{BattleMapToolMode::None};
-	std::optional<ccz::preview::BattleUnit> m_moveOperationUnit;
-	int m_reviveOperationDataId{-1};
+	bool m_obstaclePageActive{};
+	std::vector<ccz::preview::BattleUnit> m_roleOperationUnits;
+	std::size_t m_roleOperationAnchorIndex{};
+	bool m_roleOperationDirectionAdjusted{};
+	int m_roleOperationDirection{-1};
 	int m_selectedObstacleType{};
 	ccz::editor_preview::BattleObstacleDraftQueue m_obstacleDrafts;
 };

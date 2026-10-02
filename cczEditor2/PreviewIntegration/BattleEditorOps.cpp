@@ -1124,6 +1124,8 @@ BattleEditorResult BattleEditorOps::ToggleSelectionAt(
 
     // Multi-selection has no persistent primary unit. The unit clicked when
     // a batch operation starts supplies that operation's temporary anchor.
+    const bool clicked_single_selection = state_->selection.has_value() &&
+        state_->selection->cache_id == selected.cache_id;
     state_->selection.reset();
     const auto existing = std::find_if(
         state_->selection_group.begin(), state_->selection_group.end(),
@@ -1133,6 +1135,9 @@ BattleEditorResult BattleEditorOps::ToggleSelectionAt(
     if (existing != state_->selection_group.end()) {
         state_->selection_group.erase(existing);
         return success(L"已将光标指向角色移出多选组", true, 1);
+    }
+    if (clicked_single_selection) {
+        return success(L"已取消当前角色选择", true, 1);
     }
 
     state_->selection_group.push_back(selected);

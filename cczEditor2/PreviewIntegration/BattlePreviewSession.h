@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ccz::editor_preview {
 
@@ -69,11 +70,14 @@ struct BattlePreviewUiState {
 };
 
 struct BattleMapOperationUiState {
-	BattleMapToolMode tool_mode{BattleMapToolMode::None};
+    BattleMapToolMode tool_mode{BattleMapToolMode::None};
+    bool obstacle_page_active{};
 	int selected_obstacle_type{};
 	BattleObstacleDraftQueue obstacle_drafts;
-	std::optional<ccz::preview::BattleUnit> move_operation_unit;
-	int revive_operation_data_id{-1};
+	std::vector<ccz::preview::BattleUnit> role_operation_units;
+	std::size_t role_operation_anchor_index{};
+	bool role_operation_direction_adjusted{};
+	int role_operation_direction{-1};
 };
 
 struct BattlePreviewConditionWorkspace {

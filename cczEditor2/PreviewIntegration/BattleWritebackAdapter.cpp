@@ -1,6 +1,7 @@
 #include "BattleWritebackAdapter.h"
 #include "BattlePreviewPredicates.h"
 #include "EditorTreeSnapshot.h"
+#include "PreviewWritebackGate.h"
 
 #include <ccz/preview/battle_field_spec.h>
 
@@ -1718,6 +1719,10 @@ BattleWritebackNativeBatch BuildBattleWritebackNativeBatch(
             native_change.insert_terminal_handle = terminal.runtime_handle;
             if (before_position != parent->children.begin()) {
                 const auto& previous = *(before_position - 1);
+                if (IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(
+                        previous.instruction_id)) {
+                    return fail_batch(L"战场原生预检失败：不允许在事件结束或子事件设定后面添加指令");
+                }
                 const auto captured_previous = captured_by_handle.find(
                     previous.runtime_handle);
                 if (captured_previous == captured_by_handle.end() ||
@@ -1830,8 +1835,9 @@ BattleWritebackNativeBatch BuildBattleWritebackInsertBatchAfterSelection(
         anchor.child_index + 1 >= anchor.parent->children.size()) {
         return fail_batch(L"地图操作预检失败：请在完整剧本树中选中一条普通叶子指令作为写入锚点");
     }
-    if (anchor.parent->instruction_id == 2) {
-        return fail_batch(L"地图操作预检失败：选中指令位于 2 号内部信息分组中；请改选分组外的指令，避免破坏我军出场专用分组");
+    if (anchor.parent->instruction_id == 2 &&
+        anchor.parent->long_text == L"我军出场") {
+        return fail_batch(L"地图操作预检失败：选中指令位于“我军出场”专用分组；请改选其他分组中的指令");
     }
     const auto& siblings = anchor.parent->children;
     const auto& terminal = siblings.back();
@@ -2070,8 +2076,9 @@ bool BattleWritebackNativeTransaction::Apply(
             return false;
         }
         if (is_battle_map_operation(change.instruction_id) &&
-            parent.instruction_id == 2) {
-            diagnostic = L"S 战场事务拒绝：地图操作不能插入 0x02 内部信息分组";
+            parent.instruction_id == 2 &&
+            parent.long_text == L"我军出场") {
+            diagnostic = L"S 战场事务拒绝：地图操作不能插入“我军出场”专用分组";
             return false;
         }
         const bool section_entry_event_boundary =
@@ -2110,6 +2117,11 @@ bool BattleWritebackNativeTransaction::Apply(
                 diagnostic = L"S 战场事务拒绝：插入前置兄弟与终止锚点不相邻";
                 return false;
             }
+            if (IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(
+                    after.instruction_id)) {
+                diagnostic = L"S 战场事务拒绝：不允许在事件结束或子事件设定后面添加指令";
+                return false;
+            }
         }
 
         std::uintptr_t surviving_after = change.insert_after_handle;
@@ -2127,6 +2139,20 @@ bool BattleWritebackNativeTransaction::Apply(
                 return false;
             }
             surviving_after = deleted_predecessor.previous_sibling_handle;
+        }
+        if (surviving_after != 0) {
+            BattleWritebackNativeNodeSnapshot surviving_predecessor;
+            if (!host.NodeExists(surviving_after) ||
+                !host.CaptureNode(surviving_after, surviving_predecessor) ||
+                surviving_predecessor.parent_handle != change.parent_handle) {
+                diagnostic = L"S 战场事务拒绝：删除前置指令后无法解析实际插入位置";
+                return false;
+            }
+            if (IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(
+                    surviving_predecessor.instruction_id)) {
+                diagnostic = L"S 战场事务拒绝：删除前置指令后会紧跟事件结束或子事件设定";
+                return false;
+            }
         }
 
         auto& entry = prepared[index];

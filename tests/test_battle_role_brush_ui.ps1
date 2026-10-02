@@ -74,23 +74,33 @@ $headerOperation = [regex]::Match($header, 'void ShowOperationResult\([\s\S]*?\)
 Assert-Text $headerOperation.Value 'ShowOperationResult\([\s\S]*?result\s*\)\s*;' `
 	'Operation-result display must not have a default list-refresh path.'
 $rightClick = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnRButtonDown('
-if ($rightClick -match 'RefreshCharacterList\(|RefreshDeploymentList\(|LayoutEditorControls\(') {
+$menuOpenAt = $rightClick.IndexOf('TrackPopupMenu', [System.StringComparison]::Ordinal)
+$rightClickBeforeMenu = if ($menuOpenAt -ge 0) {
+	$rightClick.Substring(0, $menuOpenAt)
+} else {
+	$rightClick
+}
+if ($rightClickBeforeMenu -match 'RefreshCharacterList\(|RefreshDeploymentList\(|LayoutEditorControls\(') {
 	throw 'A plain right-click must not rebuild or relayout the right-side controls before opening its menu.'
 }
 Assert-Text $opsHeader 'CancelPlacementBrush\(\)' `
     'BattleEditorOps must expose an explicit placement-brush cancel operation.'
-Assert-Text $rightClick 'BattleEditorMode::Place[\s\S]*?CancelPlacementBrush\(\)[\s\S]*?return;' `
-    'Right mouse down must cancel an active placement brush before unit hit testing or the delete menu.'
+Assert-Text $rightClick 'hasContextTarget[\s\S]*?BattleEditorMode::Place[\s\S]*?CancelPlacementBrush\(\)[\s\S]*?return;' `
+    'Right mouse down must route a hit target first and cancel placement only when the cell is empty.'
 $cancelIndex = $rightClick.IndexOf('CancelPlacementBrush()', [System.StringComparison]::Ordinal)
 $hitTestIndex = $rightClick.IndexOf('HitTestUnit(*coordinate)', [System.StringComparison]::Ordinal)
-if ($cancelIndex -lt 0 -or $hitTestIndex -lt 0 -or $cancelIndex -gt $hitTestIndex) {
-    throw 'Right click must cancel placement before attempting unit hit testing.'
+if ($cancelIndex -lt 0 -or $hitTestIndex -lt 0 -or $hitTestIndex -gt $cancelIndex) {
+    throw 'Right click must hit-test the cell before deciding whether to cancel placement.'
 }
-Write-Output '[PASS] brush cancellation precedes right-click unit actions'
+Write-Output '[PASS] right-click target routing precedes brush cancellation'
 Assert-Text $rightClick 'm_leftStampActive\s*=\s*false[\s\S]*?m_lastStampCell\.reset\(\)[\s\S]*?GetCapture\(\) == this[\s\S]*?ReleaseCapture\(\)' `
     'Right-click cancellation must stop an in-progress drag stamp and release mouse capture.'
 Assert-Text $rightClick 'DeleteAt\(' `
     'Right mouse down outside active placement mode must retain the unit context menu.'
+Assert-Text $rightClick 'contextUnit\s*&&\s*!group_context\s*&&\s*state\.mode\s*!=\s*ccz::editor_preview::BattleEditorMode::Select[\s\S]*?SelectAt\(\*coordinate\)' `
+    'Right-clicking a role in multi-select mode must not convert or clear the current selection group.'
+Assert-Text $rightClick 'splitContext\s*&&\s*!group_context\s*&&\s*contextUnit\s*&&\s*state\.mode\s*!=\s*ccz::editor_preview::BattleEditorMode::Select[\s\S]*?SelectAt\(\*coordinate\)' `
+    'Choosing a role action from an overlap menu must preserve multi-selection mode state.'
 $wheel = [regex]::Match($page, 'BOOL CSBattlePreviewPage::OnMouseWheel\([\s\S]*?\n\}')
 Assert-Text $wheel.Value 'BattleEditorMode::Place' `
 	'The placement canvas wheel must cycle the active placement direction.'
@@ -221,8 +231,8 @@ Assert-Text $page 'kStatusFooterHeight\s*=\s*26' `
 $layout = Get-FunctionBlock $page 'void CSBattlePreviewPage::LayoutEditorControls('
 Assert-Text $layout 'm_canvasRect\.SetRect\(0, headerHeight,[\s\S]*?footerTop\)' `
     'Map drawing and hit testing must use the area below and above the status bands.'
-Assert-Text $layout 'm_sidebarVisible\s*\?\s*kStatusHeaderHeight\s*:\s*kStatusHeaderHeight\s*\+\s*kCollapsedControlToolbarHeight' `
-    'Only the collapsed-sidebar layout must reserve the dedicated control row.'
+Assert-Text $layout 'sidePanelVisible\s*\?\s*kStatusHeaderHeight\s*:\s*kStatusHeaderHeight\s*\+\s*kCollapsedControlToolbarHeight' `
+	'Any expanded sidebar page must reserve its own header without the collapsed toolbar row.'
 Assert-Text $layout 'LayoutCollapsedControlToolbar\(\)' `
     'The collapsed sidebar must lay out the persistent compact control row.'
 Assert-Text $layout 'if\s*\(m_sidebarVisible\)\s*\{[\s\S]*?m_quickModeButton\.MoveWindow\(left,[\s\S]*?\}\s*else\s*\{[\s\S]*?LayoutCollapsedControlToolbar\(\)' `
@@ -249,13 +259,13 @@ Assert-Text $page 'RGB\(194,\s*87,\s*33\)' `
 $viewport = Get-FunctionBlock $page 'void CSBattlePreviewPage::UpdateViewport('
 Assert-Text $viewport 'availableHeight\s*=\s*footerTop\s*-\s*headerHeight' `
     'Vertical scrollbar visibility must use the reserved map viewport height.'
-Assert-Text $viewport 'm_sidebarVisible\s*\?\s*kStatusHeaderHeight\s*:\s*kStatusHeaderHeight\s*\+\s*kCollapsedControlToolbarHeight' `
-    'Scrollbar calculations must use the same collapsed control-row height as drawing and hit testing.'
+Assert-Text $viewport 'sidePanelVisible\s*\?\s*kStatusHeaderHeight\s*:\s*kStatusHeaderHeight\s*\+\s*kCollapsedControlToolbarHeight' `
+	'Scrollbar calculations must account for either expanded sidebar page.'
 Assert-Text $viewport 'CRect clientBefore;[\s\S]*?ShowScrollBar\([\s\S]*?CRect clientAfter;[\s\S]*?if\s*\(clientBefore\.Width\(\)\s*!=\s*clientAfter\.Width\(\)\s*\|\|\s*clientBefore\.Height\(\)\s*!=\s*clientAfter\.Height\(\)\)[\s\S]*?LayoutEditorControls\(\)' `
     'Map pan must not relayout sidebar children unless scrollbar changes alter the client area.'
 $drawCanvas = Get-FunctionBlock $page 'void CSBattlePreviewPage::DrawCanvas('
-Assert-Text $drawCanvas 'if\s*\(!m_sidebarVisible[\s\S]*?kCollapsedControlToolbarHeight' `
-    'The dedicated toolbar background must be shown only while the sidebar is hidden.'
+Assert-Text $drawCanvas 'if\s*\(!m_sidebarVisible\s*&&\s*!m_obstaclePageActive[\s\S]*?kCollapsedControlToolbarHeight' `
+	'The dedicated toolbar background must be shown only while both sidebar pages are hidden.'
 Assert-Text $drawCanvas 'FillRectangle\(&banner, m_canvasRect\.left, 0,[\s\S]*?m_canvasRect\.top' `
     'The top title strip must be drawn outside the clipped map viewport.'
 Assert-Text $drawCanvas 'm_canvasRect\.bottom[\s\S]*?visibleDiagnostic' `
@@ -287,6 +297,8 @@ if ($selectionResult -match 'RefreshEditorControls|RefreshSelectedUnitIndex') {
 $doubleClick = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnLButtonDblClk('
 Assert-Text $doubleClick 'coordinate && !occupied[\s\S]*?ClearSelectionGroup\(\)' `
     'A double-click on an empty cell must clear the entire multi-selection group.'
+Assert-Text $doubleClick 'coordinate && occupied[\s\S]*?ToggleSelectionAt\(\*coordinate\)[\s\S]*?ShowSelectionOperationResult\(result\)' `
+    'A double-click on a unit must process its second click instead of swallowing it.'
 $mouseMove = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnMouseMove('
 Assert-Text $mouseMove 'BattleSelectionPathCells\(' `
     'Drag selection must interpolate cells so fast pointer movement cannot skip units.'

@@ -7,6 +7,7 @@
 #include "../../cczEditor2/PreviewIntegration/BattleMapOperations.h"
 #include "../../cczEditor2/PreviewIntegration/BattleWritebackAdapter.h"
 #include "../../cczEditor2/PreviewIntegration/BattleWritebackQaGate.h"
+#include "../../cczEditor2/PreviewIntegration/PreviewWritebackGate.h"
 
 #include <algorithm>
 #include <chrono>
@@ -29,6 +30,15 @@ using ccz::editor_preview::BattlePreviewCapture;
 using ccz::editor_preview::CapturedEditorNode;
 using ccz::editor_preview::CapturedEditorTree;
 using ccz::preview::RawReplayNode;
+
+CCZ_TEST(battle_writeback_shared_gate_rejects_insertion_after_event_end_or_subevent_setting) {
+    using ccz::editor_preview::IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting;
+    CCZ_REQUIRE(IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(1));
+    CCZ_REQUIRE(IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(0));
+    CCZ_REQUIRE(!IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(2));
+    CCZ_REQUIRE(!IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(3));
+    CCZ_REQUIRE(!IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(48));
+}
 
 BattlePreviewCapture writeback_capture(std::uint64_t revision) {
     constexpr std::uintptr_t kSectionHandle = 100;
@@ -638,6 +648,214 @@ CCZ_TEST(battle_writeback_native_batch_accepts_selected_sibling_insert_anchor) {
     CCZ_REQUIRE_EQ(batch.changes[0].insert_terminal_handle, std::uintptr_t(103));
 }
 
+CCZ_TEST(battle_writeback_native_batch_rejects_insert_after_subevent_marker) {
+    auto capture = writeback_capture(77);
+    constexpr std::uintptr_t kMarkerHandle = 104;
+    constexpr const wchar_t* kMarkerKey =
+        L"S|scene:0|section:0|instruction:0/9|instruction:1";
+    auto& captured_children =
+        capture.snapshot.section_root.children[0].children;
+    auto& raw_children = capture.input.nodes[0].children[0].children;
+    captured_children.back().ordinal = 19;
+
+    CapturedEditorNode marker;
+    marker.runtime_handle = kMarkerHandle;
+    marker.instruction_id = 1;
+    marker.ordinal = 18;
+    captured_children.insert(captured_children.end() - 1, marker);
+
+    RawReplayNode raw_marker;
+    raw_marker.runtime_handle = kMarkerHandle;
+    raw_marker.logical_key = kMarkerKey;
+    raw_marker.instruction_id = 1;
+    raw_marker.command.instruction_id = 1;
+    raw_children.insert(raw_children.end() - 1, std::move(raw_marker));
+
+    ccz::editor_preview::BattleWritebackPlanBuild plan;
+    plan.ok = true;
+    ccz::editor_preview::BattleWritebackChange insert;
+    insert.kind = BattleWritebackChangeKind::InsertInstruction;
+    insert.instruction_id = 0x47;
+    insert.insert_parent_key = L"S|scene:0|section:0|instruction:0";
+    insert.insert_before_key =
+        L"S|scene:0|section:0|instruction:0/1|instruction:0";
+    insert.source_ordinal = -1;
+    insert.int_data.assign(1000, 0);
+    plan.changes.push_back(std::move(insert));
+
+    const auto batch = ccz::editor_preview::BuildBattleWritebackNativeBatch(
+        plan, capture, L"S|scene:0|section:0");
+    CCZ_REQUIRE(!batch.ok);
+    CCZ_REQUIRE(batch.diagnostic.find(L"子事件设定") != std::wstring::npos);
+    CCZ_REQUIRE(batch.changes.empty());
+}
+
+CCZ_TEST(battle_writeback_native_batch_rejects_insert_after_event_end_marker) {
+    auto capture = writeback_capture(80);
+    constexpr std::uintptr_t kMarkerHandle = 104;
+    constexpr const wchar_t* kMarkerKey =
+        L"S|scene:0|section:0|instruction:0/9|instruction:0";
+    auto& captured_children =
+        capture.snapshot.section_root.children[0].children;
+    auto& raw_children = capture.input.nodes[0].children[0].children;
+    captured_children.back().ordinal = 19;
+
+    CapturedEditorNode marker;
+    marker.runtime_handle = kMarkerHandle;
+    marker.instruction_id = 0;
+    marker.ordinal = 18;
+    captured_children.insert(captured_children.end() - 1, marker);
+
+    RawReplayNode raw_marker;
+    raw_marker.runtime_handle = kMarkerHandle;
+    raw_marker.logical_key = kMarkerKey;
+    raw_marker.instruction_id = 0;
+    raw_marker.command.instruction_id = 0;
+    raw_children.insert(raw_children.end() - 1, std::move(raw_marker));
+
+    ccz::editor_preview::BattleWritebackPlanBuild plan;
+    plan.ok = true;
+    ccz::editor_preview::BattleWritebackChange insert;
+    insert.kind = BattleWritebackChangeKind::InsertInstruction;
+    insert.instruction_id = 0x47;
+    insert.insert_parent_key = L"S|scene:0|section:0|instruction:0";
+    insert.insert_before_key =
+        L"S|scene:0|section:0|instruction:0/1|instruction:0";
+    insert.source_ordinal = -1;
+    insert.int_data.assign(1000, 0);
+    plan.changes.push_back(std::move(insert));
+
+    const auto batch = ccz::editor_preview::BuildBattleWritebackNativeBatch(
+        plan, capture, L"S|scene:0|section:0");
+    CCZ_REQUIRE(!batch.ok);
+    CCZ_REQUIRE(batch.diagnostic.find(L"事件结束") != std::wstring::npos);
+    CCZ_REQUIRE(batch.changes.empty());
+}
+
+CCZ_TEST(battle_writeback_native_batch_allows_insert_before_subevent_marker) {
+    auto capture = writeback_capture(78);
+    constexpr std::uintptr_t kMarkerHandle = 104;
+    constexpr const wchar_t* kMarkerKey =
+        L"S|scene:0|section:0|instruction:0/9|instruction:1";
+    auto& captured_children =
+        capture.snapshot.section_root.children[0].children;
+    auto& raw_children = capture.input.nodes[0].children[0].children;
+
+    CapturedEditorNode marker;
+    marker.runtime_handle = kMarkerHandle;
+    marker.instruction_id = 1;
+    marker.ordinal = 19;
+    captured_children.insert(captured_children.end() - 1, marker);
+
+    RawReplayNode raw_marker;
+    raw_marker.runtime_handle = kMarkerHandle;
+    raw_marker.logical_key = kMarkerKey;
+    raw_marker.instruction_id = 1;
+    raw_marker.command.instruction_id = 1;
+    raw_children.insert(raw_children.end() - 1, std::move(raw_marker));
+
+    ccz::editor_preview::BattleWritebackPlanBuild plan;
+    plan.ok = true;
+    ccz::editor_preview::BattleWritebackChange insert;
+    insert.kind = BattleWritebackChangeKind::InsertInstruction;
+    insert.instruction_id = 0x47;
+    insert.insert_parent_key = L"S|scene:0|section:0|instruction:0";
+    insert.insert_before_key = kMarkerKey;
+    insert.source_ordinal = -1;
+    insert.int_data.assign(1000, 0);
+    plan.changes.push_back(std::move(insert));
+
+    const auto batch = ccz::editor_preview::BuildBattleWritebackNativeBatch(
+        plan, capture, L"S|scene:0|section:0");
+    CCZ_REQUIRE(batch.ok);
+    CCZ_REQUIRE_EQ(batch.changes.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(batch.changes[0].insert_before_handle, kMarkerHandle);
+    CCZ_REQUIRE_EQ(batch.changes[0].insert_after_handle, std::uintptr_t(102));
+}
+
+CCZ_TEST(battle_writeback_native_batch_allows_insert_before_event_end_marker) {
+    auto capture = writeback_capture(81);
+    constexpr std::uintptr_t kMarkerHandle = 104;
+    constexpr const wchar_t* kMarkerKey =
+        L"S|scene:0|section:0|instruction:0/9|instruction:0";
+    auto& captured_children =
+        capture.snapshot.section_root.children[0].children;
+    auto& raw_children = capture.input.nodes[0].children[0].children;
+
+    CapturedEditorNode marker;
+    marker.runtime_handle = kMarkerHandle;
+    marker.instruction_id = 0;
+    marker.ordinal = 19;
+    captured_children.insert(captured_children.end() - 1, marker);
+
+    RawReplayNode raw_marker;
+    raw_marker.runtime_handle = kMarkerHandle;
+    raw_marker.logical_key = kMarkerKey;
+    raw_marker.instruction_id = 0;
+    raw_marker.command.instruction_id = 0;
+    raw_children.insert(raw_children.end() - 1, std::move(raw_marker));
+
+    ccz::editor_preview::BattleWritebackPlanBuild plan;
+    plan.ok = true;
+    ccz::editor_preview::BattleWritebackChange insert;
+    insert.kind = BattleWritebackChangeKind::InsertInstruction;
+    insert.instruction_id = 0x47;
+    insert.insert_parent_key = L"S|scene:0|section:0|instruction:0";
+    insert.insert_before_key = kMarkerKey;
+    insert.source_ordinal = -1;
+    insert.int_data.assign(1000, 0);
+    plan.changes.push_back(std::move(insert));
+
+    const auto batch = ccz::editor_preview::BuildBattleWritebackNativeBatch(
+        plan, capture, L"S|scene:0|section:0");
+    CCZ_REQUIRE(batch.ok);
+    CCZ_REQUIRE_EQ(batch.changes.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(batch.changes[0].insert_before_handle, kMarkerHandle);
+    CCZ_REQUIRE_EQ(batch.changes[0].insert_after_handle, std::uintptr_t(102));
+}
+
+CCZ_TEST(battle_writeback_native_batch_rejects_four_b_group_after_subevent_marker) {
+    auto capture = writeback_capture(79);
+    constexpr std::uintptr_t kMarkerHandle = 104;
+    constexpr const wchar_t* kMarkerKey =
+        L"S|scene:0|section:0|instruction:0/9|instruction:1";
+    auto& captured_children =
+        capture.snapshot.section_root.children[0].children;
+    auto& raw_children = capture.input.nodes[0].children[0].children;
+
+    CapturedEditorNode marker;
+    marker.runtime_handle = kMarkerHandle;
+    marker.instruction_id = 1;
+    marker.ordinal = 19;
+    captured_children.insert(captured_children.end() - 1, marker);
+
+    RawReplayNode raw_marker;
+    raw_marker.runtime_handle = kMarkerHandle;
+    raw_marker.logical_key = kMarkerKey;
+    raw_marker.instruction_id = 1;
+    raw_marker.command.instruction_id = 1;
+    raw_children.insert(raw_children.end() - 1, std::move(raw_marker));
+
+    ccz::editor_preview::BattleWritebackPlanBuild plan;
+    plan.ok = true;
+    ccz::editor_preview::BattleWritebackChange insert;
+    insert.kind = BattleWritebackChangeKind::InsertFourBGroup;
+    insert.instruction_id = 0x4b;
+    insert.insert_parent_key = L"S|scene:0|section:0|instruction:0";
+    insert.insert_before_key =
+        L"S|scene:0|section:0|instruction:0/1|instruction:0";
+    insert.source_ordinal = -1;
+    insert.group_label = L"我军出场";
+    insert.group_records = {std::vector<std::int32_t>(20, 1)};
+    plan.changes.push_back(std::move(insert));
+
+    const auto batch = ccz::editor_preview::BuildBattleWritebackNativeBatch(
+        plan, capture, L"S|scene:0|section:0");
+    CCZ_REQUIRE(!batch.ok);
+    CCZ_REQUIRE(batch.diagnostic.find(L"子事件设定") != std::wstring::npos);
+    CCZ_REQUIRE(batch.changes.empty());
+}
+
 BattleWritebackSourceInstruction fixed_source(
     std::uint16_t instruction, const wchar_t* key, int ordinal) {
     BattleWritebackSourceInstruction source;
@@ -1131,6 +1349,14 @@ public:
         const auto found = nodes.find(handle);
         if (found == nodes.end()) return;
         found->second.instruction_id = instruction;
+        RefreshRevision();
+    }
+
+    void SetLongText(std::uintptr_t handle, std::wstring text) {
+        const auto found = nodes.find(handle);
+        if (found == nodes.end()) return;
+        found->second.long_text = std::move(text);
+        found->second.has_long_text = !found->second.long_text.empty();
         RefreshRevision();
     }
 
@@ -1649,6 +1875,181 @@ CCZ_TEST(battle_writeback_native_transaction_inserts_under_nested_condition_even
     CCZ_REQUIRE_EQ(host.Child(20, 0), std::uintptr_t(21));
 }
 
+CCZ_TEST(battle_writeback_native_transaction_rejects_insert_after_subevent_marker) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(12, 1);
+    const auto original_children = host.Children(10);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE(diagnostic.find(L"子事件设定") != std::wstring::npos);
+    CCZ_REQUIRE_EQ(host.Children(10), original_children);
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_rejects_insert_after_event_end_marker) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(12, 0);
+    const auto original_children = host.Children(10);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE(diagnostic.find(L"事件结束") != std::wstring::npos);
+    CCZ_REQUIRE_EQ(host.Children(10), original_children);
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_rejects_deleted_anchor_that_moves_insert_after_event_end) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(11, 0);
+    const auto original_children = host.Children(10);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange deletion;
+    deletion.kind = BattleWritebackChangeKind::DeleteInstruction;
+    deletion.instruction_id = 0x4b;
+    deletion.item_handle = 12;
+    deletion.source_ordinal = 11;
+    deletion.original_int_data = host.Data(12);
+    deletion.int_data = deletion.original_int_data;
+    batch.changes.push_back(std::move(deletion));
+
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE(diagnostic.find(L"事件结束") != std::wstring::npos);
+    CCZ_REQUIRE_EQ(host.Children(10), original_children);
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_allows_insert_before_subevent_marker) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(12, 1);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 11;
+    insertion.insert_before_handle = 12;
+    insertion.insert_terminal_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10).size(), std::size_t(4));
+    CCZ_REQUIRE_EQ(host.Child(10, 1), std::uintptr_t(100));
+    CCZ_REQUIRE_EQ(host.Child(10, 2), std::uintptr_t(12));
+}
+
+CCZ_TEST(battle_writeback_native_transaction_allows_insert_before_event_end_marker) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.insert_terminal_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10).size(), std::size_t(4));
+    CCZ_REQUIRE_EQ(host.Child(10, 2), std::uintptr_t(100));
+    CCZ_REQUIRE_EQ(host.Child(10, 3), std::uintptr_t(13));
+}
+
+CCZ_TEST(battle_writeback_native_transaction_rejects_four_b_group_after_subevent_marker) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(12, 1);
+    const auto original_children = host.Children(10);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertFourBGroup;
+    insertion.instruction_id = 0x4b;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.group_label = L"我军出场";
+    insertion.group_records = {std::vector<std::int32_t>(20, 1)};
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE(diagnostic.find(L"子事件设定") != std::wstring::npos);
+    CCZ_REQUIRE_EQ(host.Children(10), original_children);
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
 CCZ_TEST(battle_writeback_native_transaction_inserts_all_three_new_unit_types) {
     using namespace ccz::editor_preview;
     FakeBattleWritebackNativeHost host;
@@ -1703,7 +2104,7 @@ CCZ_TEST(battle_writeback_native_transaction_inserts_and_undoes_map_operations_i
     const std::vector<std::pair<std::uint16_t,
         std::vector<std::int32_t>>> operations = {
         {0x32, {0, 47, 0, 8, 12, 2}},
-        {0x55, {0, 103, 0, 8, 12, -1}},
+        {0x55, {0, 103, 0, 8, 12, 2}},
         {0x58, {2, 0, 26, 8, 12, 0, 0}},
     };
     for (const auto& operation : operations) {
@@ -1737,10 +2138,11 @@ CCZ_TEST(battle_writeback_native_transaction_inserts_and_undoes_map_operations_i
     CCZ_REQUIRE(!transaction.undo_available());
 }
 
-CCZ_TEST(battle_writeback_native_transaction_rejects_map_operation_in_internal_info_group) {
+CCZ_TEST(battle_writeback_native_transaction_rejects_map_operation_in_own_deployment_group) {
     using namespace ccz::editor_preview;
     FakeBattleWritebackNativeHost host;
     host.SetInstructionId(10, 2);
+    host.SetLongText(10, L"我军出场");
     const auto original_children = host.Children(10);
     const auto original_data = host.Data(11);
 
@@ -1761,10 +2163,67 @@ CCZ_TEST(battle_writeback_native_transaction_rejects_map_operation_in_internal_i
     BattleWritebackNativeTransaction transaction;
     std::wstring diagnostic;
     CCZ_REQUIRE(!transaction.Apply(batch, host, diagnostic));
-    CCZ_REQUIRE(diagnostic.find(L"内部信息分组") != std::wstring::npos);
+    CCZ_REQUIRE(diagnostic.find(L"我军出场") != std::wstring::npos);
     CCZ_REQUIRE_EQ(host.Children(10), original_children);
     CCZ_REQUIRE_EQ(host.Data(11), original_data);
     CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_writeback_native_transaction_allows_map_operation_in_other_subevent) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(10, 5);
+    const auto original_children = host.Children(10);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10).size(), original_children.size() + 1);
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10), original_children);
+}
+
+CCZ_TEST(battle_writeback_native_transaction_allows_map_operation_in_non_deployment_info_group) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    host.SetInstructionId(10, 2);
+    host.SetLongText(10, L"事件子分组");
+    const auto original_children = host.Children(10);
+
+    BattleWritebackNativeBatch batch;
+    batch.ok = true;
+    BattleWritebackNativeChange insertion;
+    insertion.kind = BattleWritebackChangeKind::InsertInstruction;
+    insertion.instruction_id = 0x58;
+    insertion.parent_handle = 10;
+    insertion.insert_after_handle = 12;
+    insertion.insert_before_handle = 13;
+    insertion.source_ordinal = -1;
+    insertion.int_data = {0, 0, 26, 8, 12, 0, 0};
+    insertion.map_width = 19;
+    insertion.map_height = 18;
+    batch.changes.push_back(std::move(insertion));
+
+    BattleWritebackNativeTransaction transaction;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch, host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10).size(), original_children.size() + 1);
+    CCZ_REQUIRE(transaction.Undo(host, diagnostic));
+    CCZ_REQUIRE_EQ(host.Children(10), original_children);
 }
 
 CCZ_TEST(battle_writeback_native_transaction_inserts_and_undoes_atomic_4b_group) {

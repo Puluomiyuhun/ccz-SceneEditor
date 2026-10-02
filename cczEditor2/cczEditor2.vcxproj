@@ -240,7 +240,8 @@
     <ClInclude Include="PreviewIntegration\BattleConditionTreeAdapter.h" />
     <ClInclude Include="PreviewIntegration\EditorPreviewCatalog.h" />
     <ClInclude Include="PreviewIntegration\BattlePreviewPredicates.h" />
-    <ClInclude Include="PreviewIntegration\BattleWritebackAdapter.h" />
+      <ClInclude Include="PreviewIntegration\BattleWritebackAdapter.h" />
+      <ClInclude Include="PreviewIntegration\PreviewWritebackGate.h" />
     <ClInclude Include="PreviewIntegration\BattleEditorOps.h" />
     <ClInclude Include="PreviewIntegration\BattleCharacterCatalog.h" />
     <ClInclude Include="PreviewIntegration\BattleMovementTerrainResourceCache.h" />

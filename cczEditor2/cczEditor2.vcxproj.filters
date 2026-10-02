@@ -159,6 +159,9 @@
     <ClInclude Include="PreviewIntegration\BattleWritebackAdapter.h">
       <Filter>PreviewIntegration</Filter>
     </ClInclude>
+    <ClInclude Include="PreviewIntegration\PreviewWritebackGate.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
     <ClInclude Include="PreviewIntegration\BattleEditorOps.h">
       <Filter>PreviewIntegration</Filter>
     </ClInclude>

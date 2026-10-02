@@ -3,6 +3,7 @@
 #include <ccz/preview/battle_preview.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -12,7 +13,6 @@ enum class BattleMapToolMode {
     None,
     MovePickUnit,
     MovePickTarget,
-    RevivePickCharacter,
     RevivePickTarget,
     ObstaclePlace,
 };
@@ -24,6 +24,17 @@ struct BattleMapOperationInstruction {
     // coordinates again instead of trusting only the UI's first validation.
     int map_width{};
     int map_height{};
+};
+
+struct BattleRoleOperationSource {
+    int data_id{-1};
+    ccz::preview::BattleCoord origin;
+    int direction{-1};
+};
+
+enum class BattleRoleOperationKind {
+    MoveTo,
+    ReviveTo,
 };
 
 struct BattleObstacleDraft {
@@ -39,6 +50,17 @@ bool BuildBattleMoveToInstruction(int data_id,
 bool BuildBattleReviveToInstruction(int data_id,
     const ccz::preview::BattleCoord& coordinate, int map_width,
     int map_height, BattleMapOperationInstruction& output,
+    std::wstring& diagnostic,
+    std::optional<int> direction_override = std::nullopt);
+
+bool BuildBattleRoleOperationBatch(BattleRoleOperationKind kind,
+    const std::vector<BattleRoleOperationSource>& sources,
+    std::size_t anchor_index,
+    const ccz::preview::BattleCoord& anchor_target,
+    int map_width, int map_height,
+    std::optional<int> direction_override,
+    std::vector<BattleMapOperationInstruction>& instructions,
+    std::vector<ccz::preview::BattleCoord>& target_positions,
     std::wstring& diagnostic);
 
 bool BuildBattleObstacleInstruction(int type,
@@ -54,6 +76,7 @@ class BattleObstacleDraftQueue {
 public:
     bool Add(int type, const ccz::preview::BattleCoord& coordinate,
         int map_width, int map_height);
+    bool RemoveAt(const ccz::preview::BattleCoord& coordinate);
     const std::vector<BattleObstacleDraft>& items() const noexcept {
         return items_;
     }

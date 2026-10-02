@@ -20,7 +20,8 @@ using ccz::preview::BattleCoord;
 using ccz::preview::RawReplayNode;
 
 BattlePreviewCapture selected_capture(int selected_id = 14,
-                                      bool section_parent = false) {
+                                      bool section_parent = false,
+                                      std::uint16_t selected_parent_id = 0) {
     BattlePreviewCapture capture;
     capture.ok = true;
     capture.mode.mode = ccz::preview::PreviewMode::Battle;
@@ -78,7 +79,7 @@ BattlePreviewCapture selected_capture(int selected_id = 14,
 
     CapturedEditorNode event;
     event.runtime_handle = 30;
-    event.instruction_id = 0;
+    event.instruction_id = selected_parent_id;
     event.children = {selected, terminal};
     CapturedEditorNode section;
     section.runtime_handle = 20;
@@ -98,7 +99,7 @@ BattlePreviewCapture selected_capture(int selected_id = 14,
     RawReplayNode raw_event;
     raw_event.runtime_handle = 30;
     raw_event.logical_key = L"S|scene:0|section:0|instruction:0";
-    raw_event.instruction_id = 0;
+    raw_event.instruction_id = selected_parent_id;
     raw_event.children = {raw_selected, raw_terminal};
     RawReplayNode raw_section;
     raw_section.runtime_handle = 20;
@@ -154,6 +155,90 @@ CCZ_TEST(battle_map_move_instruction_accepts_default_direction_sentinel) {
         47, BattleCoord{8, 12}, 4, 19, 18, instruction, diagnostic));
 }
 
+CCZ_TEST(battle_map_role_operation_batch_preserves_group_offsets_and_is_atomic) {
+    using ccz::editor_preview::BattleRoleOperationKind;
+    using ccz::editor_preview::BattleRoleOperationSource;
+    std::wstring diagnostic;
+    std::vector<BattleMapOperationInstruction> instructions;
+    std::vector<BattleCoord> targets;
+    const std::vector<BattleRoleOperationSource> single_source = {
+        {47, BattleCoord{8, 12}, 3},
+    };
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleRoleOperationBatch(
+        BattleRoleOperationKind::MoveTo, single_source, 0, BattleCoord{9, 11},
+        20, 20, 1, instructions, targets, diagnostic));
+    CCZ_REQUIRE_EQ(instructions.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(instructions[0].int_data,
+        (std::vector<std::int32_t>{0, 47, 0, 9, 11, 1}));
+    CCZ_REQUIRE_EQ(single_source[0].direction, 3);
+
+    const std::vector<BattleRoleOperationSource> sources = {
+        {10, BattleCoord{4, 5}, 0},
+        {11, BattleCoord{6, 5}, 3},
+        {12, BattleCoord{4, 7}, 1},
+    };
+
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleRoleOperationBatch(
+        BattleRoleOperationKind::MoveTo, sources, 1, BattleCoord{9, 10},
+        20, 20, std::nullopt, instructions, targets, diagnostic));
+    CCZ_REQUIRE_EQ(targets,
+        (std::vector<BattleCoord>{{7, 10}, {9, 10}, {7, 12}}));
+    CCZ_REQUIRE_EQ(instructions.size(), std::size_t(3));
+    CCZ_REQUIRE_EQ(instructions[0].instruction_id, std::uint16_t(0x32));
+    CCZ_REQUIRE_EQ(instructions[0].int_data,
+        (std::vector<std::int32_t>{0, 10, 0, 7, 10, 0}));
+    CCZ_REQUIRE_EQ(instructions[1].int_data,
+        (std::vector<std::int32_t>{0, 11, 0, 9, 10, 3}));
+    CCZ_REQUIRE_EQ(instructions[2].int_data,
+        (std::vector<std::int32_t>{0, 12, 0, 7, 12, 1}));
+
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleRoleOperationBatch(
+        BattleRoleOperationKind::MoveTo, sources, 1, BattleCoord{9, 10},
+        20, 20, 2, instructions, targets, diagnostic));
+    for (const auto& instruction : instructions)
+        CCZ_REQUIRE_EQ(instruction.int_data[5], 2);
+    CCZ_REQUIRE_EQ(sources[0].direction, 0);
+    CCZ_REQUIRE_EQ(sources[1].direction, 3);
+    CCZ_REQUIRE_EQ(sources[2].direction, 1);
+
+    // Occupied target/source cells remain valid; game-side avoidance is authoritative.
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleRoleOperationBatch(
+        BattleRoleOperationKind::ReviveTo, sources, 1, BattleCoord{4, 5},
+        20, 20, std::nullopt, instructions, targets, diagnostic));
+    CCZ_REQUIRE_EQ(targets,
+        (std::vector<BattleCoord>{{2, 5}, {4, 5}, {2, 7}}));
+    CCZ_REQUIRE_EQ(instructions.size(), std::size_t(3));
+    for (std::size_t index = 0; index < instructions.size(); ++index) {
+        CCZ_REQUIRE_EQ(instructions[index].instruction_id, std::uint16_t(0x55));
+        CCZ_REQUIRE_EQ(instructions[index].int_data[5], -1);
+    }
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleRoleOperationBatch(
+        BattleRoleOperationKind::ReviveTo, sources, 1, BattleCoord{4, 5},
+        20, 20, 2, instructions, targets, diagnostic));
+    CCZ_REQUIRE_EQ(instructions.size(), std::size_t(3));
+    for (const auto& instruction : instructions) {
+        CCZ_REQUIRE_EQ(instruction.instruction_id, std::uint16_t(0x55));
+        CCZ_REQUIRE_EQ(instruction.int_data[5], 2);
+        CCZ_REQUIRE(ccz::editor_preview::ValidateBattleMapOperationInstruction(
+            instruction, diagnostic));
+    }
+    CCZ_REQUIRE_EQ(sources[0].direction, 0);
+    CCZ_REQUIRE_EQ(sources[1].direction, 3);
+    CCZ_REQUIRE_EQ(sources[2].direction, 1);
+
+    CCZ_REQUIRE(!ccz::editor_preview::BuildBattleRoleOperationBatch(
+        BattleRoleOperationKind::ReviveTo, sources, 1, BattleCoord{4, 5},
+        20, 20, 4, instructions, targets, diagnostic));
+    CCZ_REQUIRE(instructions.empty());
+    CCZ_REQUIRE(targets.empty());
+
+    CCZ_REQUIRE(!ccz::editor_preview::BuildBattleRoleOperationBatch(
+        BattleRoleOperationKind::MoveTo, sources, 1, BattleCoord{19, 19},
+        20, 20, std::nullopt, instructions, targets, diagnostic));
+    CCZ_REQUIRE(instructions.empty());
+    CCZ_REQUIRE(targets.empty());
+}
+
 CCZ_TEST(battle_map_operation_builders_reject_invalid_ids_coordinates_and_types) {
     std::wstring diagnostic;
     BattleMapOperationInstruction instruction;
@@ -182,6 +267,23 @@ CCZ_TEST(battle_obstacle_drafts_keep_click_order_and_allow_occupied_targets) {
     CCZ_REQUIRE(drafts.empty());
 }
 
+CCZ_TEST(battle_obstacle_draft_remove_at_removes_only_latest_matching_item) {
+    BattleObstacleDraftQueue drafts;
+    CCZ_REQUIRE(drafts.Add(2, BattleCoord{3, 4}, 19, 18));
+    CCZ_REQUIRE(drafts.Add(0, BattleCoord{3, 4}, 19, 18));
+    CCZ_REQUIRE(drafts.Add(1, BattleCoord{8, 9}, 19, 18));
+
+    CCZ_REQUIRE(drafts.RemoveAt(BattleCoord{3, 4}));
+    CCZ_REQUIRE_EQ(drafts.items().size(), std::size_t(2));
+    CCZ_REQUIRE_EQ(drafts.items()[0].type, 2);
+    CCZ_REQUIRE_EQ(drafts.items()[1].type, 1);
+    CCZ_REQUIRE(drafts.RemoveAt(BattleCoord{3, 4}));
+    CCZ_REQUIRE_EQ(drafts.items().size(), std::size_t(1));
+    CCZ_REQUIRE(!drafts.RemoveAt(BattleCoord{3, 4}));
+    CCZ_REQUIRE(drafts.RemoveAt(BattleCoord{8, 9}));
+    CCZ_REQUIRE(drafts.empty());
+}
+
 CCZ_TEST(battle_map_writeback_batch_uses_selected_same_level_anchor_in_section) {
     auto capture = selected_capture();
     std::wstring diagnostic;
@@ -204,6 +306,25 @@ CCZ_TEST(battle_map_writeback_batch_uses_selected_same_level_anchor_in_section) 
     }
     CCZ_REQUIRE_EQ(batch.changes[0].instruction_id, std::uint16_t(0x32));
     CCZ_REQUIRE_EQ(batch.changes[1].instruction_id, std::uint16_t(0x55));
+}
+
+CCZ_TEST(battle_map_writeback_batch_accepts_selected_instruction_inside_condition_subevent) {
+    auto capture = selected_capture(14, false, 0x05);
+    std::wstring diagnostic;
+    BattleMapOperationInstruction obstacle;
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleObstacleInstruction(
+        0, BattleCoord{2, 3}, 19, 18, obstacle, diagnostic));
+
+    const auto batch =
+        ccz::editor_preview::BuildBattleWritebackInsertBatchAfterSelection(
+            capture, {obstacle});
+    CCZ_REQUIRE(batch.ok);
+    CCZ_REQUIRE_EQ(batch.changes.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(batch.changes.front().parent_handle, std::uintptr_t(30));
+    CCZ_REQUIRE_EQ(batch.changes.front().insert_after_handle,
+                   std::uintptr_t(40));
+    CCZ_REQUIRE_EQ(batch.changes.front().insert_before_handle,
+                   std::uintptr_t(50));
 }
 
 CCZ_TEST(battle_map_writeback_batch_rejects_structural_or_invalid_selected_anchor) {
@@ -242,6 +363,27 @@ CCZ_TEST(battle_map_writeback_rejects_anchor_inside_internal_info_group) {
         ccz::editor_preview::BuildBattleWritebackInsertBatchAfterSelection(
             capture, {obstacle});
     CCZ_REQUIRE(!batch.ok);
+}
+
+CCZ_TEST(battle_map_writeback_allows_anchor_inside_other_internal_info_subevent) {
+    auto capture = selected_capture();
+    auto& event = capture.snapshot.document_roots[0].children[0];
+    CapturedEditorNode info_group;
+    info_group.runtime_handle = 70;
+    info_group.instruction_id = 2;
+    info_group.long_text = L"事件子分组";
+    info_group.children = event.children;
+    event.children = {info_group};
+
+    std::wstring diagnostic;
+    BattleMapOperationInstruction obstacle;
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleObstacleInstruction(
+        0, BattleCoord{2, 3}, 19, 18, obstacle, diagnostic));
+    const auto batch =
+        ccz::editor_preview::BuildBattleWritebackInsertBatchAfterSelection(
+            capture, {obstacle});
+    CCZ_REQUIRE(batch.ok);
+    CCZ_REQUIRE_EQ(batch.changes.front().parent_handle, std::uintptr_t(70));
 }
 
 CCZ_TEST(battle_map_writeback_batch_accepts_selected_section_entry_before_event) {

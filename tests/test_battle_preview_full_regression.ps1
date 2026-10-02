@@ -169,10 +169,12 @@ if (-not $SkipBuild) {
     }
 }
 
-$runners = @(
-    (Join-Path $editorRoot 'cczPreviewCoreTests\Debug\cczPreviewCoreTests.exe'),
-    (Join-Path $editorRoot 'cczPreviewCoreTests\Release\cczPreviewCoreTests.exe')
-)
+$runners = foreach ($configuration in @('Debug', 'Release')) {
+    $projectRunner = Join-Path $editorRoot "cczPreviewCoreTests\$configuration\cczPreviewCoreTests.exe"
+    $solutionRunner = Join-Path $editorRoot "$configuration\cczPreviewCoreTests.exe"
+    if (Test-Path -LiteralPath $projectRunner) { $projectRunner }
+    else { $solutionRunner }
+}
 $expectedBattleEditorTests = @(
     'battle_editor_character_list_pages_and_search_without_cross_scope',
     'battle_editor_character_search_clears_place_context_and_rejects_stale_place',

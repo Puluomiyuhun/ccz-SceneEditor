@@ -10,6 +10,7 @@ $header = Join-Path $root 'cczEditor2\PreviewIntegration\BattleWritebackAdapter.
 $qaGate = Join-Path $root 'cczEditor2\PreviewIntegration\BattleWritebackQaGate.h'
 $ops = Join-Path $root 'cczEditor2\PreviewIntegration\BattleEditorOps.cpp'
 $view = Join-Path $root 'cczEditor2\cczEditor2View.cpp'
+$rPage = Join-Path $root 'cczEditor2\ScenePreviewWnd.cpp'
 $page = Join-Path $root 'cczEditor2\BattlePreviewPage.cpp'
 $pageHeader = Join-Path $root 'cczEditor2\BattlePreviewPage.h'
 $document = Join-Path $root 'cczEditor2\cczEditor2Doc.cpp'
@@ -24,7 +25,7 @@ function Assert-Text($path, $pattern, $label) {
     Write-Output "[PASS] $label"
 }
 
-foreach ($path in @($adapter, $header, $qaGate, $ops, $test, $qaBoundary, $document,
+foreach ($path in @($adapter, $header, $qaGate, $ops, $test, $qaBoundary, $document, $rPage,
         $conditionTreeIntegration, $fixture)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "BATTLE_WRITEBACK_FAIL: missing $path" }
 }
@@ -54,12 +55,22 @@ Assert-Text $page 'RevealNativeWritebackInstruction' 'successful native writebac
 Assert-Text $page 'RevealNativeWritebackInstruction\(\s*view,\s*batch,\s*host\.first_inserted_handle\(\)\)' 'native transaction passes the committed insert handle to the reveal step'
 Assert-Text $page 'tree\.EnsureVisible\(item\)' 'revealed instruction expands its collapsed parent events'
 Assert-Text $page 'tree\.SelectItem\(item\)' 'revealed instruction remains selected for visual inspection'
+Assert-Text $page 'advance_document_ordinal\)[\s\S]{0,500}IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting' 'new 0x4B groups validate the actual TreeView predecessor; undo restoration can restore the original position'
 Assert-Text $page 'data->int_data\.swap\(int_data\)' 'writeback mutates the native ItemData vector used by the editor tree'
 Assert-Text $page 'bool TreeItemExists\(std::uintptr_t handle\) const' 'document root selection is validated as a TreeView item, not as a script node'
 Assert-Text $page 'if \(selected != 0 && !TreeItemExists\(selected\)\)' 'selection restore accepts valid tree items whose lParam is zero'
 Assert-Text $document 'data->int_data\[k - long_char_sum\]' 'EEX save serializes native fields from the same TreeView ItemData vector'
 Assert-Text $document 'f\.Write\(int2ch\(data->int_data\[k - long_char_sum\], 4\), 4\)' 'EEX save emits the 0x4B coordinate fields as native four-byte values'
 Assert-Text $view 'InsertBattleInstructionAt' 'native battle insertion API is separate from generic insertion'
+Assert-Text $view 'IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting' 'R and S native preview insertion block gaps after event-end and subevent markers'
+Assert-Text $view 'IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting\(\s*afterData->id\s*\)' 'R preview checks the actual instruction immediately before its insertion point'
+Assert-Text $view 'IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting\(\s*predecessorData->id\s*\)' 'S native tree insertion repeats the structural-marker guard'
+$rPageText = Get-Content -LiteralPath $rPage -Raw -Encoding UTF8
+Assert-Text $rPage 'InsertInstructionAt\(' 'R preview routes instruction additions through the guarded shared insertion API'
+if ($rPageText -match 'CreateItem\(|CreateZsj\(|InsertBattleInstructionAt\(') {
+    throw 'BATTLE_WRITEBACK_FAIL: R preview contains an insertion route that bypasses InsertInstructionAt'
+}
+Write-Output '[PASS] R preview has no direct instruction insertion bypass'
 Assert-Text $view 'intData.size\(\) != expectedSize' 'native battle insertion rejects truncated field vectors'
 Assert-Text $view 'case 0x32:\s*case 0x55:\s*expectedSize = 6U; break;' 'native battle insertion accepts the six-field move and revive commands'
 Assert-Text $view 'case 0x58:\s*expectedSize = 7U; break;' 'native battle insertion accepts the seven-field obstacle command'
@@ -82,6 +93,14 @@ Assert-Text $page 'ValidateBattleWritebackNextOrdinal' 'native insert counter is
 Assert-Text $page 'ValidateBattleWritebackNextOrdinal\(\s*capture\.snapshot\s*,' 'native insert ordinal validation reads the retained preflight snapshot'
 Assert-Text $adapter 'last_inserted_by_anchor' 'native insert predecessor chains are indexed instead of rescanned for every unit'
 $adapterText = Get-Content -LiteralPath $adapter -Raw -Encoding UTF8
+Assert-Text $adapter 'IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting\(\s*previous\.instruction_id\s*\)' 'S batch preflight rejects insertion after event-end and subevent markers'
+Assert-Text $adapter 'IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting\(\s*after\.instruction_id\s*\)' 'S native transaction rechecks both structural-marker boundaries'
+Assert-Text $adapter 'surviving_after != 0\)[\s\S]{0,550}IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting\(\s*surviving_predecessor\.instruction_id\s*\)' 'S native transaction also checks the normalized insertion gap after scheduled deletions'
+Assert-Text (Join-Path $root 'cczEditor2\PreviewIntegration\PreviewWritebackGate.h') 'previous_instruction_id == 0 \|\| previous_instruction_id == 1' 'R and S preview writeback share the ID 0 and ID 1 insertion predicate'
+Assert-Text (Join-Path $root 'cczEditor2\Instructions.json') '"id": 0, "name": "事件结束"[\s\S]{0,140}"can_nest": false, "top_level": true' 'instruction metadata classifies event end as a top-level structural marker'
+Assert-Text (Join-Path $root 'cczEditor2\Instructions.json') '"id": 1, "name": "子事件设定"[\s\S]{0,140}"can_nest": true, "top_level": false' 'instruction metadata classifies subevent setting as a nesting marker'
+Assert-Text $view 'combo1\.GetCurSel\(\) < 2' 'the editor dialog prevents manually creating structural instruction IDs 0 and 1'
+Assert-Text $view 'GetItemData\(last\)\)->id == 1' 'the original manual insertion gap guard explicitly covers ID 1'
 if ($adapterText -match 'count_if\(\s*prepared\.begin\(') {
     throw 'BATTLE_WRITEBACK_FAIL: native insert ordinals must be assigned in one linear pass'
 }
@@ -228,9 +247,23 @@ $expectedTests = @(
     'battle_writeback_next_ordinal_rejects_missing_existing_ordinal',
     'battle_writeback_native_transaction_rolls_back_when_a_late_insert_fails',
     'battle_writeback_native_transaction_inserts_under_nested_condition_event',
+    'battle_writeback_native_batch_rejects_insert_after_subevent_marker',
+    'battle_writeback_native_batch_rejects_insert_after_event_end_marker',
+    'battle_writeback_native_batch_allows_insert_before_subevent_marker',
+    'battle_writeback_native_batch_allows_insert_before_event_end_marker',
+    'battle_writeback_native_batch_rejects_four_b_group_after_subevent_marker',
+    'battle_writeback_native_transaction_rejects_insert_after_subevent_marker',
+    'battle_writeback_native_transaction_rejects_insert_after_event_end_marker',
+    'battle_writeback_native_transaction_rejects_deleted_anchor_that_moves_insert_after_event_end',
+    'battle_writeback_native_transaction_allows_insert_before_subevent_marker',
+    'battle_writeback_native_transaction_allows_insert_before_event_end_marker',
+    'battle_writeback_native_transaction_rejects_four_b_group_after_subevent_marker',
+    'battle_writeback_shared_gate_rejects_insertion_after_event_end_or_subevent_setting',
     'battle_writeback_native_transaction_inserts_all_three_new_unit_types',
     'battle_writeback_native_transaction_inserts_and_undoes_map_operations_in_order',
-    'battle_writeback_native_transaction_rejects_map_operation_in_internal_info_group',
+    'battle_writeback_native_transaction_rejects_map_operation_in_own_deployment_group',
+    'battle_writeback_native_transaction_allows_map_operation_in_other_subevent',
+    'battle_writeback_native_transaction_allows_map_operation_in_non_deployment_info_group',
     'battle_writeback_native_transaction_rolls_back_after_first_insert_when_second_fails',
     'battle_writeback_native_transaction_rejects_stale_undo_without_mutating',
     'battle_writeback_native_transaction_rolls_back_a_partial_undo',
