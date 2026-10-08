@@ -9,6 +9,7 @@
 #include "PreviewIntegration/EditorPreviewAdapter.h"
 #include "PreviewIntegration/EditorPreviewCatalog.h"
 #include "PreviewIntegration/EditorTreeSnapshot.h"
+#include "PreviewIntegration/CurrentTreeItemIndex.h"
 #include "PreviewIntegration/E5ImageLoader.h"
 #include "PreviewIntegration/FreeRPreviewResolver.h"
 #include "PreviewIntegration/FreeRReplayComposer.h"
@@ -300,6 +301,7 @@ bool CRScenePreviewPage::ActivateDocument(
 	ParkActiveDocument();
 	auto cached = m_documentSessions.find(current.document_id);
 	bool preservedSameDocumentSession = false;
+	std::vector<PreviewUndoTransaction> preservedUndo;
 	if (cached != m_documentSessions.end()) {
 		const bool sameDocument =
 			cached->second.activation.document_id == current.document_id &&
@@ -397,6 +399,8 @@ bool CRScenePreviewPage::ActivateDocument(
 		// source changed.  Every captured tree handle and rendered scene value is
 		// discarded before the forced refresh.
 		if (sameDocument) {
+			if (cached->second.activation.tree_generation == current.tree_generation)
+				preservedUndo = std::move(cached->second.undo_stack);
 			m_previewSession = std::move(cached->second.preview_session);
 			preservedSameDocumentSession = true;
 		}
@@ -406,6 +410,8 @@ bool CRScenePreviewPage::ActivateDocument(
 	}
 
 	ClearNativePreviewState();
+	m_previewUndoStack = std::move(preservedUndo);
+	UpdateUndoButton();
 	if (!preservedSameDocumentSession) {
 		// The cache entry may have been erased above; this assignment also
 		// guarantees that a different open document cannot inherit R options.
@@ -543,7 +549,7 @@ void CRScenePreviewPage::InvalidateDocumentPreview(
 	m_hasActiveBaseline = false;
 }
 
-void CRScenePreviewPage::ClearNativePreviewState()
+void CRScenePreviewPage::ClearNativePreviewState(bool clearUndo)
 {
 	StopDynamicPlayback(false);
 	if (m_bPortraitPlaceMode || m_bPortraitMoveMode)
@@ -554,7 +560,7 @@ void CRScenePreviewPage::ClearNativePreviewState()
 	m_movePortraitPersonID = -1;
 	m_portraitPlaceCursorPos = { -1, -1 };
 	m_portraitMoveCursorPos = { -1, -1 };
-	ClearPreviewUndo();
+	if (clearUndo) ClearPreviewUndo();
 	// Clearing the typed model is part of the native-state reset.  The pane
 	// deletes TreeView items before releasing bindings and selection state.
 	if (m_conditionTreePane.GetSafeHwnd() != nullptr) {
@@ -568,7 +574,7 @@ void CRScenePreviewPage::ClearNativePreviewState()
 	m_activationButtonVisible = false;
 	m_variablePaneVisible = false;
 	m_variableButtonVisible = false;
-	m_undoButtonVisible = false;
+	m_undoButtonVisible = true;
 	m_playbackVisible = false;
 	m_lastPreviewInput = {};
 	m_lastEditorTreeSnapshot = {};
@@ -608,8 +614,8 @@ void CRScenePreviewPage::ClearNativePreviewState()
 		m_variableButton.EnableWindow(TRUE);
 	}
 	if (m_undoButton.GetSafeHwnd() != nullptr) {
-		m_undoButton.ShowWindow(SW_HIDE);
-		m_undoButton.EnableWindow(TRUE);
+		m_undoButton.ShowWindow(SW_SHOW);
+		m_undoButton.EnableWindow(!m_previewUndoStack.empty());
 	}
 	CWnd* playbackControls[] = {
 		&m_playbackStartTargetButton, &m_playbackTargetEndButton,
@@ -915,9 +921,11 @@ bool CRScenePreviewPage::ApplyFreeRPrefixOnly(CTreeCtrl& tree)
 	// Free-R snapshot when a document refresh races with playback start.
 	std::vector<ResolvedNativeReplayItem> resolved;
 	resolved.reserve(inherited.items.size());
+	const ccz::editor_preview::CurrentTreeItemIndex currentItems(
+		inherited.items.empty() ? nullptr : tree.GetSafeHwnd());
 	for (const ccz::preview::NativeReplayItem& entry : inherited.items) {
-		const HTREEITEM item = FindCurrentTreeItem(
-			tree, reinterpret_cast<HTREEITEM>(entry.runtime_handle));
+		const HTREEITEM item = currentItems.Find(
+			reinterpret_cast<HTREEITEM>(entry.runtime_handle));
 		if (item == nullptr) {
 			AppendDiagnostic(_T("自由R前置场景节点已失效"));
 			return false;
@@ -970,9 +978,11 @@ NativePlanApplyResult CRScenePreviewPage::ApplyNativeReplayPlan(
 	// entries before it cannot leave a half-cleared or half-replayed scene.
 	std::vector<ResolvedNativeReplayItem> resolved;
 	resolved.reserve(effectivePlan.items.size());
+	const ccz::editor_preview::CurrentTreeItemIndex currentItems(
+		effectivePlan.items.empty() ? nullptr : tree.GetSafeHwnd());
 	for (const ccz::preview::NativeReplayItem& entry : effectivePlan.items) {
-		const HTREEITEM item = FindCurrentTreeItem(
-			tree, reinterpret_cast<HTREEITEM>(entry.runtime_handle));
+		const HTREEITEM item = currentItems.Find(
+			reinterpret_cast<HTREEITEM>(entry.runtime_handle));
 		if (item == nullptr) {
 			AppendNativePlanDiagnostic(result.diagnostic,
 				L"预览节点已刷新，运行时句柄不属于当前 TreeView");
@@ -1253,6 +1263,9 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 	const int available = (std::max)(0, height - m_canvasTop);
 	const int button_height = (std::min)(kConditionButtonHeight, available);
 	const bool show_playback = m_playbackVisible && available > 0;
+	// Undo belongs to the scene operation bar, not the empty preview frame.
+	m_undoButtonVisible = m_playbackVisible || m_conditionButtonVisible ||
+		m_activationButtonVisible || m_variableButtonVisible;
 	const bool show_actions = m_conditionButtonVisible ||
 		m_activationButtonVisible || m_variableButtonVisible ||
 		m_undoButtonVisible;
@@ -1271,7 +1284,7 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 		}
 		if (m_undoButton.GetSafeHwnd() != nullptr) {
 			m_undoButton.ShowWindow(SW_HIDE);
-			m_undoButton.EnableWindow(TRUE);
+			m_undoButton.EnableWindow(!m_previewUndoStack.empty());
 		}
 		CWnd* playbackControls[] = {
 			&m_playbackStartTargetButton, &m_playbackTargetEndButton,
@@ -1288,7 +1301,8 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 		(m_activationButtonVisible ? 1 : 0) +
 		(m_variableButtonVisible ? 1 : 0) +
 		(m_undoButtonVisible ? 1 : 0);
-	const int total_width = button_count * kConditionButtonWidth +
+	const int activation_extra = m_activationButtonVisible ? 48 : 0;
+	const int total_width = activation_extra + button_count * kConditionButtonWidth +
 		(button_count > 0 ? (button_count - 1) * kConditionButtonGap : 0);
 	// Calculate the same local dialogue panel used by OnPaint.  The buttons
 	// sit immediately above it and fall back to the bottom edge only when the
@@ -1322,20 +1336,6 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 			m_conditionButton.EnableWindow(TRUE);
 		}
 	}
-	if (m_activationButton.GetSafeHwnd() != nullptr) {
-		if (m_activationButtonVisible) {
-			m_activationButton.MoveWindow(
-				action_left + button_index * (kConditionButtonWidth +
-					kConditionButtonGap), top, kConditionButtonWidth,
-				button_height);
-			m_activationButton.ShowWindow(SW_SHOW);
-			m_activationButton.EnableWindow(TRUE);
-			++button_index;
-		} else {
-			m_activationButton.ShowWindow(SW_HIDE);
-			m_activationButton.EnableWindow(TRUE);
-		}
-	}
 	if (m_variableButton.GetSafeHwnd() != nullptr) {
 		if (m_variableButtonVisible) {
 			m_variableButton.MoveWindow(
@@ -1350,18 +1350,32 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 			m_variableButton.EnableWindow(TRUE);
 		}
 	}
+	if (m_activationButton.GetSafeHwnd() != nullptr) {
+		if (m_activationButtonVisible) {
+			m_activationButton.MoveWindow(
+				action_left + button_index * (kConditionButtonWidth +
+					kConditionButtonGap), top, kConditionButtonWidth + activation_extra,
+				button_height);
+			m_activationButton.ShowWindow(SW_SHOW);
+			m_activationButton.EnableWindow(TRUE);
+			++button_index;
+		} else {
+			m_activationButton.ShowWindow(SW_HIDE);
+			m_activationButton.EnableWindow(TRUE);
+		}
+	}
 	if (m_undoButton.GetSafeHwnd() != nullptr) {
 		if (m_undoButtonVisible) {
 			m_undoButton.MoveWindow(
-				action_left + button_index * (kConditionButtonWidth +
+				action_left + activation_extra + button_index * (kConditionButtonWidth +
 					kConditionButtonGap), top, kConditionButtonWidth,
 				button_height);
 			m_undoButton.ShowWindow(SW_SHOW);
-			m_undoButton.EnableWindow(TRUE);
+			m_undoButton.EnableWindow(!m_previewUndoStack.empty());
 			++button_index;
 		} else {
 			m_undoButton.ShowWindow(SW_HIDE);
-			m_undoButton.EnableWindow(TRUE);
+			m_undoButton.EnableWindow(!m_previewUndoStack.empty());
 		}
 	}
 }
@@ -1494,7 +1508,7 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 	if (!requestTree) {
 		m_hasActiveBaseline = false;
 		m_previewSession.ResetForDocument(documentPath);
-		ClearNativePreviewState();
+		ClearNativePreviewState(false);
 		return;
 	}
 
@@ -1519,7 +1533,9 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 		if (action == ccz::editor_preview::PreviewRefreshAction::ClearAndRepaint) {
 			m_hasActiveBaseline = false;
 			m_previewSession.ResetForDocument(documentPath);
-			ClearNativePreviewState();
+			ClearNativePreviewState(false);
+			m_pTreeCtrl = requestTree;
+			m_hCurItem = request.selectedItem;
 			return;
 		}
 		if (action == ccz::editor_preview::PreviewRefreshAction::SkipRepaint) {
@@ -1535,7 +1551,9 @@ void CRScenePreviewPage::ExecutePreviewRefresh(
 		m_activeActivation = request.activation;
 		m_activeDocumentId = request.activation.document_id;
 		m_previewSession.ResetForDocument(documentPath);
-		ClearNativePreviewState();
+		ClearNativePreviewState(false);
+		m_pTreeCtrl = requestTree;
+		m_hCurItem = request.selectedItem;
 		return;
 	}
 
@@ -1573,6 +1591,10 @@ void CRScenePreviewPage::RequestPreviewRefresh(
 	}
 	const auto activation = MakeRActivationSnapshot(
 		document, tree, selected_item);
+	if (!m_previewUndoStack.empty() &&
+		m_previewUndoStack.back().treeGeneration != document.GetPreviewTreeGeneration()) {
+		ClearPreviewUndo();
+	}
 	m_pendingPreviewRequest.treeWindow = treeWindow;
 	m_pendingPreviewRequest.selectedItem = selected_item;
 	m_pendingPreviewRequest.documentPath = document.pathName ? document.pathName : L"";
@@ -1628,10 +1650,23 @@ LRESULT CRScenePreviewPage::OnVariableActionMessage(WPARAM, LPARAM)
 
 void CRScenePreviewPage::RequestConditionActionRefresh()
 {
-	if (m_pTreeCtrl != nullptr && m_pTreeCtrl->GetSafeHwnd() != nullptr &&
-		m_hCurItem != nullptr) {
-		RequestPreviewRefreshForCurrentDocument(*m_pTreeCtrl, m_hCurItem);
+	CcczEditor2View* view = GetActiveEditorView();
+	if (view == nullptr || view->GetDocument() == nullptr) return;
+
+	CTreeCtrl& tree = view->GetTreeCtrl();
+	const HWND treeWindow = tree.GetSafeHwnd();
+	const HTREEITEM selectedItem = tree.GetSelectedItem();
+	if (treeWindow == nullptr || !::IsWindow(treeWindow) ||
+		!IsLiveTreeItem(treeWindow, selectedItem)) {
+		return;
 	}
+
+	// Condition actions can be invoked after the active TreeView has changed
+	// or been rebuilt. Resolve it from the MDI document now instead of silently
+	// dropping the refresh when the page's cached tree handle is stale.
+	m_pTreeCtrl = &tree;
+	m_hCurItem = selectedItem;
+	RequestPreviewRefresh(tree, selectedItem, *view->GetDocument());
 }
 
 void CRScenePreviewPage::RequestVariableActionRefresh()
@@ -1672,6 +1707,8 @@ void CRScenePreviewPage::OnActivationButtonClicked()
 		}
 		return;
 	}
+	// Let the button dispatch return before capturing the tree and rebuilding the
+	// full preview. The deferred handler resolves the active document/tree again.
 	if (PostMessage(kConditionActionMessage, 0, 0) == FALSE) {
 		RequestConditionActionRefresh();
 	}
@@ -1716,6 +1753,7 @@ int CRScenePreviewPage::OnCreate(LPCREATESTRUCT lpCreateStruct)
 {
 	if (CWnd::OnCreate(lpCreateStruct) == -1)
 		return -1;
+	ModifyStyle(0, WS_CLIPCHILDREN);
 
 	CRect rc;
 	GetClientRect(&rc);
@@ -1739,8 +1777,9 @@ int CRScenePreviewPage::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	// these controls before the first valid frame; a later visible refresh
 	// must always start from an enabled child state.
 	m_conditionButton.EnableWindow(TRUE);
-	m_activationButton.Create(L"激活子事件",
-		WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, CRect(0, 0, 1, 1), this,
+	m_activationButton.SetActivationStyle();
+	m_activationButton.Create(L"▶ 激活子事件",
+		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, CRect(0, 0, 1, 1), this,
 		kActivationButtonId);
 	m_activationButton.SetFont(&m_listFont);
 	m_activationButton.EnableWindow(TRUE);
@@ -1749,10 +1788,17 @@ int CRScenePreviewPage::OnCreate(LPCREATESTRUCT lpCreateStruct)
 		kVariableButtonId);
 	m_variableButton.SetFont(&m_listFont);
 	m_variableButton.EnableWindow(TRUE);
-	m_undoButton.Create(L"撤回", WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+	m_undoButton.SetUndoStyle();
+	m_undoButtonVisible = true;
+	m_undoButton.Create(L"↶ 撤回", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
 		CRect(0, 0, 1, 1), this, kUndoButtonId);
-	m_undoButton.SetFont(&m_listFont);
-	m_undoButton.EnableWindow(TRUE);
+	LOGFONT undoFont{};
+	m_listFont.GetLogFont(&undoFont);
+	undoFont.lfWeight = FW_BOLD;
+	m_undoFont.CreateFontIndirect(&undoFont);
+	m_undoButton.SetFont(&m_undoFont);
+	m_activationButton.SetFont(&m_undoFont);
+	m_undoButton.EnableWindow(!m_previewUndoStack.empty());
 
 	// Dynamic preview uses icon-only controls so the bar reads like a small
 	// scene player rather than a second row of text commands.  Tooltips carry
@@ -2762,7 +2808,7 @@ void CRScenePreviewPage::RecordCoordinateUndo(
 	transaction.label = label ? label : L"调整位置";
 	transaction.coordinates = std::move(entries);
 	transaction.restoreSelection = restoreSelection;
-	transaction.treeGeneration = m_previewTreeGeneration;
+	transaction.treeGeneration = GetActiveEditorView()->GetDocument()->GetPreviewTreeGeneration();
 	m_previewUndoStack.push_back(std::move(transaction));
 	UpdateUndoButton();
 }
@@ -2776,9 +2822,15 @@ void CRScenePreviewPage::RecordInsertedUndo(
 	PreviewUndoTransaction transaction;
 	transaction.kind = PreviewUndoTransaction::Kind::Inserted;
 	transaction.label = label ? label : L"预览写回";
+	CTreeCtrl& tree = GetActiveEditorView()->GetTreeCtrl();
+	for (HTREEITEM item : items) {
+		ItemData* data = reinterpret_cast<ItemData*>(tree.GetItemData(item));
+		if (!data || tree.ItemHasChildren(item) || data->long_char_data || data->child || data->bro) return;
+		transaction.insertedSnapshots.push_back({item, tree.GetParentItem(item), data->id, data->int_data, tree.GetItemText(item)});
+	}
 	transaction.insertedItems = std::move(items);
 	transaction.restoreSelection = restoreSelection;
-	transaction.treeGeneration = m_previewTreeGeneration;
+	transaction.treeGeneration = GetActiveEditorView()->GetDocument()->GetPreviewTreeGeneration();
 	m_previewUndoStack.push_back(std::move(transaction));
 	UpdateUndoButton();
 }
@@ -2786,19 +2838,38 @@ void CRScenePreviewPage::RecordInsertedUndo(
 void CRScenePreviewPage::ClearPreviewUndo()
 {
 	m_previewUndoStack.clear();
-	m_undoButtonVisible = false;
-	if (m_undoButton.GetSafeHwnd() != nullptr) {
-		m_undoButton.ShowWindow(SW_HIDE);
-		m_undoButton.EnableWindow(TRUE);
-	}
+	UpdateUndoButton();
+}
+
+void CRScenePreviewPage::DeletePreviewCharacter(int charID) {
+ auto* view=GetActiveEditorView();if(!view||!m_pTreeCtrl)return;
+ auto& tree=*m_pTreeCtrl;const auto item=FindAppearInstruction(charID);
+ if(!item)return;
+ auto* data=reinterpret_cast<ItemData*>(tree.GetItemData(item));
+ if(!data||data->id!=0x30||tree.ItemHasChildren(item)||data->long_char_data||data->child||data->bro){AfxMessageBox(L"无法安全删除该角色的出场指令");return;}
+ PreviewUndoTransaction transaction;transaction.kind=PreviewUndoTransaction::Kind::Deleted;
+ transaction.label=L"删除角色";transaction.deletedPrevious=tree.GetPrevSiblingItem(item);
+ transaction.deletedOrd=data->ord;
+ transaction.insertedSnapshots.push_back({item,tree.GetParentItem(item),data->id,data->int_data,tree.GetItemText(item)});
+ transaction.restoreSelection=transaction.deletedPrevious?transaction.deletedPrevious:tree.GetParentItem(item);
+ transaction.treeGeneration=view->GetDocument()->GetPreviewTreeGeneration();
+ if(AfxMessageBox(L"删除该角色的出场指令？",MB_OKCANCEL|MB_ICONQUESTION)!=IDOK)return;
+ const bool suppress=view->m_suppressBattleWritebackPreview;view->m_suppressBattleWritebackPreview=true;
+ const bool removed=tree.DeleteItem(item)!=FALSE;
+ view->m_suppressBattleWritebackPreview=suppress;
+ if(!removed)return;delete data;
+ const auto selection=transaction.restoreSelection;
+ m_previewUndoStack.push_back(std::move(transaction));
+ tree.SelectItem(selection);view->cur_item=m_hCurItem=selection;
+ view->GetDocument()->MarkEditorContentChanged();view->GetDocument()->SetModifiedFlag(TRUE);
+ RemoveCharacterSelection(charID);UpdateUndoButton();RequestPreviewRefreshForCurrentDocument(tree,selection);
 }
 
 void CRScenePreviewPage::UpdateUndoButton()
 {
-	m_undoButtonVisible = !m_previewUndoStack.empty();
+	m_undoButtonVisible = true;
 	if (m_undoButton.GetSafeHwnd() != nullptr) {
-		m_undoButton.ShowWindow(m_undoButtonVisible ? SW_SHOW : SW_HIDE);
-		m_undoButton.EnableWindow(TRUE);
+		m_undoButton.EnableWindow(!m_previewUndoStack.empty());
 	}
 	if (GetSafeHwnd() != nullptr) {
 		CRect client_rect;
@@ -2820,11 +2891,31 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 	}
 
 	PreviewUndoTransaction& transaction = m_previewUndoStack.back();
-	if (transaction.treeGeneration != m_previewTreeGeneration) {
+	if (transaction.treeGeneration != pView->GetDocument()->GetPreviewTreeGeneration()) {
 		AppendDiagnostic(_T("撤回失败：预览树已刷新，请重新执行操作"));
 		return false;
 	}
 	CTreeCtrl& tree = *m_pTreeCtrl;
+	if(transaction.kind==PreviewUndoTransaction::Kind::Deleted){
+  const auto snapshot=transaction.insertedSnapshots.front();
+  if(!FindCurrentTreeItem(tree,snapshot.parent)||(transaction.deletedPrevious&&!FindCurrentTreeItem(tree,transaction.deletedPrevious))){AppendDiagnostic(L"撤回失败：删除位置已变化");return false;}
+  if(transaction.deletedPrevious && tree.GetParentItem(transaction.deletedPrevious)!=snapshot.parent)return false;
+  auto* data=new ItemData;data->id=snapshot.id;data->ord=transaction.deletedOrd;data->int_data=snapshot.values;
+  TVINSERTSTRUCT insert{};insert.hParent=snapshot.parent;insert.hInsertAfter=transaction.deletedPrevious?transaction.deletedPrevious:TVI_FIRST;
+  insert.item.mask=TVIF_TEXT|TVIF_PARAM;insert.item.pszText=const_cast<LPWSTR>(snapshot.text.GetString());insert.item.lParam=reinterpret_cast<LPARAM>(data);
+  const auto restored=tree.InsertItem(&insert);if(!restored){delete data;return false;}
+  m_previewUndoStack.pop_back();
+  for(auto& prior:m_previewUndoStack){
+   if(prior.deletedPrevious==snapshot.item)prior.deletedPrevious=restored;
+   if(prior.restoreSelection==snapshot.item)prior.restoreSelection=restored;
+   for(auto& c:prior.coordinates)if(c.item==snapshot.item)c.item=restored;
+   for(auto& i:prior.insertedItems)if(i==snapshot.item)i=restored;
+   for(auto& s:prior.insertedSnapshots)if(s.item==snapshot.item)s.item=restored;
+  }
+  tree.SelectItem(restored);pView->cur_item=m_hCurItem=restored;
+  pView->GetDocument()->MarkEditorContentChanged();pView->GetDocument()->SetModifiedFlag(TRUE);
+  UpdateUndoButton();RequestPreviewRefreshForCurrentDocument(tree,restored);return true;
+ }
 
 	// Validate the complete transaction before changing any node.  This keeps
 	// a later manual edit from being silently overwritten by an older preview
@@ -2853,15 +2944,29 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 			}
 		}
 	} else {
-		for (HTREEITEM item : transaction.insertedItems) {
-			if (FindCurrentTreeItem(tree, item) == nullptr ||
-				tree.GetItemData(item) == 0) {
-				AppendDiagnostic(_T("撤回失败：待删除的预览指令已不存在"));
+		for (const auto& snapshot : transaction.insertedSnapshots) {
+			const HTREEITEM item = FindCurrentTreeItem(tree, snapshot.item);
+			ItemData* data = item ? reinterpret_cast<ItemData*>(tree.GetItemData(item)) : nullptr;
+			if (!data || data->id != snapshot.id || data->int_data != snapshot.values ||
+				tree.GetParentItem(item) != snapshot.parent || tree.GetItemText(item) != snapshot.text ||
+				tree.ItemHasChildren(item) || data->long_char_data || data->child || data->bro) {
+				AppendDiagnostic(_T("撤回失败：新增指令已被其他编辑改变"));
 				return false;
 			}
 		}
 	}
 
+	struct UndoRefreshScope {
+		CcczEditor2View& view;
+		bool previous;
+		bool active = true;
+		explicit UndoRefreshScope(CcczEditor2View& value)
+			: view(value), previous(value.m_suppressBattleWritebackPreview) {
+			view.m_suppressBattleWritebackPreview = true;
+		}
+		void Restore() { if (!active) return; view.m_suppressBattleWritebackPreview = previous; view.m_suppressPreviewRefreshOnce = false; active = false; }
+		~UndoRefreshScope() { Restore(); }
+	} suppress(*pView);
 	const HTREEITEM restoreSelection = FindCurrentTreeItem(
 		tree, transaction.restoreSelection);
 	if (transaction.kind == PreviewUndoTransaction::Kind::Coordinate) {
@@ -2878,10 +2983,50 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 			pView->UpdateShow(entry.item);
 		}
 	} else {
-		for (auto it = transaction.insertedItems.rbegin();
-			it != transaction.insertedItems.rend(); ++it) {
-			RemoveInsertedInstruction(*it);
+		const HTREEITEM selectedBeforeUndo = tree.GetSelectedItem();
+		struct RemovedNode { std::size_t index; ItemData* data; HTREEITEM previous; HTREEITEM original; };
+		std::vector<RemovedNode> removed;
+		removed.reserve(transaction.insertedItems.size());
+		for (std::size_t index = transaction.insertedItems.size(); index > 0; --index) {
+			const HTREEITEM item = transaction.insertedItems[index - 1];
+			ItemData* data = reinterpret_cast<ItemData*>(tree.GetItemData(item));
+			const HTREEITEM previous = tree.GetPrevSiblingItem(item);
+			if (!tree.DeleteItem(item)) {
+				bool restored = true;
+				for (auto it = removed.rbegin(); it != removed.rend(); ++it) {
+					auto& snapshot = transaction.insertedSnapshots[it->index];
+					TVINSERTSTRUCT insert{};
+					insert.hParent = snapshot.parent;
+					HTREEITEM previous = it->previous;
+					for (const auto& prior : removed) {
+						if (prior.original == previous) previous = transaction.insertedItems[prior.index];
+					}
+					insert.hInsertAfter = previous ? previous : TVI_FIRST;
+					insert.item.mask = TVIF_TEXT | TVIF_PARAM;
+					insert.item.pszText = const_cast<LPWSTR>(snapshot.text.GetString());
+					insert.item.lParam = reinterpret_cast<LPARAM>(it->data);
+					const HTREEITEM replacement = tree.InsertItem(&insert);
+					if (!replacement) { restored = false; delete it->data; continue; }
+					transaction.insertedItems[it->index] = replacement;
+					snapshot.item = replacement;
+				}
+				HTREEITEM restoredSelection = selectedBeforeUndo;
+				for (const auto& node : removed) {
+					if (node.original == selectedBeforeUndo)
+						restoredSelection = transaction.insertedItems[node.index];
+				}
+				if (FindCurrentTreeItem(tree, restoredSelection)) {
+					tree.SelectItem(restoredSelection);
+					pView->cur_item = restoredSelection;
+					m_hCurItem = restoredSelection;
+				}
+				AppendDiagnostic(restored ? _T("撤回失败：已恢复原指令，撤回记录保留")
+					: _T("撤回失败：部分指令未能恢复，请检查剧本"));
+				return false;
+			}
+			removed.push_back({index - 1, data, previous, item});
 		}
+		for (const auto& node : removed) delete node.data;
 	}
 
 	m_previewUndoStack.pop_back();
@@ -2892,6 +3037,7 @@ bool CRScenePreviewPage::UndoLastPreviewOperation()
 	}
 	pView->GetDocument()->MarkEditorContentChanged();
 	pView->GetDocument()->SetModifiedFlag(TRUE);
+	suppress.Restore();
 	UpdateUndoButton();
 	const HTREEITEM refreshItem = restoreSelection != nullptr
 		? restoreSelection : m_hCurItem;
@@ -3412,9 +3558,10 @@ static const BYTE s_spritePalette[1024] = {
 
 // 将256色裸像素数据转为ARGB Bitmap，透明色=品红(0xF700FF)
 // 宽度固定48，高度由数据量推算；多余字节(头部)自动跳过
-static Gdiplus::Bitmap* CreateBitmapFromRaw8bpp(const BYTE* rawData, DWORD dataSize)
+static Gdiplus::Bitmap* CreateBitmapFromRaw8bpp(const BYTE* rawData, DWORD dataSize, int rawWidth = 48)
 {
-	const int W = 48;
+	if(rawWidth!=48 && rawWidth!=64)return nullptr;
+	const int W = rawWidth;
 	DWORD skip = dataSize % W; // 对48取余=头部多余字节
 	DWORD pixelBytes = dataSize - skip;
 	int H = (int)(pixelBytes / W);
@@ -3523,7 +3670,7 @@ static void ApplyUnitMagentaTransparency(Gdiplus::Bitmap* pBmp)
 // ========== E5 文件加载 ==========
 
 Gdiplus::Bitmap* LoadBitmapFromE5(const CString& e5FilePath, int imageIndex,
-	CString& debugInfo, bool applyTopLeftTransparency)
+	CString& debugInfo, bool applyTopLeftTransparency, int rawWidth)
 {
 	CFile file;
 	if (!file.Open(e5FilePath, CFile::modeRead | CFile::shareDenyNone)) {
@@ -3597,7 +3744,7 @@ Gdiplus::Bitmap* LoadBitmapFromE5(const CString& e5FilePath, int imageIndex,
 	}
 
 	// 非标准格式: 尝试作为256色裸像素数据(48x1280)解析
-	Gdiplus::Bitmap* pBmp = CreateBitmapFromRaw8bpp(buffer, imageSize);
+	Gdiplus::Bitmap* pBmp = CreateBitmapFromRaw8bpp(buffer, imageSize, rawWidth);
 	delete[] buffer;
 
 	if (pBmp) return pBmp;
@@ -4021,11 +4168,8 @@ void CRScenePreviewPage::UpdatePreview(CTreeCtrl& tree, HTREEITEM hSelectedItem,
 	CString newRoot = GetRootPath(newModPath);
 	CString oldRoot = GetRootPath(m_modPath);
 	if (newRoot.CompareNoCase(oldRoot) != 0) {
-		// Undo entries contain handles into the current document tree.  A Mod
-		// switch may reuse those handles, so invalidate the stack before any
-		// asset/cache refresh can publish the new document.
-		ClearPreviewUndo();
-
+		// Document activation owns the undo history. Asset-root changes must
+		// not discard a restored document's history.
 		ClearRBitmapCaches();
 	}
 
@@ -4376,10 +4520,14 @@ void CRScenePreviewPage::OnPaint()
 			renderState.mapImageIndex, displayedMapNumber);
 
 		CString info;
-		info.Format(_T("%s  地图号:%d  角色:%d  地图头像:%d"), sceneLabel,
-			displayedMapNumber,
-			(int)renderState.characters.size(),
-			(int)renderState.mapPortraits.items().size());
+		info.Format(_T("%s  地图号:%d"), sceneLabel, displayedMapNumber);
+		CString unitCount;
+		if (outerScene) {
+			unitCount.Format(_T("  地图头像:%d"), (int)renderState.mapPortraits.items().size());
+		} else if (innerScene) {
+			unitCount.Format(_T("  角色:%d"), (int)renderState.characters.size());
+		}
+		info += unitCount;
 		if (!m_debugInfo.IsEmpty()) {
 			info += _T("  | ");
 			info += m_debugInfo;
@@ -5110,8 +5258,10 @@ void CRScenePreviewPage::OnContextMenu(CWnd* pWnd, CPoint point)
 	menu.AppendMenuW(MF_POPUP, (UINT_PTR)menuAction.m_hMenu, L"设置动作");
 	menu.AppendMenuW(MF_STRING, ID_SCENE_MOVE, L"移动到...");
 	menu.AppendMenuW(MF_STRING, ID_SCENE_DISAPPEAR, L"消失");
+	menu.AppendMenuW(MF_STRING, 0xeff0, L"删除角色");
 
 	int cmd = (int)menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RETURNCMD, point.x, point.y, this);
+	if(cmd==0xeff0){DeletePreviewCharacter(m_hitCharID);return;}
 	if (cmd >= ID_SCENE_DIR_0 && cmd <= ID_SCENE_DIR_3) {
 		InsertTurnInstruction(m_hitCharID, cmd - ID_SCENE_DIR_0);
 	} else if (cmd >= ID_SCENE_ACTION_0 && cmd <= ID_SCENE_ACTION_19) {

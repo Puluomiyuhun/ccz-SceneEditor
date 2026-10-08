@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..'))
 )
 
@@ -36,7 +36,7 @@ foreach ($marker in @(
         'CommitMapPortraitPosition',
         'RecordInsertedUndo(',
         'std::move(insertedItems)',
-        'transaction.insertedItems.rbegin()',
+        'transaction.insertedItems.size(); index > 0',
         'PositionSourceMatchesInstruction')) {
     if (-not $source.Contains($marker)) {
         throw "PREVIEW_WRITEBACK_UNDO_FAIL: missing transactional marker $marker"
@@ -67,12 +67,15 @@ if (-not $source.Contains('InsertTurnInstruction(') -or
 # Stale tree handles or externally changed coordinates must reject the undo;
 # silently overwriting unrelated edits is not acceptable.
 foreach ($marker in @(
-        'treeGeneration != m_previewTreeGeneration',
+        'treeGeneration != pView->GetDocument()->GetPreviewTreeGeneration()',
         'FindCurrentTreeItem(tree, entry.item)',
-        'FindCurrentTreeItem(tree, item)')) {
+        'FindCurrentTreeItem(tree, snapshot.item)')) {
     if (-not $source.Contains($marker)) {
         throw "PREVIEW_WRITEBACK_UNDO_FAIL: stale-state guard missing $marker"
     }
 }
 
-'PREVIEW_WRITEBACK_UNDO_PASS'
+foreach ($marker in @('insertedSnapshots', 'UndoRefreshScope', 'removed.reserve', 'preservedUndo = std::move', 'ClearNativePreviewState(false)', 'm_undoButtonVisible = true', 'BS_OWNERDRAW')) {
+    if (-not $source.Contains($marker)) { throw "PREVIEW_WRITEBACK_UNDO_FAIL: continuous undo guard missing $marker" }
+}
+'PREVIEW_WRITEBACK_UNDO_PASS' 

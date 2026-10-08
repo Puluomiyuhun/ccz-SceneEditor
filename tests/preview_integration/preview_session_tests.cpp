@@ -36,6 +36,7 @@ InstructionCatalog fixture_catalog() {
     InstructionCatalog catalog;
     catalog.valid = true;
     catalog.names.emplace(0x00, L"事件结束");
+    catalog.names.emplace(0x01, L"子事件设定");
     catalog.names.emplace(0x02, L"内部信息");
     catalog.names.emplace(0x03, L"else");
     catalog.names.emplace(0x05, L"变量测试");
@@ -541,6 +542,48 @@ CCZ_TEST(preview_session_condition_action_refresh_projects_79_and_05_options) {
     CCZ_REQUIRE(condition_tree_node_title(
                      *boolean_node, boolean_session.options())
                      .find(L"自动结果：真") != std::wstring::npos);
+}
+
+CCZ_TEST(preview_session_activates_else_child_wrapped_by_editor_markers) {
+    std::vector<std::int32_t> boolean_data(50, -1);
+    boolean_data[25] = 1200;
+    EditorPreviewInput input;
+    input.document_key = L"R_marker_else.eex|document";
+    input.document_revision = 1;
+    input.section.section_key = L"R_marker_else.eex|section:0";
+    input.section.selected_target_key = L"false-dialogue";
+    input.section.nodes = {
+        raw_node(L"section-boundary", 0x00, L"0:事件结束"),
+        raw_node(L"marker-before-condition", 0x01, L"1:子事件设定",
+            {raw_node(L"predicate", 0x05, L"5:变量测试",
+                {raw_node(L"true-dialogue", 0x14, L"14:真假分支对白"),
+                 raw_node(L"true-end", 0x00, L"0:事件结束")},
+                boolean_data)}),
+        raw_node(L"marker-before-else", 0x01, L"1:子事件设定",
+            {raw_node(L"else", 0x03, L"3:else",
+                {raw_node(L"false-dialogue", 0x14, L"14:激活后对白"),
+                 raw_node(L"false-end", 0x00, L"0:事件结束")})}),
+    };
+    input.document_nodes = input.section.nodes;
+
+    PreviewSession session;
+    const auto catalog = fixture_catalog();
+    const auto profile = fixture_profile();
+    const auto first_refresh = session.Refresh(
+        input, catalog, profile, no_assets());
+    CCZ_REQUIRE_EQ(first_refresh.status, RefreshStatus::Updated);
+    CCZ_REQUIRE(session.frame().dialogue.inactive_sub_event);
+    std::wstring activation_diagnostic;
+    CCZ_REQUIRE(session.ActivateTarget(
+        L"false-dialogue", &activation_diagnostic));
+
+    const auto activated_refresh = session.Refresh(
+        input, catalog, profile, no_assets());
+    CCZ_REQUIRE_EQ(activated_refresh.status, RefreshStatus::Updated);
+    CCZ_REQUIRE(!session.frame().dialogue.inactive_sub_event);
+    CCZ_REQUIRE(session.frame().dialogue.visible);
+    CCZ_REQUIRE(session.frame().dialogue.body.find(L"激活后对白") !=
+                std::wstring::npos);
 }
 
 CCZ_TEST(preview_session_variable_control_3000_projects_into_shared_condition_model) {

@@ -52,7 +52,7 @@ Assert-Text (Join-Path $root 'cczEditor2\BattlePreviewPage.cpp') 'ActiveSession\
 Assert-Text $page '\u0053\u0020\u6218\u573A\u5B57\u6BB5\u5DF2\u5199\u5165\u539F\u751F\u5267\u672C\u6811\u5E76\u9010\u6761\u8BFB\u56DE\u786E\u8BA4' 'successful native writeback reports verified instruction fields'
 Assert-Text $page 'describe_native_writeback\(batch\)' 'writeback status shows instruction-level field changes'
 Assert-Text $page 'RevealNativeWritebackInstruction' 'successful native writeback reveals a changed instruction in the editor tree'
-Assert-Text $page 'RevealNativeWritebackInstruction\(\s*view,\s*batch,\s*host\.first_inserted_handle\(\)\)' 'native transaction passes the committed insert handle to the reveal step'
+Assert-Text $page 'RevealNativeWritebackInstruction\(\s*view,\s*batch,\s*mapOperations != nullptr\s*\? host\.last_inserted_handle\(\) : host\.first_inserted_handle\(\)' 'map operations reveal the final committed insertion; ordinary writeback keeps its existing target'
 Assert-Text $page 'tree\.EnsureVisible\(item\)' 'revealed instruction expands its collapsed parent events'
 Assert-Text $page 'tree\.SelectItem\(item\)' 'revealed instruction remains selected for visual inspection'
 Assert-Text $page 'advance_document_ordinal\)[\s\S]{0,500}IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting' 'new 0x4B groups validate the actual TreeView predecessor; undo restoration can restore the original position'

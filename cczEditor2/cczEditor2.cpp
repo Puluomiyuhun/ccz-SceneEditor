@@ -179,6 +179,28 @@ void CcczEditor2App::deleteCopy(ItemData* data)
 	delete data;
 }
 
+CDocument* CcczEditor2App::OpenDocumentFile(LPCTSTR path)
+{
+	return OpenDocumentFile(path, TRUE);
+}
+
+CDocument* CcczEditor2App::OpenDocumentFile(LPCTSTR path, BOOL addToMru)
+{
+	CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
+	// Cover menu, drag/drop, MRU and shell opens at their shared MFC entry.
+	// A scope guard resumes preview publication even if loading throws.
+	struct PreviewOpenScope {
+		CScenePreviewWnd* host;
+		explicit PreviewOpenScope(CScenePreviewWnd* value) : host(value) {
+			if (host != nullptr) host->BeginDocumentOpen();
+		}
+		~PreviewOpenScope() {
+			if (host != nullptr) host->EndDocumentOpen();
+		}
+	} scope(frame != nullptr ? &frame->m_wndScenePreview : nullptr);
+	return CWinAppEx::OpenDocumentFile(path, addToMru);
+}
+
 void CcczEditor2App::OnFileOpen()
 {
 	CString vctData[50];

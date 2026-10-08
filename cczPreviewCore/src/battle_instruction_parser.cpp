@@ -145,7 +145,13 @@ void parse_node(const RawReplayNode& node, const BattleParseOptions& options,
                       options.reachable_deployment_keys.end(),
                       node.logical_key) !=
                 options.reachable_deployment_keys.end();
-        if (!deployment_reachable) {
+        const bool is_map_record = node.instruction_id == kBattleMapInstruction;
+        const bool map_reachable = !is_map_record ||
+            !options.filter_map_nodes ||
+            std::find(options.reachable_map_keys.begin(),
+                      options.reachable_map_keys.end(), node.logical_key) !=
+                options.reachable_map_keys.end();
+        if (!deployment_reachable || !map_reachable) {
             parse_siblings(node.children, options, result, scope_seen,
                            page_counters);
             return;

@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 
 #include "cczEditor2.h"
 #include "BattlePreviewPage.h"
@@ -8,9 +8,11 @@
 #include "MainFrm.h"
 #include "ScenePreviewHost.h"
 #include "PreviewIntegration/BattlePreviewAdapter.h"
+#include "PreviewIntegration/BattleFacing.h"
 #include "PreviewIntegration/BattlePreviewPredicates.h"
 #include "PreviewIntegration/EditorPreviewCatalog.h"
 #include "PreviewIntegration/BattleQuickModeResolver.h"
+#include "PreviewIntegration/BattleSectionRelationDialog.h"
 #include "PreviewIntegration/BattleBatchParameterSelection.h"
 #include "PreviewIntegration/PreviewWritebackGate.h"
 #include "PreviewIntegration/E5ImageLoader.h"
@@ -58,7 +60,7 @@ constexpr float kMaxZoom = 3.0f;
 constexpr float kZoomStep = 0.25f;
 constexpr int kSidebarWidth = 246;
 constexpr int kStatusHeaderHeight = 60;
-constexpr int kCollapsedControlToolbarHeight = 28;
+constexpr int kPreviewToolbarHeight = 28;
 constexpr int kStatusFooterHeight = 26;
 constexpr UINT kCharacterTabId = 0xA100;
 constexpr UINT kBrushTabId = 0xA101;
@@ -75,11 +77,15 @@ constexpr UINT kActivationButtonId = 0xA110;
 constexpr UINT kVariableControlButtonId = 0xA111;
 constexpr UINT kPreviewModeButtonId = 0xA112;
 constexpr UINT kUnitParametersButtonId = 0xA113;
+constexpr UINT kDynamicPreviewButtonId = 0xA11A;
 constexpr UINT kPreviewModeMenuFirstId = 0xA120;
 constexpr UINT kObstacleTypeFirstId = 0xA115;
 constexpr UINT kObstacleTypeLastId = 0xA117;
 constexpr UINT kClearObstacleDraftsId = 0xA118;
 constexpr UINT kObstaclePageId = 0xA119;
+constexpr UINT kObstacleDefaultsId = 0xA11B;
+constexpr UINT kObstacleMultiSelectId = 0xA11C;
+constexpr UINT kMapCommandsId = 0xA11D;
 constexpr UINT kConditionActionMessage = WM_APP + 0x38A;
 constexpr UINT kSearchId = 0xA107;
 constexpr UINT kDeploymentComboId = 0xA108;
@@ -538,8 +544,12 @@ bool RevealNativeWritebackInstruction(
 	const auto reveal = [&tree, &view](std::uintptr_t handle) {
 		if (handle == 0) return false;
 		const HTREEITEM item = reinterpret_cast<HTREEITEM>(handle);
-		if (tree.GetItemData(item) == 0 || !tree.EnsureVisible(item) ||
-			!tree.SelectItem(item)) return false;
+		if (tree.GetItemData(item) == 0) return false;
+		// EnsureVisible reports scrolling, not success: an already visible
+		// item (or an expanded ancestor) may legitimately return FALSE.
+		tree.EnsureVisible(item);
+		if (!tree.SelectItem(item) || tree.GetSelectedItem() != item)
+			return false;
 		view.cur_item = item;
 		return true;
 	};
@@ -550,6 +560,20 @@ bool RevealNativeWritebackInstruction(
 		if (reveal(change.item_handle)) return true;
 	}
 	return reveal(inserted_handle);
+}
+
+// An insertion needs a selected instruction, not a Scene/Section tree row.
+bool RequireBattleInsertionSelection(CcczEditor2View& view, std::wstring& diagnostic)
+{
+	CTreeCtrl& tree = view.GetTreeCtrl();
+	if (tree.GetSafeHwnd() == nullptr) return true; // The caller reports a closed tree.
+	const HTREEITEM selected = tree.GetSelectedItem();
+	const ItemData* data = selected != nullptr
+		? reinterpret_cast<ItemData*>(tree.GetItemData(selected)) : nullptr;
+	if (data != nullptr && data->id >= 0) return true;
+	AfxMessageBox(L"请先选择需要插入新指令的位置", MB_OK | MB_ICONINFORMATION);
+	diagnostic.clear(); // Already shown modally; do not repeat it only in the status bar.
+	return false;
 }
 
 class BattlePreviewRefreshSuppression {
@@ -897,6 +921,7 @@ public:
 		inserted_handle = reinterpret_cast<std::uintptr_t>(inserted);
 		if (first_inserted_handle_ == 0)
 			first_inserted_handle_ = inserted_handle;
+		last_inserted_handle_ = inserted_handle;
 		return true;
 	}
 
@@ -1138,6 +1163,11 @@ public:
 		return first_inserted_handle_;
 	}
 
+	std::uintptr_t last_inserted_handle() const noexcept
+	{
+		return last_inserted_handle_;
+	}
+
 private:
 	bool CreateBattleFourBGroup(std::uintptr_t parent_handle,
 		std::uintptr_t after_handle, const std::wstring& label,
@@ -1315,6 +1345,8 @@ private:
 		if (!advance_document_ordinal) view_.cur_code_ord = original_next_ordinal;
 		if (!record_handles.empty() && first_inserted_handle_ == 0)
 			first_inserted_handle_ = record_handles.front();
+		if (!record_handles.empty())
+			last_inserted_handle_ = record_handles.back();
 		return true;
 	}
 
@@ -1331,6 +1363,7 @@ private:
 	mutable std::uint64_t last_capture_tree_generation_{};
 	mutable bool initial_state_pending_{ true };
 	std::uintptr_t first_inserted_handle_{};
+	std::uintptr_t last_inserted_handle_{};
 };
 
 const ccz::preview::RawReplayNode* find_logical_node(
@@ -1535,29 +1568,17 @@ BattleUnitStatusLabelParts own_battle_unit_status_label(int battlefield_index)
 			L".将领" };
 }
 
-const ccz::preview::ExecutionNode* find_execution_node_by_runtime_handle(
-	const std::vector<ccz::preview::ExecutionNode>& nodes,
+ccz::preview::LogicalNodeKey find_battle_node_key_by_runtime_handle(
+	const std::vector<ccz::preview::RawReplayNode>& nodes,
 	std::uintptr_t runtime_handle)
 {
-	if (runtime_handle == 0) return nullptr;
+	if (runtime_handle == 0) return {};
 	for (const auto& node : nodes) {
-		if (node.runtime_handle == runtime_handle) return &node;
-		for (const auto* children : {&node.ordinary_children,
-			&node.true_children, &node.false_children, &node.cases}) {
-			if (const auto* found = find_execution_node_by_runtime_handle(
-					*children, runtime_handle)) return found;
-		}
+		if (node.runtime_handle == runtime_handle) return node.logical_key;
+		if (auto found = find_battle_node_key_by_runtime_handle(
+				node.children, runtime_handle); !found.empty()) return found;
 	}
-	return nullptr;
-}
-
-const ccz::preview::ExecutionNode* find_execution_node_by_runtime_handle(
-	const ccz::preview::SectionExecutionModel& model,
-	std::uintptr_t runtime_handle)
-{
-	if (const auto* found = find_execution_node_by_runtime_handle(
-			model.entry_gates, runtime_handle)) return found;
-	return find_execution_node_by_runtime_handle(model.body, runtime_handle);
+	return {};
 }
 
 }
@@ -1568,6 +1589,35 @@ void CBattleObstacleButton::SetSelected(bool selected)
 	m_selected = selected;
 	if (GetSafeHwnd() != nullptr) Invalidate(FALSE);
 }
+
+// BEGIN TARGETED_PREVIEW_LAYOUT
+static void preview_move(CWnd& control,int x,int y,int width,int height,BOOL=TRUE){
+ if(!control.GetSafeHwnd())return;
+ CRect old;control.GetWindowRect(old);auto* parent=control.GetParent();if(parent)parent->ScreenToClient(old);
+ CRect next(x,y,x+(std::max)(0,width),y+(std::max)(0,height));if(old==next)return;
+ control.SetWindowPos(nullptr,x,y,next.Width(),next.Height(),SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOREDRAW);
+ if(parent)parent->InvalidateRect(old,FALSE);
+ control.Invalidate(FALSE);
+}
+static void preview_font(CWnd& control,CFont* font,BOOL=TRUE){
+ if(!control.GetSafeHwnd())return;
+ auto* previous=control.GetFont();if(previous&&font&&previous->GetSafeHandle()==font->GetSafeHandle())return;
+ control.SetFont(font,FALSE);control.Invalidate(FALSE);
+}
+static void preview_show(CWnd& control,int command){
+ if(!control.GetSafeHwnd())return;
+ const bool visible=(control.GetStyle()&WS_VISIBLE)!=0;
+ if(visible==(command!=SW_HIDE))return;
+ control.ShowWindow(command);
+ if(command!=SW_HIDE)control.Invalidate(FALSE);
+}
+static void preview_text(CWnd& control,LPCTSTR text){
+ CString old;control.GetWindowText(old);if(old!=text)control.SetWindowText(text);
+}
+static void preview_enable(CWnd& control,BOOL enabled){
+ if(control.GetSafeHwnd() && (control.IsWindowEnabled()!=FALSE)!=(enabled!=FALSE))control.EnableWindow(enabled);
+}
+// END TARGETED_PREVIEW_LAYOUT
 
 void CBattleObstacleButton::DrawItem(LPDRAWITEMSTRUCT draw_item)
 {
@@ -1637,7 +1687,12 @@ void CBattleObstacleButton::DrawItem(LPDRAWITEMSTRUCT draw_item)
 		graphics.FillPolygon(&sail, sail_points,
 			static_cast<INT>(std::size(sail_points)));
 	};
-	if (m_obstacleType == 0) draw_flame(cx, iconTop, 1.0f);
+	if (m_sprite && m_sprite->GetLastStatus() == Gdiplus::Ok) {
+		graphics.DrawImage(m_sprite.get(),
+			Gdiplus::RectF(cx - 24.0f, iconTop, 48.0f, 48.0f),
+			0, 0, 48, 48, Gdiplus::UnitPixel);
+	}
+	else if (m_obstacleType == 0) draw_flame(cx, iconTop, 1.0f);
 	else if (m_obstacleType == 1) draw_boat(cx, iconTop, 1.0f);
 	else {
 		draw_boat(cx, iconTop + 3.0f, 0.9f);
@@ -1645,7 +1700,7 @@ void CBattleObstacleButton::DrawItem(LPDRAWITEMSTRUCT draw_item)
 	}
 	const wchar_t* label = m_obstacleType == 0 ? L"火 (0)"
 		: m_obstacleType == 1 ? L"船 (1)" : L"火船 (2)";
-	Gdiplus::Font font(L"Microsoft YaHei", 11.0f,
+	Gdiplus::Font font(L"Microsoft YaHei", 13.0f,
 		Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 	Gdiplus::SolidBrush text(disabled ? Gdiplus::Color(255, 130, 130, 130)
 		: Gdiplus::Color(255, 35, 35, 35));
@@ -1665,14 +1720,20 @@ void CBattlePrimaryActionButton::DrawItem(LPDRAWITEMSTRUCT draw_item)
 	CRect bounds(draw_item->rcItem);
 	const bool disabled = (draw_item->itemState & ODS_DISABLED) != 0;
 	const bool pressed = (draw_item->itemState & ODS_SELECTED) != 0;
-	const COLORREF face = disabled ? RGB(92, 82, 75)
-		: pressed ? RGB(151, 61, 20) : RGB(194, 87, 33);
+	const COLORREF face = m_activationStyle
+		? (disabled ? RGB(77, 72, 63) : pressed ? RGB(116, 86, 43) : RGB(151, 116, 62))
+		: m_undoStyle
+		? (disabled ? RGB(70, 68, 75) : pressed ? RGB(77, 65, 94) : RGB(112, 94, 133))
+		: (disabled ? RGB(92, 82, 75) : pressed ? RGB(151, 61, 20) : RGB(194, 87, 33));
 	dc.FillSolidRect(&bounds, face);
-	dc.Draw3dRect(&bounds, RGB(255, 207, 142), RGB(91, 39, 17));
+	dc.Draw3dRect(&bounds, m_activationStyle ? RGB(225, 204, 162)
+		: m_undoStyle ? RGB(192, 179, 207) : RGB(255, 207, 142),
+		m_activationStyle ? RGB(75, 55, 30) : m_undoStyle ? RGB(58, 48, 70) : RGB(91, 39, 17));
 	CRect accent(bounds.left + 2, bounds.top + 2,
 		bounds.left + 5, bounds.bottom - 2);
 	dc.FillSolidRect(&accent, disabled ? RGB(150, 136, 126)
-		: RGB(255, 220, 154));
+		: m_activationStyle ? RGB(242, 218, 171)
+		: m_undoStyle ? RGB(216, 199, 234) : RGB(255, 220, 154));
 	CRect text_bounds(bounds);
 	text_bounds.DeflateRect(7, 1, 3, 1);
 	if (pressed) text_bounds.OffsetRect(1, 1);
@@ -1731,6 +1792,7 @@ void CBattlePreviewModeButton::OnMouseLeave()
 BEGIN_MESSAGE_MAP(CSBattlePreviewPage, CWnd)
 	ON_WM_CREATE()
 	ON_WM_DESTROY()
+	ON_WM_TIMER()
 	ON_WM_SIZE()
 	ON_WM_PAINT()
 	ON_WM_ERASEBKGND()
@@ -1775,6 +1837,8 @@ BEGIN_MESSAGE_MAP(CSBattlePreviewPage, CWnd)
 		&CSBattlePreviewPage::OnUnitParametersClicked)
 	ON_BN_CLICKED(kPreviewModeButtonId,
 		&CSBattlePreviewPage::OnPreviewModeClicked)
+	ON_BN_CLICKED(kDynamicPreviewButtonId,
+		&CSBattlePreviewPage::OnDynamicPreviewClicked)
 	ON_MESSAGE(kConditionActionMessage,
 		&CSBattlePreviewPage::OnConditionActionMessage)
 	ON_BN_CLICKED(kWritebackId, &CSBattlePreviewPage::OnWriteback)
@@ -1782,6 +1846,11 @@ BEGIN_MESSAGE_MAP(CSBattlePreviewPage, CWnd)
 		&CSBattlePreviewPage::OnObstaclePageClicked)
 	ON_CONTROL_RANGE(BN_CLICKED, kObstacleTypeFirstId,
 		kObstacleTypeLastId, &CSBattlePreviewPage::OnObstacleTypeClicked)
+	ON_BN_CLICKED(kObstacleMultiSelectId, &CSBattlePreviewPage::OnObstacleMultiSelect)
+	ON_BN_CLICKED(kMapCommandsId, &CSBattlePreviewPage::OnMapCommands)
+	ON_CONTROL_RANGE(BN_CLICKED,0xA180,0xA188,&CSBattlePreviewPage::OnRegionTool)
+	ON_BN_CLICKED(0xA189,&CSBattlePreviewPage::OnClearRoleDrafts)
+	ON_BN_CLICKED(kObstacleDefaultsId, &CSBattlePreviewPage::OnObstacleDefaults)
 	ON_BN_CLICKED(kClearObstacleDraftsId,
 		&CSBattlePreviewPage::OnClearObstacleDrafts)
 END_MESSAGE_MAP()
@@ -1797,6 +1866,7 @@ CSBattlePreviewPage::~CSBattlePreviewPage()
 	m_decodedBitmaps.clear();
 	m_bitmapCachePolicy.Clear();
 	m_assets.Clear();
+	m_dynamicAssets.Clear();
 }
 
 #if defined(_DEBUG) && defined(CCZ_S_BATTLE_PREVIEW_PERF)
@@ -1935,7 +2005,8 @@ void CSBattlePreviewPage::BindSession(
 	ccz::editor_preview::BattlePreviewDocumentSession& session,
 	CcczEditor2Doc& document, CTreeCtrl& tree)
 {
-	if (m_activeSession != &session) {
+	const bool sessionChanged = m_activeSession != &session;
+	if (sessionChanged) {
 		UnbindSession();
 		m_activeSession = &session;
 		m_editorOps = nullptr;
@@ -1957,6 +2028,7 @@ void CSBattlePreviewPage::BindSession(
 			document.GetPreviewTreeGeneration();
 	m_sourceTreeWindow = sessionTreeStillCurrent
 		? tree.GetSafeHwnd() : nullptr;
+	m_sourceTreeControl = sessionTreeStillCurrent ? &tree : nullptr;
 	m_panActive = false;
 	m_leftStampActive = false;
 	m_panStartPoint = CPoint(-1, -1);
@@ -1977,18 +2049,22 @@ void CSBattlePreviewPage::BindSession(
 		UpdateSessionAssetKeys();
 		if (!m_unitSpritePath.empty() &&
 			(m_unitSpritePath != m_assets.unit_mov_path() ||
-			 m_unitSpriteRevision != m_assets.unit_mov_revision())) {
+			 m_unitSpriteRevision != m_assets.sprite_revision())) {
 			ClearUnitSprites();
 		}
 		if (!assetDiagnostic.empty()) AppendDiagnostic(assetDiagnostic);
 		LoadMapImage();
 	}
-	if (m_controlsCreated) RefreshEditorControls();
+	if (m_controlsCreated) {
+		RefreshEditorControls();
+		if (sessionChanged) RefreshDynamicToggle();
+	}
 }
 
 void CSBattlePreviewPage::SaveActiveSessionUiState()
 {
 	if (m_activeSession == nullptr) return;
+	FinishObstacleStampUndo();
 	auto& session = *m_activeSession;
 	auto& ui = session.ui;
 	ui.zoom = m_zoom;
@@ -1997,6 +2073,7 @@ void CSBattlePreviewPage::SaveActiveSessionUiState()
 	ui.sidebar_visible = m_sidebarVisible;
 	ui.brush_tab_active = m_brushTabActive;
 	ui.quick_mode_enabled = ActiveSession().ui.quick_mode_enabled;
+	ui.dynamic_preview_enabled = m_dynamicPreviewEnabled;
 	ui.copy_person_mode = session.editor_state.copy_person_mode;
 	ui.unrestricted_terrain_mode =
 		session.editor_state.unrestricted_terrain_mode;
@@ -2015,10 +2092,16 @@ void CSBattlePreviewPage::SaveActiveSessionUiState()
 		ui.search_text = search.GetString();
 	}
 	auto& mapOperations = session.map_operations;
-	mapOperations.tool_mode = m_battleMapToolMode;
+	mapOperations.tool_mode = (m_battleMapToolMode == BattleMapToolMode::CommandPickPoint ||
+		m_battleMapToolMode == BattleMapToolMode::CommandPickArea) ? BattleMapToolMode::None : m_battleMapToolMode;
 	mapOperations.obstacle_page_active = m_obstaclePageActive;
 	mapOperations.selected_obstacle_type = m_selectedObstacleType;
 	mapOperations.obstacle_drafts = m_obstacleDrafts;
+	mapOperations.obstacle_defaults = m_obstacleDefaults;
+	mapOperations.obstacle_selection = m_obstacleSelection;
+	mapOperations.obstacle_selection.CancelGesture();
+	if (mapOperations.tool_mode == BattleMapToolMode::ObstacleAdjust) mapOperations.tool_mode = BattleMapToolMode::None;
+	mapOperations.dynamic_selection = m_dynamicSelection;
 	mapOperations.role_operation_units = m_roleOperationUnits;
 	mapOperations.role_operation_anchor_index = m_roleOperationAnchorIndex;
 	mapOperations.role_operation_direction_adjusted =
@@ -2037,6 +2120,9 @@ void CSBattlePreviewPage::SaveActiveSessionUiState()
 
 void CSBattlePreviewPage::RestoreActiveSessionUiState()
 {
+	m_obstacleParametersPane.Hide();
+	m_obstacleBatchPane.Hide();
+	m_commandParametersPane.Hide();
 	if (m_activeSession == nullptr) return;
 	auto& session = *m_activeSession;
 	auto& ui = session.ui;
@@ -2046,6 +2132,7 @@ void CSBattlePreviewPage::RestoreActiveSessionUiState()
 			_T("S Battle Preview"), _T("QuickMode"), 1) != 0;
 		ui.initialized = true;
 	}
+	m_dynamicPreviewEnabled = ui.dynamic_preview_enabled;
 	m_zoom = ui.zoom > 0 ? ui.zoom : kDefaultZoom;
 	m_scrollX = ui.scroll_x;
 	m_scrollY = ui.scroll_y;
@@ -2055,6 +2142,14 @@ void CSBattlePreviewPage::RestoreActiveSessionUiState()
 	m_obstaclePageActive = mapOperations.obstacle_page_active;
 	m_selectedObstacleType = mapOperations.selected_obstacle_type;
 	m_obstacleDrafts = mapOperations.obstacle_drafts;
+	m_obstacleDefaults = mapOperations.obstacle_defaults;
+	m_obstacleSelection = mapOperations.obstacle_selection;
+	m_obstacleBatchPane.Hide();
+	m_commandParametersPane.Hide();
+	m_obstacleEditTarget.reset();
+	m_obstacleStampActive = false;
+	m_obstacleLastStamp.reset();
+	m_dynamicSelection = mapOperations.dynamic_selection;
 	m_roleOperationUnits = mapOperations.role_operation_units;
 	m_roleOperationAnchorIndex = mapOperations.role_operation_anchor_index;
 	m_roleOperationDirectionAdjusted =
@@ -2120,11 +2215,39 @@ void CSBattlePreviewPage::RestoreActiveSessionUiState()
 
 void CSBattlePreviewPage::UnbindSession()
 {
+	KillTimer(0xB601);m_spellPreviews.clear();m_spellSignature.clear();
+	m_commandParametersPane.Hide();m_obstacleBatchPane.Hide();
+	SaveActiveSessionUiState();
+	m_dynamicPreviewReady = false;
+	m_dynamicTargetCapture = {};
+	m_dynamicConditionModel.reset();
+	m_dynamicVariableIndex = {};
+	m_dynamicActivationTarget.clear();
+	m_dynamicTargetNode.clear();
+	m_dynamicUnknownStatusConditions.clear();
+	m_dynamicTargetIsScene1 = false;
+	m_dynamicTargetIsSectionRoot = false;
+	m_dynamicScene1Baseline = {};
+	m_dynamicScene1Obstacles.clear();
+	m_dynamicScene1Plan = {};
+	m_dynamicScene1BaselineComplete = false;
+	m_dynamicBaselineDiagnostic.clear();
+	m_dynamicPlan = {};
+	m_dynamicProjection = {};
+	m_dynamicMapBitmap.reset();
+	m_dynamicMapImagePath.clear();
+	m_dynamicMapImageRevision = 0;
+	m_dynamicContentEpoch = 0;
+	m_dynamicTreeGeneration = 0;
+	m_dynamicDiagnostic.clear();
+	m_dynamicAssets.Clear();
 	if (m_activeSession == nullptr) return;
-	if ((m_panActive || m_leftStampActive || m_selectionGestureActive) &&
+	m_mapCommandDragging = false;
+	m_mapCommandStart.reset();m_mapCommandEnd.reset();m_mapCommandId = 0;
+	if ((m_panActive || m_leftStampActive || m_selectionGestureActive ||
+		m_battleMapToolMode == BattleMapToolMode::CommandPickArea) &&
 		GetSafeHwnd() != nullptr)
 		ReleaseCapture();
-	SaveActiveSessionUiState();
 	ReleaseActiveBitmapPins();
 	m_battleMapToolMode = BattleMapToolMode::None;
 	m_obstaclePageActive = false;
@@ -2150,6 +2273,7 @@ void CSBattlePreviewPage::UnbindSession()
 	m_activeDocument = nullptr;
 	m_editorOps = nullptr;
 	m_sourceTreeWindow = nullptr;
+	m_sourceTreeControl = nullptr;
 	m_documentPath.Empty();
 	m_selectedUnit.reset();
 	if (m_conditionTreePane.GetSafeHwnd() != nullptr) {
@@ -2167,6 +2291,7 @@ void CSBattlePreviewPage::UnbindSession()
 int CSBattlePreviewPage::OnCreate(LPCREATESTRUCT create)
 {
 	if (CWnd::OnCreate(create) == -1) return -1;
+	ModifyStyle(0, WS_CLIPCHILDREN);
 	ShowScrollBar(SB_HORZ, FALSE);
 	ShowScrollBar(SB_VERT, FALSE);
 	CreateEditorControls();
@@ -2176,6 +2301,8 @@ int CSBattlePreviewPage::OnCreate(LPCREATESTRUCT create)
 
 void CSBattlePreviewPage::CreateEditorControls()
 {
+	m_undoButton.SetUndoStyle();
+	m_activationButton.SetActivationStyle();
 	const DWORD buttonStyle = WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON;
 	const DWORD controlStyle = WS_CHILD | WS_VISIBLE;
 	if (!m_characterTabButton.Create(_T("角色列表"), buttonStyle,
@@ -2190,7 +2317,7 @@ void CSBattlePreviewPage::CreateEditorControls()
 			CRect(0, 0, 1, 1), this, kPreviousPageId) ||
 		!m_nextPageButton.Create(_T("下一页"), buttonStyle,
 			CRect(0, 0, 1, 1), this, kNextPageId) ||
-		!m_undoButton.Create(_T("撤回"), buttonStyle,
+		!m_undoButton.Create(_T("↶ 撤回"), WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
 			CRect(0, 0, 1, 1), this, kUndoId) ||
 		!m_quickModeButton.Create(_T("快速模式"),
 			WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_VCENTER,
@@ -2203,7 +2330,7 @@ void CSBattlePreviewPage::CreateEditorControls()
 			CRect(0, 0, 1, 1), this, kUnrestrictedTerrainModeId) ||
 		!m_conditionTreeButton.Create(_T("条件树"), buttonStyle,
 			CRect(0, 0, 1, 1), this, kConditionTreeId) ||
-		!m_activationButton.Create(_T("激活子事件"), buttonStyle,
+		!m_activationButton.Create(_T("▶ 激活子事件"), WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
 			CRect(0, 0, 1, 1), this, kActivationButtonId) ||
 		!m_variableControlButton.Create(_T("变量控制"), buttonStyle,
 			CRect(0, 0, 1, 1), this, kVariableControlButtonId) ||
@@ -2211,11 +2338,18 @@ void CSBattlePreviewPage::CreateEditorControls()
 			CRect(0, 0, 1, 1), this, kPreviewModeButtonId) ||
 		!m_unitParametersButton.Create(_T("默认参数"), buttonStyle,
 			CRect(0, 0, 1, 1), this, kUnitParametersButtonId) ||
+		!m_dynamicPreviewButton.Create(_T("动态预览"), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_PUSHLIKE,
+			CRect(0, 0, 1, 1), this, kDynamicPreviewButtonId) ||
 		!m_writebackButton.Create(_T("写回"),
 			WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
 			CRect(0, 0, 1, 1), this, kWritebackId) ||
 		!m_obstaclePageButton.Create(_T("障碍物"), buttonStyle,
 			CRect(0, 0, 1, 1), this, kObstaclePageId) ||
+		!m_obstaclePageTitle.Create(_T("地图工具 · 战场障碍"),
+			controlStyle | SS_LEFT, CRect(0, 0, 1, 1), this, 0) ||
+		!m_mapCommandsButton.Create(L"区域操作 ▾", buttonStyle, CRect(0,0,1,1), this, kMapCommandsId) ||
+		!m_obstacleMultiSelectButton.Create(L"多选障碍物", buttonStyle, CRect(0,0,1,1), this, kObstacleMultiSelectId) ||
+		!m_obstacleDefaultsButton.Create(_T("默认参数"), buttonStyle, CRect(0, 0, 1, 1), this, kObstacleDefaultsId) ||
 		!m_clearObstacleDraftsButton.Create(_T("清空"), buttonStyle,
 			CRect(0, 0, 1, 1), this, kClearObstacleDraftsId) ||
 		!m_mapOperationStatus.Create(_T(""), controlStyle | SS_LEFT,
@@ -2268,13 +2402,15 @@ void CSBattlePreviewPage::CreateEditorControls()
 		m_variableControlButton.SetFont(&m_uiFont);
 		m_previewModeButton.SetFont(&m_uiFont);
 		m_unitParametersButton.SetFont(&m_uiFont);
+		m_dynamicPreviewButton.SetFont(&m_uiFont);
 		m_obstaclePageButton.SetFont(&m_uiFont);
-		m_clearObstacleDraftsButton.SetFont(&m_toolbarFont);
+		m_obstaclePageTitle.SetFont(&m_uiFont);
+		m_clearObstacleDraftsButton.SetFont(&m_uiFont);
 		m_mapOperationStatus.SetFont(&m_toolbarFont);
 		for (auto& button : m_obstacleTypeButtons)
 			button.SetFont(&m_toolbarFont);
 		m_writebackButton.SetFont(writebackFontCreated
-			? &m_writebackFont : &m_uiFont);
+			? &m_writebackFont : &m_uiFont, FALSE);
 		m_searchEdit.SetFont(&m_uiFont);
 		m_deploymentCombo.SetFont(&m_uiFont);
 		m_characterList.SetFont(&m_uiFont);
@@ -2375,7 +2511,12 @@ void CSBattlePreviewPage::CreateEditorControls()
 		[this](const std::wstring& diagnostic) {
 			AppendDiagnostic(diagnostic);
 		});
-	m_controlsCreated = true;
+	m_dynamicPreviewButton.SetHoverHandler([this]{ ShowDynamicPreviewMenu(); });
+	const wchar_t* regionNames[]={L"区域状态变更",L"区域方针变更",L"高亮区域",L"法术",L"区域武将消失",L"区域武将撤退",L"进入地点测试",L"进入区域测试",L"我军预览绑定"};
+ for(int i=0;i<9;++i){if(!m_regionToolButtons[i].Create(regionNames[i],WS_CHILD|BS_PUSHBUTTON,CRect(0,0,1,1),this,0xA180+i))return;m_regionToolButtons[i].SetFont(&m_uiFont);}
+ if(!m_clearRoleDraftsButton.Create(L"清空暂存角色",WS_CHILD|BS_PUSHBUTTON,CRect(0,0,1,1),this,0xA189))return;
+ m_clearRoleDraftsButton.SetFont(&m_uiFont);
+ m_controlsCreated = true;
 	RefreshCharacterList();
 	RefreshDeploymentList();
 	RefreshEditorControls();
@@ -2389,9 +2530,8 @@ void CSBattlePreviewPage::LayoutEditorControls()
 	const bool sidePanelVisible = m_sidebarVisible || m_obstaclePageActive;
 	const int panelWidth = sidePanelVisible
 		? (std::min)(kSidebarWidth, (std::max)(0, client.Width())) : 0;
-	const int reservedHeaderHeight = sidePanelVisible
-		? kStatusHeaderHeight
-		: kStatusHeaderHeight + kCollapsedControlToolbarHeight;
+	const int reservedHeaderHeight =
+		kStatusHeaderHeight + kPreviewToolbarHeight;
 	const int headerHeight = (std::min)(reservedHeaderHeight,
 		(std::max)(0, client.Height()));
 	const int footerTop = (std::max)(headerHeight,
@@ -2403,19 +2543,18 @@ void CSBattlePreviewPage::LayoutEditorControls()
 		Invalidate(FALSE);
 		return;
 	}
+	LayoutPreviewControlToolbar();
+	if(!m_obstaclePageActive){preview_show(m_mapCommandsButton,SW_HIDE);
+ for(auto& button:m_regionToolButtons)preview_show(button,SW_HIDE);
+ preview_show(m_obstacleMultiSelectButton,SW_HIDE);}
+ if(m_obstaclePageActive||!m_sidebarVisible)preview_show(m_clearRoleDraftsButton,SW_HIDE);
 	if (m_obstaclePageActive) {
 		LayoutObstacleSidebar(client);
 	} else if (m_sidebarVisible) {
-		m_quickModeButton.SetFont(&m_uiFont);
-		m_copyPersonModeButton.SetFont(&m_uiFont);
-		m_unrestrictedTerrainModeButton.SetFont(&m_uiFont);
-		m_conditionTreeButton.SetFont(&m_uiFont);
-		m_activationButton.SetFont(&m_uiFont);
-		m_variableControlButton.SetFont(&m_uiFont);
-		m_previewModeButton.SetFont(&m_uiFont);
-		m_unitParametersButton.SetFont(&m_uiFont);
-		m_writebackButton.SetFont(m_writebackFont.GetSafeHandle() != nullptr
-			? &m_writebackFont : &m_uiFont);
+		preview_font(m_quickModeButton,&m_uiFont);
+		preview_font(m_copyPersonModeButton,&m_uiFont);
+		preview_font(m_unrestrictedTerrainModeButton,&m_uiFont);
+		preview_font(m_unitParametersButton,&m_uiFont);
 		const int left = m_canvasRect.right + 4;
 		const int right = (std::max)(left,
 			static_cast<int>(client.right) - 4);
@@ -2424,67 +2563,26 @@ void CSBattlePreviewPage::LayoutEditorControls()
 		const int roleWidth = (std::max)(48, (width - 2 * tabGap) * 36 / 100);
 		const int brushWidth = (std::max)(48, (width - 2 * tabGap) * 36 / 100);
 		const int hideWidth = (std::max)(32, width - roleWidth - brushWidth - 2 * tabGap);
-		m_showSidebarButton.MoveWindow(left, 6, width, 24);
-		m_obstaclePageButton.MoveWindow(left, 32, width, 22);
+		preview_move(m_showSidebarButton,left, 6, width, 24);
+		preview_move(m_obstaclePageButton,left, 32, width, 22);
 		int y = 62;
-		m_characterTabButton.MoveWindow(left, y, roleWidth, 24);
-		m_brushTabButton.MoveWindow(left + roleWidth + tabGap, y,
+		preview_move(m_characterTabButton,left, y, roleWidth, 24);
+		preview_move(m_brushTabButton,left + roleWidth + tabGap, y,
 			brushWidth, 24);
-		m_hideSidebarButton.MoveWindow(left + roleWidth + tabGap + brushWidth + tabGap,
+		preview_move(m_hideSidebarButton,left + roleWidth + tabGap + brushWidth + tabGap,
 			y, hideWidth, 24);
 		y += 30;
-		m_quickModeButton.MoveWindow(left, y, width, 22);
-		y += 26;
 		const int modeGap = 3;
 		const int halfModeWidth = (width - modeGap) / 2;
-		m_copyPersonModeButton.MoveWindow(left, y, halfModeWidth, 22);
-		m_unrestrictedTerrainModeButton.MoveWindow(
+		preview_move(m_copyPersonModeButton,left, y, halfModeWidth, 22);
+		preview_move(m_unrestrictedTerrainModeButton,
 			left + halfModeWidth + modeGap, y,
 			width - halfModeWidth - modeGap, 22);
 		y += 26;
-		if (ActiveSession().condition_button_visible) {
-			m_conditionTreeButton.MoveWindow(left, y, width, 22);
-			m_conditionTreeButton.ShowWindow(SW_SHOW);
-			y += 26;
-		} else {
-			m_conditionTreeButton.ShowWindow(SW_HIDE);
-		}
-		const int previewGap = 3;
-		const int previewModeWidth = (width - previewGap) * 62 / 100;
-		m_previewModeButton.MoveWindow(left, y, previewModeWidth, 22);
-		m_unitParametersButton.MoveWindow(left + previewModeWidth + previewGap,
-			y, width - previewModeWidth - previewGap, 22);
-		m_previewModeButton.ShowWindow(SW_SHOW);
-		m_unitParametersButton.ShowWindow(SW_SHOW);
+		preview_move(m_unitParametersButton,left, y, width, 22);
+		preview_show(m_unitParametersButton,SW_SHOW);
 		y += 26;
-		const bool showActivation = ActiveSession().activation_button_visible;
-		const bool showVariables = ActiveSession().variable_button_visible;
-		if (showActivation || showVariables) {
-			const int actionGap = 3;
-			const int actionHalfWidth = (width - actionGap) / 2;
-			if (showActivation) {
-				m_activationButton.MoveWindow(left, y,
-					showVariables ? actionHalfWidth : width, 22);
-				m_activationButton.ShowWindow(SW_SHOW);
-			} else {
-				m_activationButton.ShowWindow(SW_HIDE);
-			}
-			if (showVariables) {
-				m_variableControlButton.MoveWindow(
-					showActivation ? left + actionHalfWidth + actionGap : left,
-					y, showActivation ? width - actionHalfWidth - actionGap : width,
-					22);
-				m_variableControlButton.ShowWindow(SW_SHOW);
-			} else {
-				m_variableControlButton.ShowWindow(SW_HIDE);
-			}
-			y += 26;
-		} else {
-			m_activationButton.ShowWindow(SW_HIDE);
-			m_variableControlButton.ShowWindow(SW_HIDE);
-		}
-		m_writebackButton.MoveWindow(left, y, width, 22);
-		y += 26;
+ preview_move(m_clearRoleDraftsButton,left,y,width,22);preview_show(m_clearRoleDraftsButton,SW_SHOW);y+=26;
 		const bool exclusiveRoleTool =
 			m_battleMapToolMode == BattleMapToolMode::MovePickUnit ||
 			m_battleMapToolMode == BattleMapToolMode::MovePickTarget ||
@@ -2509,50 +2607,56 @@ void CSBattlePreviewPage::LayoutEditorControls()
 				status.Format(_T("左键添加，右键移除；已暂存 %u 个，写回提交"),
 					static_cast<unsigned>(m_obstacleDrafts.items().size()));
 				break;
+			case BattleMapToolMode::CommandPickPoint:
+				status = _T("点击地图选择地点，随后设置参数");
+				break;
+			case BattleMapToolMode::CommandPickArea:
+				status = _T("拖动框选区域，松开后设置参数");
+				break;
 			case BattleMapToolMode::None:
 			default:
 				status.Format(_T("左键添加，右键移除；已暂存 %u 个，写回提交"),
 					static_cast<unsigned>(m_obstacleDrafts.items().size()));
 				break;
 			}
-			m_mapOperationStatus.SetWindowText(status);
-			m_mapOperationStatus.MoveWindow(left, y,
+			preview_text(m_mapOperationStatus,status);
+			preview_move(m_mapOperationStatus,left, y,
 				width, 22);
-			m_mapOperationStatus.ShowWindow(SW_SHOW);
+			preview_show(m_mapOperationStatus,SW_SHOW);
 			y += 26;
 		} else {
-			m_mapOperationStatus.ShowWindow(SW_HIDE);
-			m_clearObstacleDraftsButton.ShowWindow(SW_HIDE);
+			preview_show(m_mapOperationStatus,SW_HIDE);
+			preview_show(m_clearObstacleDraftsButton,SW_HIDE);
+		preview_show(m_obstacleDefaultsButton,SW_HIDE);
 		}
 		if (!exclusiveRoleTool) {
-			m_searchEdit.MoveWindow(left, y, width, 22);
-			m_searchEdit.ShowWindow(SW_SHOW);
+			preview_move(m_searchEdit,left, y, width, 22);
+			preview_show(m_searchEdit,SW_SHOW);
 			y += 26;
-			m_deploymentCombo.MoveWindow(left, y, width, 160);
-			m_deploymentCombo.ShowWindow(SW_SHOW);
+			preview_move(m_deploymentCombo,left, y, width, 160);
+			preview_show(m_deploymentCombo,SW_SHOW);
 			y += 28;
 		} else {
-			m_searchEdit.ShowWindow(SW_HIDE);
-			m_deploymentCombo.ShowWindow(SW_HIDE);
-			m_characterList.ShowWindow(SW_HIDE);
-			m_previousPageButton.ShowWindow(SW_HIDE);
-			m_nextPageButton.ShowWindow(SW_HIDE);
-			m_pageLabel.ShowWindow(SW_HIDE);
+			preview_show(m_searchEdit,SW_HIDE);
+			preview_show(m_deploymentCombo,SW_HIDE);
+			preview_show(m_characterList,SW_HIDE);
+			preview_show(m_previousPageButton,SW_HIDE);
+			preview_show(m_nextPageButton,SW_HIDE);
+			preview_show(m_pageLabel,SW_HIDE);
 		}
 		const int bottom = client.bottom - 8;
 		const int undoY = (std::max)(y, bottom - 54);
 		if (!exclusiveRoleTool)
-			m_characterList.MoveWindow(left, y, width,
+			preview_move(m_characterList,left, y, width,
 				(std::max)(0, undoY - y - 3));
-		m_undoButton.MoveWindow(left, undoY, width, 24);
 		const int pageY = bottom - 26;
 		const int listPageGap = 3;
 		const int listPageButtonWidth = (std::max)(38,
 			(width - 2 * listPageGap - 70) / 2);
-		m_previousPageButton.MoveWindow(left, pageY, listPageButtonWidth, 22);
-		m_pageLabel.MoveWindow(left + listPageButtonWidth + listPageGap, pageY,
+		preview_move(m_previousPageButton,left, pageY, listPageButtonWidth, 22);
+		preview_move(m_pageLabel,left + listPageButtonWidth + listPageGap, pageY,
 			70, 22);
-		m_nextPageButton.MoveWindow(left + listPageButtonWidth + listPageGap +
+		preview_move(m_nextPageButton,left + listPageButtonWidth + listPageGap +
 			70 + listPageGap, pageY, (std::max)(0,
 			width - listPageButtonWidth - 70 - 2 * listPageGap), 22);
 		for (CWnd* control : {static_cast<CWnd*>(&m_characterTabButton),
@@ -2561,62 +2665,52 @@ void CSBattlePreviewPage::LayoutEditorControls()
 			static_cast<CWnd*>(&m_showSidebarButton),
 			static_cast<CWnd*>(&m_previousPageButton),
 			static_cast<CWnd*>(&m_nextPageButton),
-			static_cast<CWnd*>(&m_undoButton),
-			static_cast<CWnd*>(&m_writebackButton),
-			static_cast<CWnd*>(&m_quickModeButton),
 			static_cast<CWnd*>(&m_copyPersonModeButton),
 			static_cast<CWnd*>(&m_unrestrictedTerrainModeButton),
-			static_cast<CWnd*>(&m_previewModeButton),
 			static_cast<CWnd*>(&m_unitParametersButton),
 			static_cast<CWnd*>(&m_searchEdit), static_cast<CWnd*>(&m_deploymentCombo),
 			static_cast<CWnd*>(&m_characterList), static_cast<CWnd*>(&m_pageLabel)}) {
-			if (control->GetSafeHwnd() != nullptr) control->ShowWindow(SW_SHOW);
+			if (control->GetSafeHwnd() != nullptr) preview_show(*control,SW_SHOW);
 		}
 		if (exclusiveRoleTool) {
-			m_searchEdit.ShowWindow(SW_HIDE);
-			m_deploymentCombo.ShowWindow(SW_HIDE);
-			m_characterList.ShowWindow(SW_HIDE);
-			m_previousPageButton.ShowWindow(SW_HIDE);
-			m_nextPageButton.ShowWindow(SW_HIDE);
-			m_pageLabel.ShowWindow(SW_HIDE);
+			preview_show(m_searchEdit,SW_HIDE);
+			preview_show(m_deploymentCombo,SW_HIDE);
+			preview_show(m_characterList,SW_HIDE);
+			preview_show(m_previousPageButton,SW_HIDE);
+			preview_show(m_nextPageButton,SW_HIDE);
+			preview_show(m_pageLabel,SW_HIDE);
 		}
-		m_showSidebarButton.ShowWindow(SW_SHOW);
-		m_obstaclePageButton.ShowWindow(SW_SHOW);
-		m_mapOperationStatus.ShowWindow(showOperationStatus ? SW_SHOW : SW_HIDE);
-		m_clearObstacleDraftsButton.ShowWindow(SW_HIDE);
+		preview_show(m_showSidebarButton,SW_SHOW);
+		preview_show(m_obstaclePageButton,SW_SHOW);
+		preview_show(m_obstaclePageTitle,SW_HIDE);
+		preview_show(m_mapOperationStatus,showOperationStatus ? SW_SHOW : SW_HIDE);
+		preview_show(m_clearObstacleDraftsButton,SW_HIDE);
+		preview_show(m_obstacleDefaultsButton,SW_HIDE);
 		for (auto& button : m_obstacleTypeButtons)
-			button.ShowWindow(SW_HIDE);
+			preview_show(button,SW_HIDE);
 	} else {
 		for (CWnd* control : {static_cast<CWnd*>(&m_characterTabButton),
 			static_cast<CWnd*>(&m_brushTabButton),
 			static_cast<CWnd*>(&m_hideSidebarButton),
 			static_cast<CWnd*>(&m_previousPageButton),
 			static_cast<CWnd*>(&m_nextPageButton),
-			static_cast<CWnd*>(&m_undoButton),
-			static_cast<CWnd*>(&m_writebackButton),
-			static_cast<CWnd*>(&m_quickModeButton),
-			static_cast<CWnd*>(&m_copyPersonModeButton),
-			static_cast<CWnd*>(&m_unrestrictedTerrainModeButton),
-			static_cast<CWnd*>(&m_previewModeButton),
-			static_cast<CWnd*>(&m_unitParametersButton),
 			static_cast<CWnd*>(&m_searchEdit), static_cast<CWnd*>(&m_deploymentCombo),
 			static_cast<CWnd*>(&m_characterList), static_cast<CWnd*>(&m_pageLabel)}) {
-			if (control->GetSafeHwnd() != nullptr) control->ShowWindow(SW_HIDE);
+			if (control->GetSafeHwnd() != nullptr) preview_show(*control,SW_HIDE);
 		}
-		m_activationButton.ShowWindow(SW_HIDE);
-		m_variableControlButton.ShowWindow(SW_HIDE);
-		m_mapOperationStatus.ShowWindow(SW_HIDE);
-		m_clearObstacleDraftsButton.ShowWindow(SW_HIDE);
+		preview_show(m_mapOperationStatus,SW_HIDE);
+		preview_show(m_obstaclePageTitle,SW_HIDE);
+		preview_show(m_clearObstacleDraftsButton,SW_HIDE);
+		preview_show(m_obstacleDefaultsButton,SW_HIDE);
 		for (auto& button : m_obstacleTypeButtons)
-			button.ShowWindow(SW_HIDE);
+			preview_show(button,SW_HIDE);
 		const int buttonWidth = 96;
 		const int buttonLeft = (std::max)(0,
 			static_cast<int>(client.right) - buttonWidth - 8);
-		m_showSidebarButton.MoveWindow(buttonLeft, 6, buttonWidth, 24);
-		m_showSidebarButton.ShowWindow(SW_SHOW);
-		m_obstaclePageButton.MoveWindow(buttonLeft, 32, buttonWidth, 22);
-		m_obstaclePageButton.ShowWindow(SW_SHOW);
-		LayoutCollapsedControlToolbar();
+		preview_move(m_showSidebarButton,buttonLeft, 6, buttonWidth, 24);
+		preview_show(m_showSidebarButton,SW_SHOW);
+		preview_move(m_obstaclePageButton,buttonLeft, 32, buttonWidth, 22);
+		preview_show(m_obstaclePageButton,SW_SHOW);
 	}
 	UpdateViewport();
 	Invalidate(FALSE);
@@ -2630,73 +2724,88 @@ void CSBattlePreviewPage::LayoutObstacleSidebar(const CRect& client)
 	const int width = right - left;
 	for (CWnd* control : {static_cast<CWnd*>(&m_characterTabButton),
 		static_cast<CWnd*>(&m_brushTabButton),
-		static_cast<CWnd*>(&m_hideSidebarButton),
 		static_cast<CWnd*>(&m_previousPageButton),
 		static_cast<CWnd*>(&m_nextPageButton),
-		static_cast<CWnd*>(&m_undoButton),
-		static_cast<CWnd*>(&m_quickModeButton),
 		static_cast<CWnd*>(&m_copyPersonModeButton),
 		static_cast<CWnd*>(&m_unrestrictedTerrainModeButton),
-		static_cast<CWnd*>(&m_conditionTreeButton),
-		static_cast<CWnd*>(&m_activationButton),
-		static_cast<CWnd*>(&m_variableControlButton),
-		static_cast<CWnd*>(&m_previewModeButton),
 		static_cast<CWnd*>(&m_unitParametersButton),
 		static_cast<CWnd*>(&m_searchEdit),
 		static_cast<CWnd*>(&m_deploymentCombo),
 		static_cast<CWnd*>(&m_characterList),
 		static_cast<CWnd*>(&m_pageLabel)}) {
-		if (control->GetSafeHwnd() != nullptr) control->ShowWindow(SW_HIDE);
+		if (control->GetSafeHwnd() != nullptr) preview_show(*control,SW_HIDE);
 	}
 
 	// These are independent page selectors in the status-header side column.
-	m_showSidebarButton.MoveWindow(left, 6, width, 24);
-	m_showSidebarButton.ShowWindow(SW_SHOW);
-	m_obstaclePageButton.MoveWindow(left, 32, width, 22);
-	m_obstaclePageButton.ShowWindow(SW_SHOW);
+	preview_move(m_showSidebarButton,left, 6, width, 24);
+	preview_show(m_showSidebarButton,SW_SHOW);
+	preview_move(m_obstaclePageButton,left, 32, width, 22);
+	preview_show(m_obstaclePageButton,SW_SHOW);
 
-	m_mapOperationStatus.SetWindowText(_T("左键添加 / 右键移除"));
-	m_mapOperationStatus.MoveWindow(left, 62, width, 22);
-	m_mapOperationStatus.ShowWindow(SW_SHOW);
+	preview_text(m_obstaclePageTitle,_T("地图工具 · 战场障碍"));
+	preview_move(m_obstaclePageTitle,left, 62, (std::max)(0,width-60), 24);
+ preview_move(m_hideSidebarButton,left+(std::max)(0,width-56),62,(std::min)(56,width),24);preview_show(m_hideSidebarButton,SW_SHOW);
+	preview_show(m_obstaclePageTitle,SW_SHOW);
+	preview_show(m_mapOperationStatus,SW_HIDE);
 	CString clearLabel;
 	clearLabel.Format(_T("清空（%u）"),
 		static_cast<unsigned>(m_obstacleDrafts.items().size()));
-	m_clearObstacleDraftsButton.SetWindowText(clearLabel);
-	m_clearObstacleDraftsButton.MoveWindow(left, 88, width, 22);
-	m_clearObstacleDraftsButton.ShowWindow(
-		m_obstacleDrafts.empty() ? SW_HIDE : SW_SHOW);
+	preview_text(m_clearObstacleDraftsButton,clearLabel);
+	preview_font(m_obstacleDefaultsButton,&m_uiFont);
+ preview_font(m_clearObstacleDraftsButton,&m_uiFont);
+	preview_move(m_obstacleDefaultsButton,left, 88, width / 2 - 2, 22);
+	preview_show(m_obstacleDefaultsButton,SW_SHOW);
+	preview_move(m_clearObstacleDraftsButton,left + width / 2 + 2, 88, width / 2 - 2, 22);
+	preview_show(m_clearObstacleDraftsButton,
+		SW_SHOW);
+	if((m_clearObstacleDraftsButton.IsWindowEnabled()!=FALSE)!=!m_obstacleDrafts.empty())m_clearObstacleDraftsButton.EnableWindow(!m_obstacleDrafts.empty());
 
 	const int gap = 4;
 	const int buttonWidth = (std::max)(0, (width - 2 * gap) / 3);
-	const int buttonsTop = 116;
+	const int buttonsTop = 172+(m_regionToolsExpanded?9*24:0);
+	preview_font(m_obstacleMultiSelectButton,&m_uiFont);
+	preview_text(m_obstacleMultiSelectButton,m_obstacleSelection.enabled ? L"停止多选障碍物" : L"多选障碍物");
+	preview_move(m_obstacleMultiSelectButton,left,116,width,22);
+	preview_show(m_obstacleMultiSelectButton,SW_SHOW);
+	preview_font(m_mapCommandsButton,&m_uiFont);
+ preview_text(m_mapCommandsButton,m_regionToolsExpanded?L"区域操作 ▴":L"区域操作 ▾");
+	preview_move(m_mapCommandsButton,left,144,width,22);
+	preview_show(m_mapCommandsButton,SW_SHOW);
+ for(int i=0;i<9;++i){preview_move(m_regionToolButtons[i],left,172+i*24,width,22);preview_show(m_regionToolButtons[i],m_regionToolsExpanded?SW_SHOW:SW_HIDE);}
 	for (int type = 0; type < 3; ++type) {
 		const int x = left + type * (buttonWidth + gap);
 		const int itemWidth = type == 2
 			? (std::max)(0, width - 2 * (buttonWidth + gap))
 			: buttonWidth;
-		m_obstacleTypeButtons[type].MoveWindow(x, buttonsTop,
-			itemWidth, 56);
-		m_obstacleTypeButtons[type].ShowWindow(SW_SHOW);
+		preview_move(m_obstacleTypeButtons[type],x, buttonsTop,
+			itemWidth, 78);
+		preview_show(m_obstacleTypeButtons[type],SW_SHOW);
 	}
-	m_writebackButton.MoveWindow(left, buttonsTop + 62, width, 26);
-	m_writebackButton.ShowWindow(SW_SHOW);
 }
 
-void CSBattlePreviewPage::LayoutCollapsedControlToolbar()
+void CSBattlePreviewPage::LayoutPreviewControlToolbar()
 {
+	CRect client;
+	GetClientRect(&client);
 	const int margin = 8;
 	const int controlGap = 4;
 	const int writebackGap = 12;
 	const int toolbarY = kStatusHeaderHeight + 3;
 	const int toolbarHeight = 22;
 	const int availableWidth = (std::max)(0, m_canvasRect.Width() - 2 * margin);
-	const int writebackWidth = (std::min)(92, availableWidth);
+	const int writebackWidth = (std::min)(92, availableWidth / 2);
 	const int writebackX = m_canvasRect.right - margin - writebackWidth;
-	m_writebackButton.MoveWindow(writebackX, toolbarY,
-		writebackWidth, toolbarHeight);
-	m_writebackButton.SetFont(m_writebackFont.GetSafeHandle() != nullptr
-		? &m_writebackFont : &m_uiFont);
-	m_writebackButton.ShowWindow(SW_SHOW);
+	const int undoWidth = (std::min)(88, (std::max)(0, availableWidth - writebackWidth - 6));
+	const int undoX = writebackX - 6 - undoWidth;
+	preview_move(m_undoButton,undoX, toolbarY, undoWidth, toolbarHeight, FALSE);
+	preview_font(m_undoButton,m_writebackFont.GetSafeHandle() != nullptr
+		? &m_writebackFont : &m_uiFont, FALSE);
+	preview_show(m_undoButton,SW_SHOW);
+	preview_move(m_writebackButton,writebackX, toolbarY,
+		writebackWidth, toolbarHeight, FALSE);
+	preview_font(m_writebackButton,m_writebackFont.GetSafeHandle() != nullptr
+		? &m_writebackFont : &m_uiFont, FALSE);
+	preview_show(m_writebackButton,SW_SHOW);
 
 	struct ToolbarControl {
 		CButton* button;
@@ -2704,26 +2813,37 @@ void CSBattlePreviewPage::LayoutCollapsedControlToolbar()
 	};
 	std::vector<ToolbarControl> controls;
 	controls.push_back({ &m_quickModeButton, 100 });
-	controls.push_back({ &m_copyPersonModeButton, 70 });
-	controls.push_back({ &m_unrestrictedTerrainModeButton, 100 });
+	if (!m_sidebarVisible && !m_obstaclePageActive) {
+		controls.push_back({ &m_copyPersonModeButton, 70 });
+		controls.push_back({ &m_unrestrictedTerrainModeButton, 100 });
+	}
+	controls.push_back({ &m_dynamicPreviewButton, 132 });
 	controls.push_back({ &m_previewModeButton, 100 });
-	controls.push_back({ &m_unitParametersButton, 78 });
-	if (ActiveSession().condition_button_visible)
+	if (!m_sidebarVisible && !m_obstaclePageActive)
+		controls.push_back({ &m_unitParametersButton, 78 });
+	if (DynamicConditionButtonVisible())
 		controls.push_back({ &m_conditionTreeButton, 76 });
 	else
-		m_conditionTreeButton.ShowWindow(SW_HIDE);
-	if (ActiveSession().activation_button_visible)
-		controls.push_back({ &m_activationButton, 108 });
-	else
-		m_activationButton.ShowWindow(SW_HIDE);
-	if (ActiveSession().variable_button_visible)
+		preview_show(m_conditionTreeButton,SW_HIDE);
+	if (DynamicVariableButtonVisible())
 		controls.push_back({ &m_variableControlButton, 82 });
 	else
-		m_variableControlButton.ShowWindow(SW_HIDE);
+		preview_show(m_variableControlButton,SW_HIDE);
+	const bool showActivation = DynamicActivationButtonVisible();
+	const int activationWidth = showActivation ? (std::min)(122,
+		(std::max)(0, undoX - margin - controlGap)) : 0;
+	const int actionGroupX = showActivation ? undoX - controlGap - activationWidth : undoX;
+	if (showActivation) {
+		preview_move(m_activationButton,actionGroupX, toolbarY, activationWidth, toolbarHeight);
+		preview_font(m_activationButton,m_writebackFont.GetSafeHandle() != nullptr ? &m_writebackFont : &m_uiFont, FALSE);
+		preview_show(m_activationButton,SW_SHOW);
+	} else {
+		preview_show(m_activationButton,SW_HIDE);
+	}
 	const int gaps = controls.empty() ? 0
 		: static_cast<int>(controls.size() - 1) * controlGap;
 	const int controlsBudget = (std::max)(0,
-		writebackX - writebackGap - margin - gaps);
+		actionGroupX - writebackGap - margin - gaps);
 	int preferredTotal = 0;
 	for (const auto& control : controls)
 		preferredTotal += control.preferred_width;
@@ -2734,22 +2854,34 @@ void CSBattlePreviewPage::LayoutCollapsedControlToolbar()
 	for (const auto& control : controls) {
 		const int width = static_cast<int>(std::lround(
 			control.preferred_width * scale));
-		control.button->MoveWindow(x, toolbarY, width, toolbarHeight);
-		control.button->SetFont(m_toolbarFont.GetSafeHandle() != nullptr
-			? &m_toolbarFont : &m_uiFont);
-		control.button->ShowWindow(SW_SHOW);
+		preview_move(*control.button,x, toolbarY, width, toolbarHeight);
+		preview_font(*control.button,control.button == &m_activationButton &&
+			m_writebackFont.GetSafeHandle() != nullptr ? &m_writebackFont
+			: m_toolbarFont.GetSafeHandle() != nullptr ? &m_toolbarFont : &m_uiFont);
+		preview_show(*control.button,SW_SHOW);
 		x += width + controlGap;
 	}
+	// Layout uses some non-repainting moves; invalidate children as one batch.
+
 }
 
 void CSBattlePreviewPage::RefreshEditorControls()
 {
+ if(m_activeSession)ActiveSession().editor_state.own_unit_bindings=ActiveSession().own_unit_bindings;
+	EnsureDynamicObstacleSprites();
 	if (!m_controlsCreated) return;
 	const auto setTextIfChanged = [](CWnd& control, LPCTSTR text) {
 		CString current;
 		control.GetWindowText(current);
 		if (current.Compare(text) != 0) control.SetWindowText(text);
 	};
+	setTextIfChanged(m_obstacleMultiSelectButton,m_obstacleSelection.enabled?L"停止多选障碍物":L"多选障碍物");
+	setTextIfChanged(m_dynamicPreviewButton,m_dynamicPreviewEnabled?L"关闭动态预览":L"激活动态预览");
+ const bool roleDrafts=std::any_of(ActiveSession().editor_state.battle.units.begin(),ActiveSession().editor_state.battle.units.end(),[](const auto& u){return u.editor_staged_new&&!u.editor_pending_delete;});
+ if((m_clearRoleDraftsButton.IsWindowEnabled()!=FALSE)!=roleDrafts)preview_enable(m_clearRoleDraftsButton,roleDrafts);
+	setTextIfChanged(m_showSidebarButton,
+		m_sidebarVisible && !m_obstaclePageActive
+			? _T("角色/笔刷 •") : _T("角色/笔刷"));
 	setTextIfChanged(m_characterTabButton, m_brushTabActive
 		? _T("角色列表") : _T("角色列表 •"));
 	setTextIfChanged(m_brushTabButton, m_brushTabActive
@@ -2757,9 +2889,9 @@ void CSBattlePreviewPage::RefreshEditorControls()
 	CString obstaclePageLabel;
 	if (m_obstacleDrafts.empty()) {
 		obstaclePageLabel = m_obstaclePageActive
-			? _T("障碍物 •") : _T("障碍物");
+			? _T("地图工具 •") : _T("地图工具");
 	} else {
-		obstaclePageLabel.Format(_T("障碍物%s（%u）"),
+		obstaclePageLabel.Format(_T("地图工具%s（%u）"),
 			m_obstaclePageActive ? _T(" •") : _T(""),
 			static_cast<unsigned>(m_obstacleDrafts.items().size()));
 	}
@@ -2783,39 +2915,43 @@ void CSBattlePreviewPage::RefreshEditorControls()
 	const bool previousEnabled = !m_brushTabActive &&
 		ActiveSession().editor_state.characters.current_page > 0;
 	if ((m_previousPageButton.IsWindowEnabled() != FALSE) != previousEnabled)
-		m_previousPageButton.EnableWindow(previousEnabled);
+		preview_enable(m_previousPageButton,previousEnabled);
 	const bool nextEnabled = !m_brushTabActive && pages > 0 &&
 		ActiveSession().editor_state.characters.current_page + 1 < pages;
 	if ((m_nextPageButton.IsWindowEnabled() != FALSE) != nextEnabled)
-		m_nextPageButton.EnableWindow(nextEnabled);
+		preview_enable(m_nextPageButton,nextEnabled);
 	const bool undoEnabled = !ActiveSession().stale &&
 		(ActiveSession().native_writeback_transaction.undo_available() ||
-			(m_editorOps && m_editorOps->CanUndo()));
+			!ActiveSession().map_operations.obstacle_undo.empty() ||
+			(!m_dynamicPreviewEnabled && m_editorOps && m_editorOps->CanUndo()));
 	if ((m_undoButton.IsWindowEnabled() != FALSE) != undoEnabled)
-		m_undoButton.EnableWindow(undoEnabled);
+		preview_enable(m_undoButton,undoEnabled);
 	const bool obstacleOnlyWriteback = !m_obstacleDrafts.empty() &&
 		!HasPendingPreviewDrafts();
 	const bool writebackEnabled = m_editorOps != nullptr &&
+		(!m_dynamicPreviewEnabled || obstacleOnlyWriteback) &&
 		ActiveSession().baseline_capture.ok &&
 		(ActiveSession().active_condition_scope.writeback_scope_resolved ||
 			obstacleOnlyWriteback) &&
 		!ActiveSession().stale && !ActiveSession().native_writeback_rebase_required;
 	if ((m_writebackButton.IsWindowEnabled() != FALSE) != writebackEnabled)
-		m_writebackButton.EnableWindow(writebackEnabled);
+		preview_enable(m_writebackButton,writebackEnabled);
 	const bool previewModeEnabled =
 		ActiveSession().editor_state.battle.map.projection_valid;
 	if ((m_previewModeButton.IsWindowEnabled() != FALSE) != previewModeEnabled)
-		m_previewModeButton.EnableWindow(previewModeEnabled);
+		preview_enable(m_previewModeButton,previewModeEnabled);
 	const bool mapOperationsEnabled = m_editorOps != nullptr &&
+		(!m_dynamicPreviewEnabled || m_dynamicPreviewReady) &&
 		ActiveSession().ui.quick_mode_enabled &&
 		ActiveSession().editor_state.battle.map.projection_valid &&
 		ActiveSession().baseline_capture.ok && !ActiveSession().stale &&
 		!ActiveSession().native_writeback_rebase_required;
+	for(auto& button:m_regionToolButtons)if((button.IsWindowEnabled()!=FALSE)!=mapOperationsEnabled)button.EnableWindow(mapOperationsEnabled);
 	const bool obstaclePageEnabled = m_editorOps != nullptr &&
 		ActiveSession().editor_state.battle.map.projection_valid;
 	if ((m_obstaclePageButton.IsWindowEnabled() != FALSE) !=
 		obstaclePageEnabled)
-		m_obstaclePageButton.EnableWindow(obstaclePageEnabled);
+		preview_enable(m_obstaclePageButton,obstaclePageEnabled);
 	for (auto& button : m_obstacleTypeButtons) {
 		if ((button.IsWindowEnabled() != FALSE) != mapOperationsEnabled)
 			button.EnableWindow(mapOperationsEnabled);
@@ -2833,14 +2969,35 @@ void CSBattlePreviewPage::RefreshEditorControls()
 			ActiveSession().ui.unrestricted_terrain_mode
 				? BST_CHECKED : BST_UNCHECKED);
 	}
-	const bool deploymentEnabled = m_editorOps != nullptr;
+	const bool deploymentEnabled = m_editorOps != nullptr &&
+		!m_dynamicPreviewEnabled;
 	if ((m_deploymentCombo.IsWindowEnabled() != FALSE) != deploymentEnabled)
-		m_deploymentCombo.EnableWindow(deploymentEnabled);
+		preview_enable(m_deploymentCombo,deploymentEnabled);
 	const bool defaultsEnabled = deploymentEnabled;
 	if ((m_unitParametersButton.IsWindowEnabled() != FALSE) != defaultsEnabled)
-		m_unitParametersButton.EnableWindow(defaultsEnabled);
+		preview_enable(m_unitParametersButton,defaultsEnabled);
 	if (m_unitParametersPane.GetSafeHwnd() != nullptr)
 		m_unitParametersPane.UpdateState(ActiveSession().editor_state);
+	const bool editorControlsEnabled = !m_dynamicPreviewEnabled;
+	for (CWnd* control : {static_cast<CWnd*>(&m_quickModeButton),
+		static_cast<CWnd*>(&m_copyPersonModeButton),
+		static_cast<CWnd*>(&m_unrestrictedTerrainModeButton),
+		static_cast<CWnd*>(&m_characterTabButton),
+		static_cast<CWnd*>(&m_brushTabButton),
+		static_cast<CWnd*>(&m_previousPageButton),
+		static_cast<CWnd*>(&m_nextPageButton),
+		static_cast<CWnd*>(&m_searchEdit),
+		static_cast<CWnd*>(&m_deploymentCombo),
+		static_cast<CWnd*>(&m_characterList)})
+		preview_enable(*control,editorControlsEnabled);
+	if (m_unitParametersButton.GetSafeHwnd() != nullptr)
+		preview_enable(m_unitParametersButton,editorControlsEnabled && defaultsEnabled);
+	if (m_dynamicPreviewButton.GetSafeHwnd() != nullptr) {
+		const bool toggleEnabled = m_dynamicPreviewEnabled ||
+			(m_activeDocument != nullptr && !ActiveSession().stale &&
+			 !m_documentPath.IsEmpty());
+		preview_enable(m_dynamicPreviewButton,toggleEnabled);
+	}
 }
 
 void CSBattlePreviewPage::RefreshCharacterList()
@@ -3031,21 +3188,31 @@ void CSBattlePreviewPage::StampAt(
 		return;
 	}
 	const auto result = m_editorOps->Place(coordinate);
-	ShowOperationResult(result);
+ if(!result.diagnostic.empty())m_diagnostic=result.diagnostic.c_str();
+ RefreshSelectedUnitIndex();
+ InvalidateRect(m_canvasRect,FALSE);
+ // One pending timer for the stroke: mouse moves must not restart its deadline.
+ if(result.ok && result.changed && !m_brushRefreshPending){
+  m_brushRefreshPending=true;
+  if(!SetTimer(0xB602,33,nullptr)){m_brushRefreshPending=false;UpdateWindow();}
+ }
 }
 
 void CSBattlePreviewPage::SetSidebarVisible(bool visible)
 {
 	const bool changed = m_sidebarVisible != visible ||
-		(visible && m_obstaclePageActive);
+		m_obstaclePageActive;
 	if (!changed) return;
-	if (visible) m_obstaclePageActive = false;
+	m_obstaclePageActive = false;
 	m_sidebarVisible = visible;
 	LayoutEditorControls();
 }
 
 void CSBattlePreviewPage::OnDestroy()
 {
+ KillTimer(0xB602);m_brushRefreshPending=false;
+	KillTimer(0xB601);
+	m_spellPreviews.clear();
 	if (m_panActive) ReleaseCapture();
 	if (m_leftStampActive) ReleaseCapture();
 	if (m_selectionGestureActive) ReleaseCapture();
@@ -3066,6 +3233,7 @@ void CSBattlePreviewPage::OnDestroy()
 bool CSBattlePreviewPage::RequestPreviewRefresh(
 	CTreeCtrl& tree, HTREEITEM selectedItem, const wchar_t* documentPath)
 {
+	m_sourceTreeControl = &tree;
 	if (m_activeSession == nullptr || m_activeDocument == nullptr)
 		return false;
 	#if defined(_DEBUG) && defined(CCZ_S_BATTLE_PREVIEW_PERF)
@@ -3073,10 +3241,20 @@ bool CSBattlePreviewPage::RequestPreviewRefresh(
 	#endif
 	if (m_activeDocument->GetSPreviewDocumentId() !=
 		ActiveSession().document_id) return false;
-	if (ActiveSession().stale) return true;
 	const ccz::editor_preview::BattlePreviewDocumentVersion currentVersion{
 		m_activeDocument->GetPreviewContentEpoch(),
 		m_activeDocument->GetPreviewTreeGeneration()};
+	if (m_dynamicPreviewEnabled && m_dynamicPreviewReady &&
+		currentVersion.content_epoch == m_dynamicContentEpoch &&
+		currentVersion.tree_generation == m_dynamicTreeGeneration) {
+		RefreshDynamicPreview(tree, selectedItem, documentPath);
+		return true;
+	}
+	if (ActiveSession().stale) {
+		if (m_dynamicPreviewEnabled)
+			RefreshDynamicPreview(tree, selectedItem, documentPath);
+		return true;
+	}
 	const auto activationCheck =
 		ccz::editor_preview::CheckBattlePreviewActivation(
 			ActiveSession().has_baseline,
@@ -3088,14 +3266,20 @@ bool CSBattlePreviewPage::RequestPreviewRefresh(
 			m_sourceTreeWindow = nullptr;
 			MarkSessionStale(
 				L"S 剧本树已重建，旧节点句柄和原生撤回记录已失效。当前临时布置已保留，写回与撤回已暂停；切换模式并确认丢弃后可重新读取。");
+			if (m_dynamicPreviewEnabled)
+				RefreshDynamicPreview(tree, selectedItem, documentPath);
 			return true;
 		}
 		ClearDocument();
 		m_documentPath = documentPath ? documentPath : L"";
 		m_sourceTreeWindow = tree.GetSafeHwnd();
 	}
-	if (ActiveSession().ui.quick_mode_enabled)
-		return RequestQuickModeRefresh(tree, documentPath);
+	if (ActiveSession().ui.quick_mode_enabled) {
+		const bool refreshed = RequestQuickModeRefresh(tree, documentPath);
+		if (m_dynamicPreviewEnabled)
+			RefreshDynamicPreview(tree, selectedItem, documentPath);
+		return refreshed;
+	}
 
 	ccz::editor_preview::CapturedEditorTree snapshot;
 	std::wstring diagnostic;
@@ -3107,6 +3291,8 @@ bool CSBattlePreviewPage::RequestPreviewRefresh(
 		m_documentPath = documentPath ? documentPath : L"";
 		AppendDiagnostic(diagnostic.empty()
 			? L"无法读取 S 剧本结构" : diagnostic);
+		if (m_dynamicPreviewEnabled)
+			RefreshDynamicPreview(tree, selectedItem, documentPath);
 		Invalidate(FALSE);
 		return true;
 	}
@@ -3122,8 +3308,29 @@ bool CSBattlePreviewPage::RequestPreviewRefresh(
 			ActiveSession().baseline_capture.input.scope_key) {
 		// S preview state belongs to the whole Section; selecting another
 		// instruction inside it must not discard its placement cache or undo.
-		UpdateConditionActivationTarget(
-			capture.snapshot.selected_handle);
+		const bool conditionSelectionChanged =
+			ActiveSession().condition_model == nullptr ||
+			ActiveSession().condition_model->selected_target_key !=
+				capture.selected_target_key;
+		if (conditionSelectionChanged && !m_dynamicPreviewEnabled) {
+			const auto selectedCondition =
+				ccz::editor_preview::BuildBattleConditionTree(
+					capture, ActiveSession().condition_catalog,
+					ActiveSession().condition_options);
+			if (selectedCondition.ok && selectedCondition.model != nullptr) {
+				ActiveSession().condition_model = selectedCondition.model;
+			} else {
+				ActiveSession().condition_model.reset();
+				AppendDiagnostic(selectedCondition.diagnostic.empty()
+					? L"无法按当前选中指令刷新 S 战场条件模型"
+					: selectedCondition.diagnostic);
+			}
+		}
+		UpdateConditionActivationTarget(capture.selected_target_key);
+		if (conditionSelectionChanged && !m_dynamicPreviewEnabled)
+			RefreshConditionTree();
+		if (m_dynamicPreviewEnabled)
+			RefreshDynamicPreview(tree, selectedItem, documentPath);
 		return true;
 	}
 	if (!capture.ok) {
@@ -3132,6 +3339,8 @@ bool CSBattlePreviewPage::RequestPreviewRefresh(
 		m_documentPath = documentPath ? documentPath : L"";
 		AppendDiagnostic(capture.diagnostic.empty()
 			? L"无法读取 S 战场预览结构" : capture.diagnostic);
+		if (m_dynamicPreviewEnabled)
+			RefreshDynamicPreview(tree, selectedItem, documentPath);
 		Invalidate(FALSE);
 		return true;
 	}
@@ -3139,6 +3348,8 @@ bool CSBattlePreviewPage::RequestPreviewRefresh(
 	ClearDocument();
 	m_documentPath = documentPath ? documentPath : L"";
 	LoadCapturedBattle(std::move(capture), tree.GetSafeHwnd());
+	if (m_dynamicPreviewEnabled)
+		RefreshDynamicPreview(tree, selectedItem, documentPath);
 	Invalidate(FALSE);
 	return true;
 }
@@ -3176,7 +3387,10 @@ bool CSBattlePreviewPage::RequestQuickModeRefresh(
 					requestedPath.GetString(), freshPinnedSection.section_root);
 			if (freshSectionRevision == ActiveSession().quick_mode_section_revision) {
 				UpdateConditionActivationTarget(
-					reinterpret_cast<std::uintptr_t>(tree.GetSelectedItem()));
+					find_battle_node_key_by_runtime_handle(
+						ActiveSession().baseline_capture.input.nodes,
+						reinterpret_cast<std::uintptr_t>(
+							tree.GetSelectedItem())));
 				const bool documentContentChanged =
 					m_activeDocument->GetPreviewContentEpoch() !=
 					ActiveSession().observed_version.content_epoch;
@@ -3265,6 +3479,618 @@ bool CSBattlePreviewPage::RequestQuickModeRefresh(
 	return true;
 }
 
+bool CSBattlePreviewPage::RefreshDynamicPreview(
+	CTreeCtrl& tree, HTREEITEM selectedItem, const wchar_t* documentPath)
+{
+	const ccz::preview::LogicalNodeKey previousTargetScope =
+		m_dynamicTargetCapture.ok
+			? m_dynamicTargetCapture.input.scope_key
+			: ccz::preview::LogicalNodeKey{};
+	const auto previousOptions = m_dynamicConditionOptions;
+    const auto previousRevision=m_dynamicTargetCapture.input.section_revision;
+    if(!previousTargetScope.empty())ActiveSession().dynamic_condition_choices[previousTargetScope]={previousRevision,previousOptions};
+	m_dynamicPreviewReady = false;
+	m_dynamicTargetCapture = {};
+	m_dynamicConditionModel.reset();
+	m_dynamicVariableIndex = {};
+	m_dynamicActivationTarget.clear();
+	m_dynamicTargetNode.clear();
+	m_dynamicUnknownStatusConditions.clear();
+	m_dynamicTargetIsScene1 = false;
+	m_dynamicTargetIsSectionRoot = false;
+	m_dynamicScene1Baseline = {};
+	m_dynamicScene1Obstacles.clear();
+	m_dynamicScene1Plan = {};
+	m_dynamicScene1BaselineComplete = false;
+	m_dynamicBaselineDiagnostic.clear();
+	m_dynamicPlan = {};
+	m_dynamicProjection = {};
+	m_dynamicMapBitmap.reset();
+	m_dynamicMapImagePath.clear();
+	m_dynamicMapImageRevision = 0;
+	m_dynamicDiagnostic.clear();
+	m_dynamicPredecessorBanner.clear();
+	m_dynamicAssets.Clear();
+
+	const std::wstring path = documentPath != nullptr ? documentPath : L"";
+	ccz::editor_preview::CapturedEditorTree selectedSnapshot;
+	std::wstring diagnostic;
+	if (!ccz::editor_preview::CaptureEditorTreeSnapshot(tree, selectedItem,
+			path, selectedSnapshot, diagnostic) ||
+		selectedSnapshot.section_path.empty() ||
+		selectedSnapshot.section_root.runtime_handle == 0) {
+		m_dynamicDiagnostic = diagnostic.empty()
+			? L"动态预览需要先选中一个 Section"
+			: diagnostic;
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	const std::uintptr_t targetSectionHandle =
+		selectedSnapshot.section_root.runtime_handle;
+	const auto targetSectionPath = selectedSnapshot.section_path;
+	const auto resolution = ccz::editor_preview::ResolveScene1BattleSection(
+		std::move(selectedSnapshot));
+	if (!resolution.resolved || !resolution.capture.ok) {
+		m_dynamicDiagnostic = resolution.diagnostic.empty()
+			? L"無法解析 Scene1 戰場基線"
+			: resolution.diagnostic;
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+
+	ccz::editor_preview::CapturedEditorTree targetSnapshot;
+	if (!ccz::editor_preview::SelectCapturedBattleSection(
+			resolution.capture.snapshot, targetSectionHandle,
+			targetSectionPath, targetSnapshot, diagnostic)) {
+		m_dynamicDiagnostic = diagnostic.empty()
+			? L"无法从当前剧本快照定位所选 Section"
+			: diagnostic;
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	ccz::editor_preview::BattlePreviewCapture targetCapture =
+		ccz::editor_preview::BuildBattlePreviewInput(std::move(targetSnapshot));
+	if (!targetCapture.ok) {
+		m_dynamicDiagnostic = targetCapture.diagnostic.empty()
+			? L"所选 Section 无法建立动态预览输入"
+			: targetCapture.diagnostic;
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	const bool sameTargetSection = previousTargetScope ==
+		targetCapture.input.scope_key;
+	m_dynamicTargetIsScene1 =
+		targetSectionHandle == resolution.section_handle;
+	m_dynamicTargetIsSectionRoot =
+		targetCapture.snapshot.selected_handle ==
+		targetCapture.snapshot.section_root.runtime_handle;
+	const auto savedChoice=ActiveSession().dynamic_condition_choices.find(targetCapture.input.scope_key);
+    m_dynamicConditionOptions = sameTargetSection && previousRevision==targetCapture.input.section_revision
+        ? previousOptions : savedChoice!=ActiveSession().dynamic_condition_choices.end() && savedChoice->second.first==targetCapture.input.section_revision
+        ? savedChoice->second.second : ccz::preview::ReplayOptions{};
+
+	auto catalog = ActiveSession().condition_catalog;
+	if (!catalog.valid) catalog =
+		ccz::editor_preview::MakeEditorPreviewCatalog();
+	ccz::preview::ReplayOptions scene1Options =
+		ActiveSession().condition_options;
+	for (const auto& value : m_dynamicConditionOptions.simulated_variables.boolean_variables)
+		scene1Options.simulated_variables.boolean_variables[value.first] = value.second;
+	for (const auto& value : m_dynamicConditionOptions.simulated_variables.integer_variables)
+		scene1Options.simulated_variables.integer_variables[value.first] = value.second;
+    const auto savedScene1Choice = ActiveSession().dynamic_condition_choices.find(resolution.capture.input.scope_key);
+    if (savedScene1Choice != ActiveSession().dynamic_condition_choices.end() &&
+        savedScene1Choice->second.first == resolution.capture.input.section_revision) {
+        for (const auto& item : savedScene1Choice->second.second.predicate_states) scene1Options.predicate_states[item.first] = item.second;
+        for (const auto& item : savedScene1Choice->second.second.selected_case_by_choice) scene1Options.selected_case_by_choice[item.first] = item.second;
+    }
+    for (const auto& item : m_dynamicConditionOptions.predicate_states) scene1Options.predicate_states[item.first] = item.second;
+    for (const auto& item : m_dynamicConditionOptions.selected_case_by_choice) scene1Options.selected_case_by_choice[item.first] = item.second;
+	const auto scene1Condition =
+		ccz::editor_preview::BuildBattleConditionTree(
+			resolution.capture, catalog, scene1Options);
+	if (!scene1Condition.ok || scene1Condition.model == nullptr) {
+		m_dynamicDiagnostic = scene1Condition.diagnostic.empty()
+			? L"无法建立 Scene1 条件树基线"
+			: scene1Condition.diagnostic;
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+    ccz::preview::BattleParseOptions identityOptions;
+    identityOptions.scope_root_key = resolution.capture.input.scope_key;
+    identityOptions.filter_deployment_nodes = true;
+    identityOptions.reachable_deployment_keys = scene1Condition.scope.reachable_deployment_keys;
+    auto identityBoard = ccz::preview::parse_battle_instructions(
+        resolution.capture.input.document_path, resolution.capture.input.nodes, identityOptions);
+    std::wstring identityBindingDiagnostic;
+    ccz::editor_preview::ApplyBattleOwnUnitBindings(identityBoard.state,
+        ActiveSession().own_unit_bindings, identityBindingDiagnostic);
+    scene1Options.simulated_variables.battle_unit_identity_available = true;
+    scene1Options.simulated_variables.known_battle_unit_data_ids.clear();
+    scene1Options.simulated_variables.unresolved_battle_status_data_ids.clear();
+    for (const auto& unit : identityBoard.state.units)
+        if (unit.fields_decoded && !unit.editor_pending_delete && unit.data_id >= 0)
+            scene1Options.simulated_variables.known_battle_unit_data_ids.insert(unit.data_id);
+	ccz::preview::SimulationEnvironment chainEnvironment;
+	const auto scene1Plan =
+		ccz::preview::build_native_battle_map_plan_to_end(
+		*scene1Condition.model, battle_portrait_profile(), scene1Options,
+		&chainEnvironment);
+	m_dynamicReplayOptions = m_dynamicConditionOptions;
+	if (!m_dynamicTargetIsScene1)
+		m_dynamicReplayOptions.simulated_variables = chainEnvironment;
+    else {
+        m_dynamicReplayOptions.simulated_variables.battle_unit_identity_available = true;
+        m_dynamicReplayOptions.simulated_variables.known_battle_unit_data_ids = scene1Options.simulated_variables.known_battle_unit_data_ids;
+        m_dynamicReplayOptions.simulated_variables.unresolved_battle_status_data_ids.clear();
+    }
+
+	if (!scene1Plan.complete) {
+        if (!scene1Plan.unresolved_status_predicates.empty()) {
+            // Expose the blocking Scene1 condition even if the selected
+            // instruction belongs to a later Section. Its manual choices are
+            // saved under Scene1's scope for the next refresh.
+            m_dynamicTargetCapture = resolution.capture;
+            m_dynamicConditionModel = scene1Condition.model;
+            m_dynamicConditionOptions = scene1Options;
+            m_dynamicUnknownStatusConditions = std::set<ccz::preview::LogicalNodeKey>(
+                scene1Plan.unresolved_status_predicates.begin(), scene1Plan.unresolved_status_predicates.end());
+        }
+		m_dynamicDiagnostic = scene1Plan.diagnostic.empty()
+			? L"Scene1 条件路径未完整求值，无法确定动态预览的初始棋盘"
+			: scene1Plan.diagnostic;
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	ccz::preview::BattleParseOptions parseOptions;
+	parseOptions.scope_root_key = resolution.capture.input.scope_key;
+	parseOptions.filter_deployment_nodes = true;
+	parseOptions.reachable_deployment_keys =
+		scene1Condition.scope.reachable_deployment_keys;
+	parseOptions.filter_map_nodes = true;
+	for (const auto& item : scene1Plan.items) {
+		if (item.command.instruction_id == 0x27)
+			parseOptions.reachable_map_keys.push_back(item.logical_key);
+	}
+	const auto parsed = ccz::preview::parse_battle_instructions(
+		resolution.capture.input.document_path,
+		resolution.capture.input.nodes, parseOptions);
+	if (!parsed.ok || !parsed.state.map.valid || parsed.state.map.map_id < 0) {
+		m_dynamicDiagnostic = L"Scene1 战场地图或出场单位无法建立动态基线";
+		for (const auto& item : parsed.diagnostics) {
+			if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+			m_dynamicDiagnostic += item;
+		}
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	m_dynamicScene1Baseline = parsed.state;
+	std::wstring bindingDiagnostic;
+	if (!ccz::editor_preview::ApplyBattleOwnUnitBindings(m_dynamicScene1Baseline, ActiveSession().own_unit_bindings, bindingDiagnostic))
+		m_dynamicDiagnostic += bindingDiagnostic;
+	// Projection keeps this Scene1 record order; identity is independent of location.
+	for (std::size_t i = 0; i < m_dynamicScene1Baseline.units.size(); ++i)
+		m_dynamicScene1Baseline.units[i].editor_cache_id = i + 1;
+	for (const auto& item : parsed.diagnostics) {
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += item;
+	}
+
+	std::wstring assetDiagnostic;
+	m_dynamicAssets.LoadForDocument(resolution.capture.input.document_path,
+		m_dynamicScene1Baseline.map.map_id, &assetDiagnostic);
+	if (!assetDiagnostic.empty()) {
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += assetDiagnostic;
+	}
+	if (m_dynamicAssets.map_jpg_path().empty()) {
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += L"Scene1 地图 JPG 不可用";
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	const std::uint64_t mapRevision = m_dynamicAssets.map_jpg_revision();
+	if (m_dynamicMapImagePath != m_dynamicAssets.map_jpg_path() ||
+		m_dynamicMapImageRevision != mapRevision ||
+		m_dynamicMapBitmap == nullptr) {
+		Gdiplus::Bitmap* source = Gdiplus::Bitmap::FromFile(
+			m_dynamicAssets.map_jpg_path().c_str(), FALSE);
+		if (source == nullptr || source->GetLastStatus() != Gdiplus::Ok) {
+			delete source;
+			m_dynamicDiagnostic += L"；Scene1 地图 JPG 解码失败";
+			RefreshConditionTree();
+			RefreshDynamicToggle();
+			UpdateViewport();
+			Invalidate(FALSE);
+			return false;
+		}
+		const Gdiplus::Rect bounds(0, 0,
+			static_cast<INT>(source->GetWidth()),
+			static_cast<INT>(source->GetHeight()));
+		Gdiplus::Bitmap* converted = source->Clone(
+			bounds, PixelFormat32bppARGB);
+		delete source;
+		if (converted == nullptr || converted->GetLastStatus() != Gdiplus::Ok ||
+			converted->GetWidth() < kCellPixels ||
+			converted->GetHeight() < kCellPixels ||
+			converted->GetWidth() % kCellPixels != 0 ||
+			converted->GetHeight() % kCellPixels != 0) {
+			delete converted;
+			m_dynamicDiagnostic += L"；Scene1 JPG 尺寸无法映射到 48 像素棋盘格";
+			RefreshConditionTree();
+			RefreshDynamicToggle();
+			UpdateViewport();
+			Invalidate(FALSE);
+			return false;
+		}
+		m_dynamicMapBitmap.reset(converted);
+		m_dynamicMapImagePath = m_dynamicAssets.map_jpg_path();
+		m_dynamicMapImageRevision = mapRevision;
+	}
+	m_dynamicScene1Baseline.map.width = static_cast<int>(
+		m_dynamicMapBitmap->GetWidth() / kCellPixels);
+	m_dynamicScene1Baseline.map.height = static_cast<int>(
+		m_dynamicMapBitmap->GetHeight() / kCellPixels);
+	m_dynamicScene1Baseline.map.offset_x = 0;
+	m_dynamicScene1Baseline.map.offset_y = 0;
+	m_dynamicScene1Baseline.map.projection_valid = true;
+	if (!ccz::preview::decode_battle_hexzmap(m_dynamicAssets.hexzmap_e5(),
+			m_dynamicScene1Baseline.map.map_id,
+			m_dynamicScene1Baseline.map.width,
+			m_dynamicScene1Baseline.map.height,
+			m_dynamicScene1Baseline.terrain)) {
+		m_dynamicScene1Baseline.terrain.clear();
+	}
+	bool obstacleBaselineComplete = false;
+	std::wstring obstacleDiagnostic;
+	ccz::editor_preview::BuildBattleDynamicObstacleBaseline(scene1Plan,
+		m_dynamicScene1Baseline.map, m_dynamicScene1Obstacles,
+		obstacleBaselineComplete, obstacleDiagnostic);
+	if (!obstacleBaselineComplete && obstacleDiagnostic.empty())
+		obstacleDiagnostic = L"Scene1 障碍物路径未完整求值，只显示已知前缀";
+	if (!obstacleDiagnostic.empty()) {
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += obstacleDiagnostic;
+	}
+	if (!obstacleBaselineComplete) {
+		m_dynamicBaselineDiagnostic = m_dynamicDiagnostic;
+		AppendDiagnostic(L"Scene1 障碍物基线不完整，无法生成动态预览结果");
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	m_dynamicScene1Plan = ccz::editor_preview::BuildBattleDynamicMapPlan(
+		scene1Plan, m_dynamicScene1Baseline);
+	if (m_dynamicScene1Plan.events.empty() &&
+		m_dynamicScene1Plan.path_complete) {
+		m_dynamicScene1Plan.diagnostic.clear();
+	}
+	// Scene1 is already the baseline prefix. Predecessors replay in chain order,
+	// excluding Scene1 and the current Section so neither executes twice.
+	if (!m_dynamicTargetIsScene1 && m_dynamicSectionRelations.UsesPredecessors(path)) {
+		const auto expectedCurrent = m_dynamicSectionRelations.ExpectedHandle(path, targetSectionPath);
+		if (expectedCurrent != 0 && expectedCurrent != targetSectionHandle) {
+			AppendDiagnostic(L"当前 Section 路径变化，请重建前序关系"); return false;
+		}
+		const auto sections = ccz::editor_preview::BattleSectionChoices(resolution.capture.snapshot);
+		for (const auto& predecessor : m_dynamicSectionRelations.Chain(path, targetSectionPath)) {
+			const auto found = std::find_if(sections.begin(), sections.end(),
+				[&](const auto& section) { return section.path == predecessor; });
+			if (found == sections.end() || (m_dynamicSectionRelations.ExpectedHandle(path, predecessor) != 0 &&
+				m_dynamicSectionRelations.ExpectedHandle(path, predecessor) != found->handle)) {
+				AppendDiagnostic(L"前序 Section 已不存在或路径变化，请在关系总览移除并重建关系");
+				RefreshDynamicToggle(); return false;
+			}
+			if (found->handle == resolution.section_handle) continue;
+			if (!m_dynamicPredecessorBanner.empty()) m_dynamicPredecessorBanner += L" → ";
+			m_dynamicPredecessorBanner += found->name;
+			ccz::editor_preview::CapturedEditorTree predecessorSnapshot;
+			if (!ccz::editor_preview::SelectCapturedBattleSection(resolution.capture.snapshot,
+				found->handle, found->path, predecessorSnapshot, diagnostic)) {
+				AppendDiagnostic(diagnostic); return false;
+			}
+			const auto predecessorCapture = ccz::editor_preview::BuildBattlePreviewInput(std::move(predecessorSnapshot));
+            auto predecessorOptions=m_dynamicReplayOptions;
+            const auto manual=ActiveSession().dynamic_condition_choices.find(predecessorCapture.input.scope_key);
+            if(manual!=ActiveSession().dynamic_condition_choices.end()&&manual->second.first==predecessorCapture.input.section_revision){
+                for(const auto& item:manual->second.second.predicate_states)predecessorOptions.predicate_states[item.first]=item.second;
+                for(const auto& item:manual->second.second.selected_case_by_choice)predecessorOptions.selected_case_by_choice[item.first]=item.second;
+            }
+            const auto predecessorCondition=ccz::editor_preview::BuildBattleConditionTree(predecessorCapture,catalog,predecessorOptions);
+			if (!predecessorCondition.ok || !predecessorCondition.model) {
+				AppendDiagnostic(predecessorCondition.diagnostic); return false;
+			}
+			const auto predecessorPlan = ccz::preview::build_native_battle_map_plan_to_end(
+				*predecessorCondition.model, battle_portrait_profile(), predecessorOptions, &chainEnvironment);
+			m_dynamicReplayOptions.simulated_variables = chainEnvironment;
+			if (!predecessorPlan.complete) {
+                if (!predecessorPlan.unresolved_status_predicates.empty()) {
+                    m_dynamicTargetCapture = predecessorCapture;
+                    m_dynamicConditionModel = predecessorCondition.model;
+                    const auto initialSimulation = m_dynamicConditionOptions.simulated_variables;
+                    m_dynamicConditionOptions = predecessorOptions;
+                    m_dynamicConditionOptions.simulated_variables = initialSimulation;
+                    m_dynamicUnknownStatusConditions = std::set<ccz::preview::LogicalNodeKey>(
+                        predecessorPlan.unresolved_status_predicates.begin(), predecessorPlan.unresolved_status_predicates.end());
+                }
+				AppendDiagnostic(predecessorPlan.diagnostic.empty() ? L"前序 Section 条件路径未完整求值" : predecessorPlan.diagnostic);
+                RefreshConditionTree(); RefreshDynamicToggle(); Invalidate(FALSE);
+				return false;
+			}
+			m_dynamicScene1Plan = ccz::editor_preview::MergeBattleDynamicMapPlans(
+				m_dynamicScene1Plan, ccz::editor_preview::BuildBattleDynamicMapPlan(
+					predecessorPlan, m_dynamicScene1Baseline));
+		}
+	}
+	m_dynamicScene1BaselineComplete = true;
+	EnsureDynamicObstacleSprites();
+	m_dynamicBaselineDiagnostic = m_dynamicDiagnostic;
+	if (m_assets.unit_mov_path() != m_unitSpritePath ||
+		m_assets.sprite_revision() != m_unitSpriteRevision) {
+		ClearUnitSprites();
+		m_unitSpritePath = m_assets.unit_mov_path();
+		m_unitSpriteRevision = m_assets.sprite_revision();
+	}
+
+	m_dynamicVariableIndex = ccz::preview::scan_script_variables(
+		targetCapture.input.nodes, targetCapture.input.document_key);
+	ccz::preview::synchronize_boolean_defaults(
+		m_dynamicConditionOptions.simulated_variables,
+		m_dynamicVariableIndex);
+	ccz::preview::synchronize_integer_scope(
+		m_dynamicConditionOptions.simulated_variables,
+		m_dynamicVariableIndex);
+	ccz::preview::synchronize_boolean_defaults(m_dynamicReplayOptions.simulated_variables,m_dynamicVariableIndex);
+	ccz::preview::synchronize_integer_scope(m_dynamicReplayOptions.simulated_variables,m_dynamicVariableIndex);
+	const auto targetCondition =
+		ccz::editor_preview::BuildBattleConditionTree(targetCapture,
+			catalog, m_dynamicReplayOptions);
+	if (!targetCondition.ok || targetCondition.model == nullptr) {
+		m_dynamicDiagnostic = targetCondition.diagnostic.empty()
+			? L"所选 Section 条件树无法建立"
+			: targetCondition.diagnostic;
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	m_dynamicTargetCapture = std::move(targetCapture);
+	m_dynamicConditionModel = targetCondition.model;
+	m_dynamicTargetNode.clear();
+	m_dynamicUnknownStatusConditions.clear();
+	// Match R preview: carry the selected instruction's logical identity into
+	// activation instead of resolving it through the transformed execution tree.
+	m_dynamicActivationTarget =
+		m_dynamicTargetCapture.selected_target_key;
+	m_dynamicTargetNode = m_dynamicActivationTarget;
+	if (m_dynamicTargetIsSectionRoot) m_dynamicTargetNode.clear();
+	if (m_activeDocument != nullptr) {
+		m_dynamicContentEpoch = m_activeDocument->GetPreviewContentEpoch();
+		m_dynamicTreeGeneration =
+			m_activeDocument->GetPreviewTreeGeneration();
+	}
+	if (!RebuildDynamicProjection()) {
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return false;
+	}
+	m_dynamicPreviewReady = true;
+	RefreshConditionTree();
+	RefreshDynamicToggle();
+	UpdateViewport();
+	Invalidate(FALSE);
+	return true;
+}
+
+bool CSBattlePreviewPage::RebuildDynamicProjection()
+{
+	m_dynamicDiagnostic = m_dynamicBaselineDiagnostic;
+	if (!m_dynamicScene1BaselineComplete) {
+		m_dynamicPreviewReady = false;
+		AppendDiagnostic(L"Scene1 障碍物基线不完整，无法建立动态预览");
+		RefreshDynamicToggle();
+		Invalidate(FALSE);
+		return false;
+	}
+	if (m_dynamicConditionModel == nullptr ||
+		!m_dynamicTargetCapture.ok ||
+		!m_dynamicScene1Baseline.map.projection_valid) {
+		m_dynamicPreviewReady = false;
+		AppendDiagnostic(L"动态预览缺少 Scene1 基线或目标 Section 条件模型");
+		return false;
+	}
+	if (!m_dynamicTargetIsSectionRoot && m_dynamicTargetNode.empty()) {
+		m_dynamicPlan = {};
+		m_dynamicPlan.path_complete = false;
+		m_dynamicPlan.diagnostic = L"没有定位到当前选中指令，显示 Scene1 基线";
+		m_dynamicDiagnostic = m_dynamicBaselineDiagnostic;
+		AppendDiagnostic(m_dynamicPlan.diagnostic);
+		m_dynamicPreviewReady = true;
+		ApplyDynamicProjection();
+		return true;
+	}
+	ccz::preview::SimulationEnvironment terminalEnvironment;
+	const auto sourcePlan = m_dynamicTargetIsSectionRoot
+		? ccz::preview::build_native_battle_map_plan_to_end(
+			*m_dynamicConditionModel, battle_portrait_profile(),
+			m_dynamicReplayOptions, &terminalEnvironment)
+		: ccz::preview::build_native_battle_map_plan_through_target(
+			*m_dynamicConditionModel, m_dynamicTargetNode,
+			battle_portrait_profile(), m_dynamicReplayOptions, &terminalEnvironment);
+    m_dynamicUnknownStatusConditions = std::set<ccz::preview::LogicalNodeKey>(sourcePlan.unresolved_status_predicates.begin(), sourcePlan.unresolved_status_predicates.end());
+	m_dynamicPlan =
+		ccz::editor_preview::BuildBattleDynamicMapPlan(
+			sourcePlan, m_dynamicScene1Baseline);
+	if (!m_dynamicTargetIsScene1) {
+		m_dynamicPlan = ccz::editor_preview::MergeBattleDynamicMapPlans(
+			m_dynamicScene1Plan, m_dynamicPlan);
+	}
+	if (m_dynamicPlan.events.empty() &&
+		m_dynamicPlan.diagnostic.empty()) {
+		m_dynamicPlan.diagnostic = L"截至当前目标没有移动、复活、显隐或障碍变化";
+	}
+	if (!sourcePlan.complete && !sourcePlan.diagnostic.empty()) {
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += sourcePlan.diagnostic;
+	}
+	if (!m_dynamicPlan.diagnostic.empty()) {
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += m_dynamicPlan.diagnostic;
+	}
+	if (m_dynamicPlan.events.empty()) {
+		m_dynamicPreviewReady = true;
+		ApplyDynamicProjection();
+		return true;
+	}
+	// Incomplete condition paths still expose the known prefix, with the
+	// source-plan diagnostic shown alongside this single resulting snapshot.
+	m_dynamicPreviewReady = true;
+	ApplyDynamicProjection();
+	return true;
+}
+
+void CSBattlePreviewPage::EnsureDynamicObstacleSprites()
+{
+	const std::wstring path = battle_mod_root(m_documentPath.GetString()) +
+		L"E5\\U_select.e5";
+	const std::uint64_t revision = preview_asset_revision(path);
+	if (path == m_dynamicObstacleAssetPath &&
+		revision == m_dynamicObstacleAssetRevision && m_obstacleAssetsAttempted) return;
+	m_obstacleAssetsAttempted = true;
+	for (auto& button : m_obstacleTypeButtons) button.SetSprite(nullptr);
+	m_dynamicObstacleSprites = {};
+	m_dynamicObstacleAssetPath = path;
+	m_dynamicObstacleAssetRevision = revision;
+	if (revision == 0) {
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += L"找不到 E5\\U_select.e5 障碍物素材包";
+		return;
+	}
+	CString diagnostic;
+	Gdiplus::Bitmap* sheet = LoadBitmapFromE5(
+		CString(path.c_str()), 19, diagnostic, true);
+	if (sheet == nullptr || sheet->GetLastStatus() != Gdiplus::Ok ||
+		sheet->GetWidth() != 48 || sheet->GetHeight() < 8 * 48) {
+		delete sheet;
+		if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+		m_dynamicDiagnostic += diagnostic.IsEmpty()
+			? L"U_select.e5 资源 19 不是预期的 48×384 八帧障碍图"
+			: std::wstring(diagnostic.GetString());
+		return;
+	}
+	// U_select resource 19 is the 48x384 obstacle sheet: frames 0-3 animate
+	// fire, frames 4-5 show the boat, and frames 6-7 show the burning boat.
+	// Use each type's first representative frame. Resource 20 is a different
+	// 48x384 asset and does not contain the boat sprite for the 0x58 type table.
+	constexpr int kObstacleFrames[] = {0, 4, 6};
+	for (std::size_t index = 0; index < m_dynamicObstacleSprites.size(); ++index) {
+		const Gdiplus::Rect frame(0, kObstacleFrames[index] * 48, 48, 48);
+		Gdiplus::Bitmap* cropped = sheet->Clone(frame,
+			PixelFormat32bppARGB);
+		if (cropped == nullptr || cropped->GetLastStatus() != Gdiplus::Ok) {
+			delete cropped;
+			if (!m_dynamicDiagnostic.empty()) m_dynamicDiagnostic += L"；";
+			m_dynamicDiagnostic += L"U_select.e5 障碍物帧裁切失败";
+			break;
+		}
+		m_dynamicObstacleSprites[index].reset(cropped);
+		m_obstacleTypeButtons[index].SetSprite(m_dynamicObstacleSprites[index]);
+	}
+	delete sheet;
+}
+
+void CSBattlePreviewPage::ApplyDynamicProjection()
+{
+	if (!m_dynamicPreviewReady) return;
+	const auto& obstacleBaseline =
+		ccz::editor_preview::BattleDynamicObstacleBaselineForTarget(
+			m_dynamicTargetIsScene1, m_dynamicScene1Obstacles);
+	m_dynamicProjection = ccz::editor_preview::ProjectBattleDynamicMap(
+		m_dynamicScene1Baseline, obstacleBaseline, m_dynamicPlan, m_dynamicTargetNode);
+	SyncBattleSpellAnimations();
+    m_obstacleSelection.CancelGesture();if(GetCapture()==this)ReleaseCapture();
+    const auto sectionIdentity=ActiveSession().baseline_capture.snapshot.section_root.runtime_handle;
+    if(m_obstacleSelection.section_handle!=sectionIdentity)m_obstacleSelection.items.clear();
+    m_obstacleSelection.section_handle=sectionIdentity;
+    m_obstacleSelection.items.erase(std::remove_if(m_obstacleSelection.items.begin(),m_obstacleSelection.items.end(),[this](auto& item){
+        if(item.draft){const auto found=std::find_if(m_obstacleDrafts.items().begin(),m_obstacleDrafts.items().end(),[&](const auto& d){return d.identity==item.identity;});if(found==m_obstacleDrafts.items().end())return true;item.value=*found;}
+        else {const auto found=std::find_if(m_dynamicProjection.obstacles.begin(),m_dynamicProjection.obstacles.end(),[&](const auto& d){return d.source_handle==item.source.source_handle;});if(found==m_dynamicProjection.obstacles.end())return true;item.source=*found;item.value={found->type,found->coordinate};if(found->source_fields.size()>=7)item.value.parameters={found->source_fields[1],found->source_fields[2],found->source_fields[5],found->source_fields[6]};item.content_epoch=m_dynamicContentEpoch;item.tree_generation=m_dynamicTreeGeneration;}
+        return false;
+    }),m_obstacleSelection.items.end());
+	// Resolve saved selections by source identity after each rebuild. Cache
+	// indices may change when the script's deployment records are edited.
+	m_dynamicSelection.erase(std::remove_if(m_dynamicSelection.begin(),
+		m_dynamicSelection.end(), [this](auto& selected) {
+			const auto& units = m_dynamicProjection.battle.units;
+			const auto found = std::find_if(units.begin(), units.end(),
+				[&selected](const auto& unit) {
+					return unit.source_key == selected.source_key &&
+						unit.record_index == selected.record_index;
+				});
+			if (found == units.end()) return true;
+			selected.cache_id = found->editor_cache_id;
+			return false;
+		}), m_dynamicSelection.end());
+	RefreshDynamicToggle();
+	UpdateViewport();
+	Invalidate(FALSE);
+}
+
+void CSBattlePreviewPage::RefreshDynamicToggle()
+{
+	if (m_dynamicPreviewButton.GetSafeHwnd() == nullptr) return;
+	m_dynamicPreviewButton.SetWindowText(m_dynamicPreviewEnabled?L"关闭动态预览":L"激活动态预览");
+	m_dynamicPreviewButton.SetCheck(m_dynamicPreviewEnabled ? BST_CHECKED : BST_UNCHECKED);
+	if (m_controlsCreated) LayoutEditorControls();
+}
+
+bool CSBattlePreviewPage::DynamicConditionButtonVisible() const noexcept
+{
+	return m_dynamicPreviewEnabled ? m_dynamicConditionButtonVisible
+		: ActiveSession().condition_button_visible;
+}
+
+bool CSBattlePreviewPage::DynamicActivationButtonVisible() const noexcept
+{
+	return m_dynamicPreviewEnabled ? m_dynamicActivationButtonVisible
+		: ActiveSession().activation_button_visible;
+}
+
+bool CSBattlePreviewPage::DynamicVariableButtonVisible() const noexcept
+{
+	return m_dynamicPreviewEnabled ? m_dynamicVariableButtonVisible
+		: ActiveSession().variable_button_visible;
+}
+
 bool CSBattlePreviewPage::SetQuickModeEnabled(
 	bool enabled, CTreeCtrl& tree, HTREEITEM selectedItem,
 	const wchar_t* documentPath)
@@ -3306,7 +4132,8 @@ bool CSBattlePreviewPage::IsBoundToTree(HWND treeWindow) const
 
 void CSBattlePreviewPage::EditorTreeDestroyed(HWND treeWindow)
 {
-	if (IsBoundToTree(treeWindow)) UnbindSession();
+	if (IsBoundToTree(treeWindow)) { m_dynamicSectionRelations.Forget(m_documentPath.GetString()); UnbindSession(); }
+	if (treeWindow == m_sourceTreeWindow) m_sourceTreeControl = nullptr;
 }
 
 bool CSBattlePreviewPage::ConfirmDiscardTemporaryChanges() const
@@ -3502,6 +4329,8 @@ bool CSBattlePreviewPage::ApplyPendingNativeWritebackTransaction(
 		diagnostic = L"S 战场原生写回拒绝：当前剧本树窗口已关闭";
 		return false;
 	}
+ // Deployment additions use their typed archive anchors, not a selected cursor.
+ if(mapOperations != nullptr && !RequireBattleInsertionSelection(view,diagnostic))return false;
 	if (ActiveSession().ui.quick_mode_enabled && tree.GetSafeHwnd() != m_sourceTreeWindow) {
 		diagnostic = L"S 战场原生写回拒绝：活动窗口不是当前快速模式绑定的剧本树";
 		return false;
@@ -3626,8 +4455,22 @@ bool CSBattlePreviewPage::ApplyPendingNativeWritebackTransaction(
 				rebaseDiagnostic;
 		}
 		if (requireNonemptyBatch && RevealNativeWritebackInstruction(
-			view, batch, host.first_inserted_handle())) {
+			view, batch, mapOperations != nullptr
+				? host.last_inserted_handle() : host.first_inserted_handle())) {
 			diagnostic += L"；编辑树已展开并选中对应的写入指令";
+		}
+		if (mapOperations != nullptr) {
+			if (!m_dynamicPreviewEnabled) {
+				m_dynamicPreviewEnabled = true;
+				ActiveSession().ui.dynamic_preview_enabled = true;
+			}
+			m_unitParametersPane.ShowPane(false);
+			const bool refreshed = RefreshDynamicPreview(tree,
+				tree.GetSelectedItem(), document->pathName);
+			diagnostic += refreshed
+				? L"；动态预览已启用并更新至最新写入指令"
+				: L"；动态预览已启用，但当前推演未完成：" +
+					m_dynamicDiagnostic;
 		}
 	}
 	RefreshEditorControls();
@@ -3758,6 +4601,7 @@ bool CSBattlePreviewPage::UndoNativeWriteback(
 		document->GetPreviewContentEpoch();
 	const bool undone = ActiveSession().native_writeback_transaction.Undo(host, diagnostic);
 	if (undone) {
+		CancelBattleMapTool(true);
 		if (document->GetPreviewContentEpoch() == previousContentEpoch)
 			document->MarkEditorContentChanged();
 		ActiveSession().native_writeback_rebase_required = true;
@@ -3769,6 +4613,12 @@ bool CSBattlePreviewPage::UndoNativeWriteback(
 		} else {
 			diagnostic += L"；预览已同步到撤回后的剧本树";
 		}
+		if (m_dynamicPreviewEnabled) {
+			const bool refreshed = RefreshDynamicPreview(view.GetTreeCtrl(),
+				view.GetTreeCtrl().GetSelectedItem(), document->pathName);
+			diagnostic += refreshed ? L"；动态预览已更新至撤回结果"
+				: L"；动态预览保持开启，但推演未完成：" + m_dynamicDiagnostic;
+		}
 	}
 	RefreshEditorControls();
 	Invalidate(FALSE);
@@ -3777,7 +4627,32 @@ bool CSBattlePreviewPage::UndoNativeWriteback(
 
 void CSBattlePreviewPage::ClearDocument()
 {
-	if ((m_panActive || m_leftStampActive || m_selectionGestureActive) &&
+	m_dynamicPreviewReady = false;
+	m_dynamicTargetCapture = {};
+	m_dynamicConditionModel.reset();
+	m_dynamicVariableIndex = {};
+	m_dynamicActivationTarget.clear();
+	m_dynamicTargetNode.clear();
+	m_dynamicUnknownStatusConditions.clear();
+	m_dynamicTargetIsScene1 = false;
+	m_dynamicTargetIsSectionRoot = false;
+	m_dynamicScene1Baseline = {};
+	m_dynamicScene1Obstacles.clear();
+	m_dynamicScene1Plan = {};
+	m_dynamicScene1BaselineComplete = false;
+	m_dynamicBaselineDiagnostic.clear();
+	m_dynamicPlan = {};
+	m_dynamicProjection = {};
+	m_dynamicMapBitmap.reset();
+	m_dynamicMapImagePath.clear();
+	m_dynamicMapImageRevision = 0;
+	m_dynamicContentEpoch = 0;
+	m_dynamicTreeGeneration = 0;
+	m_dynamicDiagnostic.clear();
+	m_mapCommandDragging = false;
+	m_mapCommandStart.reset();m_mapCommandEnd.reset();m_mapCommandId = 0;
+	if ((m_panActive || m_leftStampActive || m_selectionGestureActive ||
+		m_battleMapToolMode == BattleMapToolMode::CommandPickArea) &&
 		GetSafeHwnd() != nullptr) ReleaseCapture();
 	ReleaseActiveBitmapPins();
 	m_panActive = false;
@@ -3794,11 +4669,18 @@ void CSBattlePreviewPage::ClearDocument()
 	m_hoverCell.reset();
 	m_lastStampCell.reset();
 	m_battleMapToolMode = BattleMapToolMode::None;
+	m_dynamicAdjustOrigins.clear();
+	m_obstacleEditTarget.reset();
+	m_obstacleStampActive = false;
+	m_obstacleLastStamp.reset();
+	if (GetCapture() == this) ReleaseCapture();
 	m_roleOperationUnits.clear();
 	m_roleOperationAnchorIndex = 0;
 	m_roleOperationDirectionAdjusted = false;
 	m_roleOperationDirection = -1;
 	m_obstacleDrafts.Clear();
+	m_obstacleDefaults = {};
+	m_obstacleParametersPane.Hide();
 	ActiveSession().map_operations = {};
 	ActiveSession().baseline_capture = {};
 	ActiveSession().map_asset_key = {};
@@ -4097,7 +4979,7 @@ void CSBattlePreviewPage::LoadCapturedBattle(
 		AppendDiagnostic(L"S 战场条件分支无法加载；原有布置缓存已保留");
 	}
 	UpdateConditionActivationTarget(
-		ActiveSession().baseline_capture.snapshot.selected_handle);
+		ActiveSession().baseline_capture.selected_target_key);
 	RefreshConditionTree();
 }
 
@@ -4176,7 +5058,7 @@ bool CSBattlePreviewPage::ActivateConditionScope(
 	UpdateSessionAssetKeys();
 	if (!m_unitSpritePath.empty() &&
 		(m_unitSpritePath != m_assets.unit_mov_path() ||
-		 m_unitSpriteRevision != m_assets.unit_mov_revision())) {
+		 m_unitSpriteRevision != m_assets.sprite_revision())) {
 		ClearUnitSprites();
 	}
 	AppendDiagnostic(assetsDiagnostic);
@@ -4218,70 +5100,83 @@ bool CSBattlePreviewPage::ActivateConditionScope(
 
 void CSBattlePreviewPage::RefreshConditionTree()
 {
-	m_conditionTreePane.UpdateModel(ActiveSession().condition_model, {}, ActiveSession().condition_options);
-	ActiveSession().condition_button_visible = ActiveSession().condition_model != nullptr &&
+	const bool dynamic = m_dynamicPreviewEnabled;
+	const auto& model = dynamic ? m_dynamicConditionModel
+		: ActiveSession().condition_model;
+	const auto& options = dynamic ? m_dynamicConditionOptions
+		: ActiveSession().condition_options;
+	const auto& variableIndex = dynamic ? m_dynamicVariableIndex
+		: ActiveSession().condition_variable_index;
+	const auto& scopeKey = dynamic && m_dynamicTargetCapture.ok
+		? m_dynamicTargetCapture.input.scope_key
+		: ActiveSession().baseline_capture.input.scope_key;
+	const bool hasCapture = dynamic ? m_dynamicTargetCapture.ok
+		: ActiveSession().baseline_capture.ok;
+    auto displayOptions = options;
+    if (dynamic) displayOptions.unresolved_status_conditions = m_dynamicUnknownStatusConditions;
+	m_conditionTreePane.UpdateModel(model, {}, displayOptions);
+	const bool conditionButtonVisible = model != nullptr &&
 		m_conditionTreePane.HasControllableNodes();
-	if (ActiveSession().baseline_capture.ok) {
+	if (dynamic) m_dynamicConditionButtonVisible = conditionButtonVisible;
+	else ActiveSession().condition_button_visible = conditionButtonVisible;
+	if (hasCapture) {
 		m_variableControlPane.UpdateRows(
-			ActiveSession().condition_variable_index,
-			ActiveSession().condition_options.simulated_variables,
-			ActiveSession().baseline_capture.input.scope_key);
+			variableIndex, options.simulated_variables, scopeKey);
 	} else {
 		m_variableControlPane.UpdateRows({}, {}, {});
 	}
-	ActiveSession().variable_button_visible =
-		ActiveSession().condition_model != nullptr &&
-		ActiveSession().condition_variable_index.valid &&
-		m_variableControlPane.HasRows();
-	ActiveSession().activation_button_visible =
-		ActiveSession().condition_model != nullptr &&
-		!ActiveSession().condition_activation_target.empty() &&
+	const bool variableButtonVisible = model != nullptr &&
+		variableIndex.valid && m_variableControlPane.HasRows();
+	if (dynamic) m_dynamicVariableButtonVisible = variableButtonVisible;
+	else ActiveSession().variable_button_visible = variableButtonVisible;
+	const auto& activationTarget = dynamic ? m_dynamicActivationTarget
+		: ActiveSession().condition_activation_target;
+	const bool activationButtonVisible = model != nullptr &&
+		!activationTarget.empty() &&
 		ccz::preview::condition_tree_model_can_activate_target(
-			*ActiveSession().condition_model,
-			ActiveSession().condition_activation_target,
-			ActiveSession().condition_options);
+			*model, activationTarget, options);
+	if (dynamic) m_dynamicActivationButtonVisible = activationButtonVisible;
+	else ActiveSession().activation_button_visible = activationButtonVisible;
 	if (m_conditionTreeButton.GetSafeHwnd() != nullptr)
-		m_conditionTreeButton.ShowWindow(ActiveSession().condition_button_visible
+		m_conditionTreeButton.ShowWindow(DynamicConditionButtonVisible()
 			? SW_SHOW : SW_HIDE);
 	if (m_activationButton.GetSafeHwnd() != nullptr)
-		m_activationButton.ShowWindow(ActiveSession().activation_button_visible
+		m_activationButton.ShowWindow(DynamicActivationButtonVisible()
 			? SW_SHOW : SW_HIDE);
+	if (m_activationButton.GetSafeHwnd() != nullptr)
+		m_activationButton.EnableWindow(TRUE);
 	if (m_variableControlButton.GetSafeHwnd() != nullptr)
-		m_variableControlButton.ShowWindow(ActiveSession().variable_button_visible
+		m_variableControlButton.ShowWindow(DynamicVariableButtonVisible()
 			? SW_SHOW : SW_HIDE);
-	if (!ActiveSession().condition_button_visible) m_conditionTreePane.ShowPane(false);
-	if (!ActiveSession().variable_button_visible)
+	if (!DynamicConditionButtonVisible()) m_conditionTreePane.ShowPane(false);
+	if (!DynamicVariableButtonVisible())
 		m_variableControlPane.ShowPane(false);
 	if (m_controlsCreated) LayoutEditorControls();
 }
 
 void CSBattlePreviewPage::UpdateConditionActivationTarget(
-	std::uintptr_t runtime_handle)
+	const ccz::preview::LogicalNodeKey& target_key)
 {
 	auto& session = ActiveSession();
 	const bool wasVisible = session.activation_button_visible;
-	session.condition_activation_target.clear();
-	if (session.condition_model != nullptr) {
-		const auto* selected = find_execution_node_by_runtime_handle(
-			*session.condition_model, runtime_handle);
-		if (selected != nullptr)
-			session.condition_activation_target = selected->logical_key;
-	}
+	session.condition_activation_target = target_key;
 	session.activation_button_visible = session.condition_model != nullptr &&
-		!session.condition_activation_target.empty() &&
+		!target_key.empty() &&
 		ccz::preview::condition_tree_model_can_activate_target(
-			*session.condition_model, session.condition_activation_target,
+			*session.condition_model, target_key,
 			session.condition_options);
-	if (m_activationButton.GetSafeHwnd() != nullptr)
+	if (m_activationButton.GetSafeHwnd() != nullptr) {
 		m_activationButton.ShowWindow(session.activation_button_visible
 			? SW_SHOW : SW_HIDE);
+		m_activationButton.EnableWindow(TRUE);
+	}
 	if (wasVisible != session.activation_button_visible && m_controlsCreated)
 		LayoutEditorControls();
 }
 
 void CSBattlePreviewPage::OnConditionTreeClicked()
 {
-	if (!ActiveSession().condition_button_visible ||
+	if (!DynamicConditionButtonVisible() ||
 		m_conditionTreePane.GetSafeHwnd() == nullptr ||
 		!m_conditionTreePane.HasControllableNodes()) return;
 	m_variableControlPane.ShowPane(false);
@@ -4355,6 +5250,148 @@ void CSBattlePreviewPage::OnPreviewModeClicked()
 	ShowPreviewModeMenu();
 }
 
+void CSBattlePreviewPage::OnDynamicPreviewClicked()
+{
+	CancelBattleMapTool(true);
+	CancelConflictingBattleEditorMode();
+	m_dynamicSelection.clear();
+	if (m_dynamicPreviewEnabled) {
+		m_dynamicPreviewEnabled = false;
+		if (m_activeSession != nullptr)
+			ActiveSession().ui.dynamic_preview_enabled = false;
+		m_dynamicPreviewReady = false;
+		m_dynamicTargetCapture = {};
+		m_dynamicConditionModel.reset();
+		m_dynamicVariableIndex = {};
+		m_dynamicActivationTarget.clear();
+		m_dynamicTargetNode.clear();
+	m_dynamicUnknownStatusConditions.clear();
+		m_dynamicTargetIsScene1 = false;
+		m_dynamicTargetIsSectionRoot = false;
+		m_dynamicScene1Baseline = {};
+		m_dynamicScene1Obstacles.clear();
+		m_dynamicScene1Plan = {};
+		m_dynamicScene1BaselineComplete = false;
+		m_dynamicBaselineDiagnostic.clear();
+		m_dynamicPlan = {};
+		m_dynamicProjection = {};
+		m_dynamicMapBitmap.reset();
+		m_dynamicMapImagePath.clear();
+		m_dynamicMapImageRevision = 0;
+		m_dynamicContentEpoch = 0;
+		m_dynamicTreeGeneration = 0;
+		m_dynamicDiagnostic.clear();
+		m_dynamicAssets.Clear();
+		RefreshConditionTree();
+		RefreshDynamicToggle();
+		RefreshEditorControls();
+		UpdateViewport();
+		Invalidate(FALSE);
+		return;
+	}
+	if (m_sourceTreeControl == nullptr ||
+		!::IsWindow(m_sourceTreeControl->GetSafeHwnd()) ||
+		m_documentPath.IsEmpty()) {
+		AppendDiagnostic(L"动态预览需要一个有效的剧本树和文档路径");
+		return;
+	}
+	if (m_leftStampActive || m_selectionGestureActive) {
+		m_leftStampActive = false;
+		m_selectionGestureActive = false;
+		m_selectionDragStarted = false;
+		m_selectionPressCell.reset();
+		m_selectionLastCell.reset();
+		if (GetCapture() == this) ReleaseCapture();
+	}
+	m_dynamicPreviewEnabled = true;
+	if (m_activeSession != nullptr)
+		ActiveSession().ui.dynamic_preview_enabled = true;
+	m_unitParametersPane.ShowPane(false);
+	RefreshDynamicPreview(*m_sourceTreeControl,
+		m_sourceTreeControl->GetSelectedItem(), m_documentPath.GetString());
+	RefreshConditionTree();
+	RefreshEditorControls();
+	Invalidate(FALSE);
+}
+
+void CSBattlePreviewPage::ShowDynamicPreviewMenu()
+{
+	CMenu menu, regular;
+	if (!menu.CreatePopupMenu() || !regular.CreatePopupMenu()) return;
+	const std::wstring document = m_documentPath.GetString();
+	const bool use = m_dynamicSectionRelations.UsesPredecessors(document);
+	regular.AppendMenu(MF_STRING | (use ? MF_CHECKED : 0), 1, L"使用前置关联");
+	regular.AppendMenu(MF_STRING | (!use ? MF_CHECKED : 0), 2, L"不使用前置关联");
+	regular.CheckMenuRadioItem(1,2,use ? 1 : 2,MF_BYCOMMAND);
+	menu.AppendMenu(MF_POPUP,reinterpret_cast<UINT_PTR>(regular.GetSafeHmenu()),L"常规预览");
+	menu.AppendMenu(MF_STRING,3,L"添加前置 Section…");
+	menu.AppendMenu(MF_STRING | (m_dynamicSectionRelations.All(document).empty()?MF_GRAYED:0),4,L"调整前置 Section…");
+	menu.AppendMenu(MF_STRING,5,m_dynamicPreviewEnabled ? L"关闭动态预览" : L"开启动态预览");
+	CRect rect; m_dynamicPreviewButton.GetWindowRect(&rect);
+	const UINT command=menu.TrackPopupMenu(TPM_LEFTALIGN|TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,this);
+	if(command==1 || command==2) {
+		m_dynamicSectionRelations.UsePredecessors(document,command==1);
+		if(!m_dynamicPreviewEnabled) OnDynamicPreviewClicked();
+		else if(m_sourceTreeControl)
+			RefreshDynamicPreview(*m_sourceTreeControl,m_sourceTreeControl->GetSelectedItem(),m_documentPath.GetString());
+	} else if(command==3) AddDynamicPredecessor();
+	else if(command==4) ManageDynamicPredecessors();
+	else if(command==5) OnDynamicPreviewClicked();
+}
+
+void CSBattlePreviewPage::AddDynamicPredecessor()
+{
+	if(!m_sourceTreeControl) return;
+	ccz::editor_preview::CapturedEditorTree snapshot; std::wstring diagnostic;
+	if(!ccz::editor_preview::CaptureEditorTreeSnapshot(*m_sourceTreeControl,
+		m_sourceTreeControl->GetSelectedItem(),m_documentPath.GetString(),snapshot,diagnostic) ||
+		snapshot.selected_handle==snapshot.section_root.runtime_handle || snapshot.selected_path.empty()) {
+		AfxMessageBox(L"请先选中当前 Section 内的一条指令，再添加前序 Section"); return;
+	}
+	const ccz::editor_preview::CapturedEditorNode* selected = &snapshot.section_root;
+	for (auto index : snapshot.selected_path) {
+		if (index >= selected->children.size()) { selected = nullptr; break; }
+		selected = &selected->children[index];
+	}
+	if (!selected || selected->instruction_id < 0) {
+		AfxMessageBox(L"请选中一条实际指令后添加前序 Section"); return;
+	}
+	const auto sections=ccz::editor_preview::BattleSectionChoices(snapshot);
+	ccz::editor_preview::BattleSectionRelationDialog dialog;
+	for(const auto& section:sections) if(section.path!=snapshot.section_path)
+		dialog.rows.push_back({ccz::editor_preview::BattleSectionDescription(section),{},section.path,section.handle});
+	if(dialog.Show(this)!=IDOK || dialog.selected<0) return;
+	if(!m_dynamicSectionRelations.Add(m_documentPath.GetString(),dialog.rows[dialog.selected].current,snapshot.section_path,diagnostic,
+		dialog.rows[dialog.selected].handle,snapshot.section_root.runtime_handle))
+		AfxMessageBox(diagnostic.c_str());
+	else {
+        m_dynamicSectionRelations.UsePredecessors(m_documentPath.GetString(),true);
+        if(!m_dynamicPreviewEnabled)OnDynamicPreviewClicked();
+        else RefreshDynamicPreview(*m_sourceTreeControl,m_sourceTreeControl->GetSelectedItem(),m_documentPath.GetString());
+    }
+}
+
+void CSBattlePreviewPage::ManageDynamicPredecessors()
+{
+	if(!m_sourceTreeControl) return;
+	ccz::editor_preview::CapturedEditorTree snapshot; std::wstring diagnostic;
+	if(!ccz::editor_preview::CaptureEditorDocumentSnapshot(*m_sourceTreeControl,m_documentPath.GetString(),snapshot,diagnostic)) return;
+	const auto sections=ccz::editor_preview::BattleSectionChoices(snapshot);
+	auto describe=[&](const auto& path) {
+		const auto it=std::find_if(sections.begin(),sections.end(),[&](const auto& s){return s.path==path;});
+		return it==sections.end()?CString(L"Section 已不存在"):ccz::editor_preview::BattleSectionDescription(*it);
+	};
+	ccz::editor_preview::BattleSectionRelationDialog dialog; dialog.overview=true;
+	for(const auto& relation:m_dynamicSectionRelations.All(m_documentPath.GetString())) {
+		const auto it=std::find_if(sections.begin(),sections.end(),[&](const auto& s){return s.path==relation.current;});
+		dialog.rows.push_back({describe(relation.predecessor),describe(relation.current),relation.current,it==sections.end()?0:it->handle});
+	}
+	dialog.remove=[&](const auto& row){m_dynamicSectionRelations.Remove(m_documentPath.GetString(),row.current);};
+	dialog.locate=[&](const auto& row){if(row.handle) m_sourceTreeControl->SelectItem(reinterpret_cast<HTREEITEM>(row.handle));};
+	dialog.Show(this);
+	if(m_dynamicPreviewEnabled) RefreshDynamicPreview(*m_sourceTreeControl,m_sourceTreeControl->GetSelectedItem(),m_documentPath.GetString());
+}
+
 void CSBattlePreviewPage::ShowPreviewModeMenu()
 {
 	if (m_previewModeButton.GetSafeHwnd() == nullptr ||
@@ -4396,25 +5433,31 @@ void CSBattlePreviewPage::SetParameterPreviewMode(
 
 void CSBattlePreviewPage::OnActivationButtonClicked()
 {
-	if (!ActiveSession().activation_button_visible ||
-		ActiveSession().condition_model == nullptr ||
-		ActiveSession().condition_activation_target.empty()) return;
-	auto candidate = ActiveSession().condition_options;
+	const auto& model = m_dynamicPreviewEnabled ? m_dynamicConditionModel
+		: ActiveSession().condition_model;
+	const auto& target = m_dynamicPreviewEnabled ? m_dynamicActivationTarget
+		: ActiveSession().condition_activation_target;
+	const auto& options = m_dynamicPreviewEnabled ? m_dynamicConditionOptions
+		: ActiveSession().condition_options;
+	if (!DynamicActivationButtonVisible() || model == nullptr ||
+		target.empty()) return;
+	auto candidate = options;
 	std::wstring diagnostic;
 	if (!ccz::preview::activate_condition_tree_target(
-		candidate, *ActiveSession().condition_model,
-		ActiveSession().condition_activation_target, &diagnostic)) {
+		candidate, *model, target, &diagnostic)) {
 		if (!diagnostic.empty()) AppendDiagnostic(diagnostic);
 		return;
 	}
-	ActiveSession().condition_options = std::move(candidate);
+	if (m_dynamicPreviewEnabled)
+		m_dynamicConditionOptions = std::move(candidate);
+	else ActiveSession().condition_options = std::move(candidate);
 	if (PostMessage(kConditionActionMessage, 0, 0) == FALSE)
 		OnConditionActionMessage(0, 0);
 }
 
 void CSBattlePreviewPage::OnVariableControlClicked()
 {
-	if (!ActiveSession().variable_button_visible ||
+	if (!DynamicVariableButtonVisible() ||
 		m_variableControlPane.GetSafeHwnd() == nullptr ||
 		!m_variableControlPane.HasRows()) return;
 	m_conditionTreePane.ShowPane(false);
@@ -4428,16 +5471,22 @@ LRESULT CSBattlePreviewPage::ApplyConditionActionAndRefresh(
 	ccz::preview::ConditionTreeAction action,
 	std::int32_t integerValue)
 {
-	if (ActiveSession().condition_model == nullptr) return 0;
-	auto candidate = ActiveSession().condition_options;
+	const auto& model = m_dynamicPreviewEnabled ? m_dynamicConditionModel
+		: ActiveSession().condition_model;
+	const auto& options = m_dynamicPreviewEnabled ? m_dynamicConditionOptions
+		: ActiveSession().condition_options;
+	if (model == nullptr) return 0;
+	auto candidate = options;
 	std::wstring diagnostic;
 	if (!ccz::editor_preview::ApplyConditionTreeActionToOptions(
-		candidate, *ActiveSession().condition_model, nodeKey, action, integerValue,
+		candidate, *model, nodeKey, action, integerValue,
 		&diagnostic)) {
 		if (!diagnostic.empty()) AppendDiagnostic(diagnostic);
 		return 0;
 	}
-	ActiveSession().condition_options = std::move(candidate);
+	if (m_dynamicPreviewEnabled)
+		m_dynamicConditionOptions = std::move(candidate);
+	else ActiveSession().condition_options = std::move(candidate);
 	if (PostMessage(kConditionActionMessage, 0, 0) == FALSE)
 		return OnConditionActionMessage(0, 0);
 	return 0;
@@ -4448,9 +5497,14 @@ void CSBattlePreviewPage::ApplyVariableActionAndRefresh(
 	ccz::preview::VariableControlAction action,
 	std::int32_t integerValue)
 {
-	if (!ActiveSession().baseline_capture.ok ||
-		!ActiveSession().condition_variable_index.valid) return;
-	auto candidate = ActiveSession().condition_options;
+	const auto& variableIndex = m_dynamicPreviewEnabled
+		? m_dynamicVariableIndex : ActiveSession().condition_variable_index;
+	const bool hasCapture = m_dynamicPreviewEnabled
+		? m_dynamicTargetCapture.ok : ActiveSession().baseline_capture.ok;
+	const auto& options = m_dynamicPreviewEnabled ? m_dynamicConditionOptions
+		: ActiveSession().condition_options;
+	if (!hasCapture || !variableIndex.valid) return;
+	auto candidate = options;
 	if (!ccz::preview::apply_variable_control_action(
 		candidate.simulated_variables, kind, id, action, integerValue)) {
 		AppendDiagnostic(L"变量操作未产生状态变化");
@@ -4458,17 +5512,24 @@ void CSBattlePreviewPage::ApplyVariableActionAndRefresh(
 	}
 	ccz::preview::synchronize_boolean_defaults(
 		candidate.simulated_variables,
-		ActiveSession().condition_variable_index);
+		variableIndex);
 	ccz::preview::synchronize_integer_scope(
 		candidate.simulated_variables,
-		ActiveSession().condition_variable_index);
-	ActiveSession().condition_options = std::move(candidate);
+		variableIndex);
+	if (m_dynamicPreviewEnabled)
+		m_dynamicConditionOptions = std::move(candidate);
+	else ActiveSession().condition_options = std::move(candidate);
 	if (PostMessage(kConditionActionMessage, 0, 0) == FALSE)
 		OnConditionActionMessage(0, 0);
 }
 
 LRESULT CSBattlePreviewPage::OnConditionActionMessage(WPARAM, LPARAM)
 {
+	if (m_dynamicPreviewEnabled) {
+		if (m_sourceTreeControl && m_dynamicTargetCapture.ok)
+			RefreshDynamicPreview(*m_sourceTreeControl,m_sourceTreeControl->GetSelectedItem(),m_documentPath.GetString());
+		return 0;
+	}
 	if (!ActiveSession().baseline_capture.ok) return 0;
 	const auto condition = ccz::editor_preview::BuildBattleConditionTree(
 		ActiveSession().baseline_capture, ActiveSession().condition_catalog, ActiveSession().condition_options);
@@ -4756,58 +5817,66 @@ Gdiplus::Bitmap* CSBattlePreviewPage::GetUnitSprite(
 {
 	if (spriteRef == nullptr) return nullptr;
 	*spriteRef = {};
+ auto visualUnit=unit;
+ if(unit.source_instruction==0x4b && unit.data_id<0 && !unit.editor_staged_new){
+  const auto binding=ActiveSession().own_unit_bindings.find(unit.deployment_index);
+  if(binding!=ActiveSession().own_unit_bindings.end())visualUnit.data_id=binding->second;
+ }
 	const auto armKind = ccz::preview::battle_visual_arm_kind(unit);
-	if (!armKind || !m_assets.ResolveUnitSprite(unit.data_id, *armKind,
-			rawDirection, spriteRef)) return nullptr;
+    int action=-1;
+    if(m_dynamicPreviewEnabled && m_dynamicPreviewReady){const auto found=m_dynamicProjection.unit_details.find(unit.editor_cache_id);if(found!=m_dynamicProjection.unit_details.end())action=found->second.action;}
+	if (!armKind || !m_assets.ResolveUnitSprite(visualUnit.data_id, *armKind,
+			rawDirection, spriteRef,action)) return nullptr;
 	if (m_unitSpritePath != m_assets.unit_mov_path() ||
-		m_unitSpriteRevision != m_assets.unit_mov_revision()) {
+		m_unitSpriteRevision != m_assets.sprite_revision()) {
 		ClearUnitSprites();
 		m_unitSpritePath = m_assets.unit_mov_path();
-		m_unitSpriteRevision = m_assets.unit_mov_revision();
+		m_unitSpriteRevision = m_assets.sprite_revision();
 	}
-	const int key = spriteRef->resource_index * 16 + spriteRef->frame;
+	const int key = spriteRef->resource_index * 64 + spriteRef->archive * 16 + spriteRef->frame;
 	const auto found = m_unitSprites.find(key);
 	if (found != m_unitSprites.end()) return found->second;
 	if (m_unitSpritePath.empty()) {
 		m_unitSprites[key] = nullptr;
 		return nullptr;
 	}
+	const std::wstring spritePath=m_assets.UnitSpritePath(spriteRef->archive);
 	std::wostringstream subresource;
 	subresource << L"resource-" << spriteRef->resource_index
 		<< L"-frame-" << spriteRef->frame;
 	const auto cacheKey = ccz::editor_preview::MakeBattleBitmapCacheKey(
-		m_assets.unit_mov_path(), m_assets.unit_mov_revision(),
+		spritePath, m_assets.sprite_revision(),
 		subresource.str());
 	if (Gdiplus::Bitmap* cached = FindCachedBitmap(cacheKey)) {
 		m_unitSprites[key] = cached;
 		m_activeSpritePins.insert(cacheKey);
 		return cached;
 	}
-	CString path(m_unitSpritePath.c_str());
 	CString diagnostic;
 	#if defined(_DEBUG) && defined(CCZ_S_BATTLE_PREVIEW_PERF)
 	RecordSpriteDecode();
 	#endif
 	Gdiplus::Bitmap* sheet = LoadBitmapFromE5(
-		path, spriteRef->resource_index, diagnostic, false);
+		CString(spritePath.c_str()), spriteRef->resource_index, diagnostic, false, spriteRef->frame_pixels);
 	if (sheet == nullptr || sheet->GetLastStatus() != Gdiplus::Ok) {
 		delete sheet;
 		m_unitSprites[key] = nullptr;
 		if (!diagnostic.IsEmpty())
-			AppendDiagnostic(std::wstring(L"Unit_mov 读取失败：") +
+			AppendDiagnostic(spritePath + L" 读取失败：" +
 				diagnostic.GetString());
 		return nullptr;
 	}
-	const int frameCount = static_cast<int>(sheet->GetHeight()) / kCellPixels;
-	if (sheet->GetWidth() < kCellPixels || spriteRef->frame < 0 ||
+	const int pixels=spriteRef->frame_pixels;
+	const int frameCount = static_cast<int>(sheet->GetHeight()) / pixels;
+	if (sheet->GetWidth() != pixels || spriteRef->frame < 0 ||
 		spriteRef->frame >= frameCount) {
 		delete sheet;
 		m_unitSprites[key] = nullptr;
-		AppendDiagnostic(L"Unit_mov 帧尺寸无效");
+		AppendDiagnostic(spritePath + L" 帧尺寸无效");
 		return nullptr;
 	}
 	auto* frame = new Gdiplus::Bitmap(
-		kCellPixels, kCellPixels, PixelFormat32bppARGB);
+		pixels, pixels, PixelFormat32bppARGB);
 	if (frame->GetLastStatus() != Gdiplus::Ok) {
 		delete frame;
 		delete sheet;
@@ -4817,8 +5886,8 @@ Gdiplus::Bitmap* CSBattlePreviewPage::GetUnitSprite(
 	Gdiplus::Graphics frameGraphics(frame);
 	frameGraphics.Clear(Gdiplus::Color(0, 0, 0, 0));
 	frameGraphics.DrawImage(sheet,
-		Gdiplus::Rect(0, 0, kCellPixels, kCellPixels), 0,
-		spriteRef->frame * kCellPixels, kCellPixels, kCellPixels,
+		Gdiplus::Rect(0, 0, pixels, pixels), 0,
+		spriteRef->frame * pixels, pixels, pixels,
 		Gdiplus::UnitPixel);
 	delete sheet;
 	ApplyMagentaTransparency(frame);
@@ -4862,12 +5931,17 @@ void CSBattlePreviewPage::UpdateViewport()
 {
 	if (GetSafeHwnd() == nullptr || m_viewportUpdating) return;
 	m_viewportUpdating = true;
-	const int imageWidth = m_mapBitmap
-		? static_cast<int>(m_mapBitmap->GetWidth())
-		: ActiveSession().editor_state.battle.map.width * kCellPixels;
-	const int imageHeight = m_mapBitmap
-		? static_cast<int>(m_mapBitmap->GetHeight())
-		: ActiveSession().editor_state.battle.map.height * kCellPixels;
+	Gdiplus::Bitmap* viewportMap = m_dynamicPreviewEnabled &&
+		m_dynamicMapBitmap != nullptr ? m_dynamicMapBitmap.get() : m_mapBitmap;
+	const auto& viewportBattle = m_dynamicPreviewEnabled &&
+		m_dynamicScene1Baseline.map.projection_valid
+		? m_dynamicScene1Baseline : ActiveSession().editor_state.battle;
+	const int imageWidth = viewportMap
+		? static_cast<int>(viewportMap->GetWidth())
+		: viewportBattle.map.width * kCellPixels;
+	const int imageHeight = viewportMap
+		? static_cast<int>(viewportMap->GetHeight())
+		: viewportBattle.map.height * kCellPixels;
 	const int contentWidth = static_cast<int>(std::lround(imageWidth * m_zoom));
 	const int contentHeight = static_cast<int>(std::lround(imageHeight * m_zoom));
 	if (imageWidth <= 0 || imageHeight <= 0) {
@@ -4890,9 +5964,8 @@ void CSBattlePreviewPage::UpdateViewport()
 		CRect client;
 		GetClientRect(&client);
 		const bool sidePanelVisible = m_sidebarVisible || m_obstaclePageActive;
-		const int reservedHeaderHeight = sidePanelVisible
-			? kStatusHeaderHeight
-			: kStatusHeaderHeight + kCollapsedControlToolbarHeight;
+		const int reservedHeaderHeight =
+			kStatusHeaderHeight + kPreviewToolbarHeight;
 		const int headerHeight = (std::min)(reservedHeaderHeight,
 			(std::max)(0, client.Height()));
 		const int footerTop = (std::max)(headerHeight,
@@ -4936,10 +6009,15 @@ void CSBattlePreviewPage::UpdateViewport()
 
 void CSBattlePreviewPage::ClampViewport()
 {
-	const int width = m_mapBitmap ? static_cast<int>(m_mapBitmap->GetWidth())
-		: ActiveSession().editor_state.battle.map.width * kCellPixels;
-	const int height = m_mapBitmap ? static_cast<int>(m_mapBitmap->GetHeight())
-		: ActiveSession().editor_state.battle.map.height * kCellPixels;
+	Gdiplus::Bitmap* viewportMap = m_dynamicPreviewEnabled &&
+		m_dynamicMapBitmap != nullptr ? m_dynamicMapBitmap.get() : m_mapBitmap;
+	const auto& viewportBattle = m_dynamicPreviewEnabled &&
+		m_dynamicScene1Baseline.map.projection_valid
+		? m_dynamicScene1Baseline : ActiveSession().editor_state.battle;
+	const int width = viewportMap ? static_cast<int>(viewportMap->GetWidth())
+		: viewportBattle.map.width * kCellPixels;
+	const int height = viewportMap ? static_cast<int>(viewportMap->GetHeight())
+		: viewportBattle.map.height * kCellPixels;
 	m_scrollX = (std::max)(0, (std::min)(m_scrollX,
 		(std::max)(0, static_cast<int>(width * m_zoom) - m_canvasRect.Width())));
 	m_scrollY = (std::max)(0, (std::min)(m_scrollY,
@@ -4972,32 +6050,86 @@ void CSBattlePreviewPage::ZoomAt(CPoint point, float zoom)
 std::optional<ccz::preview::BattleCoord>
 CSBattlePreviewPage::BattleCoordFromScreen(CPoint point) const
 {
-	if (m_mapBitmap == nullptr || !ActiveSession().editor_state.battle.map.projection_valid ||
+	Gdiplus::Bitmap* viewportMap = m_dynamicPreviewEnabled &&
+		m_dynamicMapBitmap != nullptr ? m_dynamicMapBitmap.get() : m_mapBitmap;
+	const auto& viewportBattle = m_dynamicPreviewEnabled &&
+		m_dynamicScene1Baseline.map.projection_valid
+		? m_dynamicScene1Baseline : ActiveSession().editor_state.battle;
+	if (viewportMap == nullptr || !viewportBattle.map.projection_valid ||
 		m_zoom <= 0 || !m_canvasRect.PtInRect(point))
 		return std::nullopt;
 	const float x = static_cast<float>(point.x - m_canvasRect.left + m_scrollX);
 	const float y = static_cast<float>(point.y - m_canvasRect.top + m_scrollY);
-	if (x < 0 || y < 0 || x >= m_mapBitmap->GetWidth() * m_zoom ||
-		y >= m_mapBitmap->GetHeight() * m_zoom) return std::nullopt;
+	if (x < 0 || y < 0 || x >= viewportMap->GetWidth() * m_zoom ||
+		y >= viewportMap->GetHeight() * m_zoom) return std::nullopt;
 	const ccz::preview::BattleCoord coordinate{
 		static_cast<int>(std::floor(x / (kCellPixels * m_zoom))),
 		static_cast<int>(std::floor(y / (kCellPixels * m_zoom)))};
 	return ccz::preview::is_battle_coord_in_bounds(coordinate,
-		ActiveSession().editor_state.battle.map.width, ActiveSession().editor_state.battle.map.height)
+		viewportBattle.map.width, viewportBattle.map.height)
 		? std::optional<ccz::preview::BattleCoord>(coordinate)
 		: std::nullopt;
+}
+
+const ccz::preview::BattlePreviewState& CSBattlePreviewPage::EditingBattle() const
+{
+	if (m_dynamicPreviewEnabled && m_dynamicScene1Baseline.map.projection_valid)
+		return m_dynamicProjection.battle.map.projection_valid
+			? m_dynamicProjection.battle : m_dynamicScene1Baseline;
+	return ActiveSession().editor_state.battle;
+}
+
+void CSBattlePreviewPage::SelectBoardCell(
+	const ccz::preview::BattleCoord& coordinate, bool toggle)
+{
+	if (!m_dynamicPreviewEnabled) {
+		if (m_editorOps) {
+			const auto result = toggle ? m_editorOps->ToggleSelectionAt(coordinate)
+				: m_editorOps->AddSelectionAt(coordinate);
+			if (result.ok && result.changed) ShowSelectionOperationResult(result);
+		}
+		return;
+	}
+	const auto hit = HitTestUnit(coordinate);
+	if (!hit) return;
+	const auto& unit = EditingBattle().units[*hit];
+	const auto found = std::find_if(m_dynamicSelection.begin(), m_dynamicSelection.end(),
+		[&unit](const auto& item) { return item.cache_id == unit.editor_cache_id; });
+	if (found != m_dynamicSelection.end()) {
+		if (toggle) m_dynamicSelection.erase(found);
+	} else {
+		m_dynamicSelection.push_back({unit.source_key, unit.record_index,
+			static_cast<std::size_t>(unit.page), unit.editor_cache_id});
+	}
+	Invalidate(FALSE);
+}
+
+void CSBattlePreviewPage::ClearBoardSelection()
+{
+	if (m_dynamicPreviewEnabled) m_dynamicSelection.clear();
+	else if (m_editorOps) m_editorOps->ClearSelectionGroup();
+	m_selectedUnit.reset();
+	Invalidate(FALSE);
 }
 
 std::optional<std::size_t> CSBattlePreviewPage::HitTestUnit(
 	const ccz::preview::BattleCoord& coordinate) const
 {
 	std::optional<std::size_t> hit;
+	const bool dynamic = m_dynamicPreviewEnabled &&
+		m_dynamicScene1Baseline.map.projection_valid;
+	const auto& battle = dynamic &&
+		m_dynamicProjection.battle.map.projection_valid
+		? m_dynamicProjection.battle
+		: dynamic ? m_dynamicScene1Baseline
+			: ActiveSession().editor_state.battle;
+	const auto& scopeRoot = ActiveSession().editor_state.scope_root;
 	for (std::size_t index = 0;
-		index < ActiveSession().editor_state.battle.units.size(); ++index) {
-		const auto& unit = ActiveSession().editor_state.battle.units[index];
+		index < battle.units.size(); ++index) {
+		const auto& unit = battle.units[index];
 		if (!unit.fields_decoded || unit.editor_pending_delete ||
-			(!unit.editor_staged_new &&
-			 !in_scope(unit.source_key, ActiveSession().editor_state.scope_root)) ||
+			(!dynamic && !unit.editor_staged_new &&
+			 !in_scope(unit.source_key, scopeRoot)) ||
 			ccz::editor_preview::IsBattleFixedEmptySlot(unit) ||
 			unit.position != coordinate) continue;
 		if (hit) return std::nullopt;
@@ -5013,10 +6145,21 @@ void CSBattlePreviewPage::DrawHoveredUnitCard(
 {
 	if (m_panActive || !m_canvasRect.PtInRect(pointer)) return;
 	const auto& state = ActiveSession().editor_state;
+	const bool dynamic = m_dynamicPreviewEnabled &&
+		m_dynamicScene1Baseline.map.projection_valid;
+ std::optional<ccz::preview::BattlePreviewState> boundBoard;
+ if(!dynamic && !ActiveSession().own_unit_bindings.empty()){
+  boundBoard=state.battle;std::wstring ignored;ccz::editor_preview::ApplyBattleOwnUnitBindings(*boundBoard,ActiveSession().own_unit_bindings,ignored);
+ }
+	const auto& battle = dynamic &&
+		m_dynamicProjection.battle.map.projection_valid
+		? m_dynamicProjection.battle
+		: dynamic ? m_dynamicScene1Baseline : boundBoard ? *boundBoard : state.battle;
 	std::vector<const ccz::preview::BattleUnit*> units;
-	for (const auto& unit : state.battle.units) {
+	for (const auto& unit : battle.units) {
 		if (!unit.fields_decoded || unit.editor_pending_delete ||
-			(!unit.editor_staged_new && !in_scope(unit.source_key, state.scope_root)) ||
+			(!dynamic && !unit.editor_staged_new &&
+			 !in_scope(unit.source_key, state.scope_root)) ||
 			ccz::editor_preview::IsBattleFixedEmptySlot(unit) ||
 			unit.position != coordinate) continue;
 		units.push_back(&unit);
@@ -5035,8 +6178,9 @@ void CSBattlePreviewPage::DrawHoveredUnitCard(
 	if (units.size() == 1) {
 		const auto& unit = *units.front();
 		const std::uint16_t instruction = battle_unit_deployment(unit);
-		const int battlefieldIndex = predicted_battlefield_index(state, unit);
-		if (instruction == 0x4b) {
+		const int battlefieldIndex = dynamic ? unit.battlefield_index
+			: predicted_battlefield_index(state, unit);
+		if (instruction == 0x4b && unit.data_id < 0) {
 			const auto label = own_battle_unit_status_label(battlefieldIndex);
 			title = label.identity + label.body;
 		} else {
@@ -5058,6 +6202,18 @@ void CSBattlePreviewPage::DrawHoveredUnitCard(
 				? std::to_wstring(battlefieldIndex) : std::wstring(L"待分配");
 			title += L"." + characterName;
 		}
+        if(dynamic) {
+            const auto details=m_dynamicProjection.unit_details.find(unit.editor_cache_id);
+            if(details!=m_dynamicProjection.unit_details.end()) {
+                if(details->second.action>=0) lines.push_back(std::wstring(L"战场动作：")+ccz::editor_preview::BattleActionName(details->second.action));
+                const auto& d=details->second;const wchar_t* attrs[]={L"攻击",L"防御",L"精神",L"爆发",L"士气",L"移动力"};const wchar_t* changes[]={L"下降",L"正常",L"上升"};
+                std::wstring text;for(const auto& item:d.attribute_changes)if(item.first>=0&&item.first<6&&item.second>=0&&item.second<3){if(!text.empty())text+=L" / ";text+=attrs[item.first];text+=changes[item.second];}if(!text.empty())lines.push_back(text);
+                auto statusNames=[](int bits){const wchar_t* names[]={L"麻痹",L"封咒",L"混乱",L"中毒",L"5号",L"6号"};std::wstring result;for(int i=0;i<6;++i)if(bits&(2<<i)){if(!result.empty())result+=L"、";result+=names[i];}return result;};
+                if(d.added_status_bits)lines.push_back(L"赋予："+statusNames(d.added_status_bits));
+                if(d.removed_status_bits)lines.push_back(L"取消："+statusNames(d.removed_status_bits));
+                if(d.hp_change||d.mp_change)lines.push_back(L"HP变化："+std::to_wstring(d.hp_change)+L" MP变化："+std::to_wstring(d.mp_change));
+            }
+        }
 		lines.push_back(L"坐标：(" + std::to_wstring(unit.position.x) + L", " +
 			std::to_wstring(unit.position.y) + L")");
 		if (unit_has_battle_role(unit, ccz::preview::BattleFieldRole::Hidden))
@@ -5072,15 +6228,19 @@ void CSBattlePreviewPage::DrawHoveredUnitCard(
 		if (unit_has_battle_role(unit, ccz::preview::BattleFieldRole::Reinforcement))
 			lines.push_back(std::wstring(L"援军：") +
 				(unit.reinforcement ? L"是" : L"否"));
-		if (unit_has_battle_role(unit, ccz::preview::BattleFieldRole::AiPolicy))
+		const auto policyDetails=m_dynamicProjection.unit_details.find(unit.editor_cache_id);
+		const bool projectedPolicy=dynamic && policyDetails!=m_dynamicProjection.unit_details.end() && policyDetails->second.policy>=0;
+		if (projectedPolicy || unit_has_battle_role(unit, ccz::preview::BattleFieldRole::AiPolicy))
 			lines.push_back(L"行动方针：" +
 				std::wstring(battle_ai_policy_name(unit.ai_policy)));
 		if ((unit.ai_policy == 3 || unit.ai_policy == 5) &&
-			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetDataId))
-			lines.push_back(L"目标 Data：" + std::to_wstring(unit.target));
+			(projectedPolicy || unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetDataId)))
+			lines.push_back(unit.target>=1028 && unit.target<=1277
+				? L"目标战场编号：" + std::to_wstring(unit.target-1028)
+				: L"目标 Data：" + std::to_wstring(unit.target));
 		if ((unit.ai_policy == 4 || unit.ai_policy == 6) &&
-			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetX) &&
-			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetY))
+			(projectedPolicy || (unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetX) &&
+			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetY))))
 			lines.push_back(L"目标坐标：(" + std::to_wstring(unit.target_x) + L", " +
 				std::to_wstring(unit.target_y) + L")");
 	}
@@ -5108,7 +6268,8 @@ void CSBattlePreviewPage::DrawHoveredUnitCard(
 		m_canvasRect.Width(), m_canvasRect.Height()),
 		Gdiplus::CombineModeIntersect);
 	const Gdiplus::Rect card(cardX, cardY, cardWidth, cardHeight);
-	Gdiplus::SolidBrush panel(Gdiplus::Color(242, 26, 28, 32));
+	Gdiplus::SolidBrush panel(Gdiplus::Color(dynamic ? 255 : 242,
+		26, 28, 32));
 	Gdiplus::Pen border(Gdiplus::Color(230, 205, 210, 218), 1.2f);
 	graphics.FillRectangle(&panel, card);
 	graphics.DrawRectangle(&border, card);
@@ -5151,7 +6312,7 @@ void CSBattlePreviewPage::DrawHoveredUnitCard(
 	Gdiplus::SolidBrush portraitBackground(Gdiplus::Color(255, 13, 14, 16));
 	Gdiplus::Pen portraitBorder(Gdiplus::Color(210, 155, 160, 166), 1.0f);
 	graphics.FillRectangle(&portraitBackground, portraitRect);
-	Gdiplus::Bitmap* portrait = battle_unit_deployment(unit) == 0x4b
+	Gdiplus::Bitmap* portrait = battle_unit_deployment(unit) == 0x4b && unit.data_id < 0
 		? GetOwnFactionPlaceholderPortrait()
 		: (unit.data_id >= 0 ? GetUnitPortrait(unit.data_id) : nullptr);
 	if (portrait != nullptr && portrait->GetLastStatus() == Gdiplus::Ok) {
@@ -5179,8 +6340,16 @@ void CSBattlePreviewPage::DrawHoveredUnitCard(
 			static_cast<float>(cardY + 44 + static_cast<int>(index) * lineHeight),
 			static_cast<float>(cardX + cardWidth - textLeft - 8),
 			static_cast<float>(lineHeight));
-		graphics.DrawString(lines[index].c_str(), -1, &bodyFont, bounds,
-			&format, &bodyBrush);
+		Gdiplus::SolidBrush statusBrush(Gdiplus::Color(255,255,140,218));
+        const bool statusLine=lines[index].find(L"赋予：")==0||lines[index].find(L"取消：")==0||lines[index].find(L"HP变化：")==0||
+          lines[index].find(L"攻击上升")!=std::wstring::npos||lines[index].find(L"攻击下降")!=std::wstring::npos||
+          lines[index].find(L"防御上升")!=std::wstring::npos||lines[index].find(L"防御下降")!=std::wstring::npos||
+          lines[index].find(L"精神上升")!=std::wstring::npos||lines[index].find(L"精神下降")!=std::wstring::npos||
+          lines[index].find(L"爆发上升")!=std::wstring::npos||lines[index].find(L"爆发下降")!=std::wstring::npos||
+          lines[index].find(L"士气上升")!=std::wstring::npos||lines[index].find(L"士气下降")!=std::wstring::npos||
+          lines[index].find(L"移动力上升")!=std::wstring::npos||lines[index].find(L"移动力下降")!=std::wstring::npos;
+        graphics.DrawString(lines[index].c_str(), -1, &bodyFont, bounds,
+			&format, statusLine?&statusBrush:&bodyBrush);
 	}
 	graphics.Restore(saved);
 }
@@ -5197,34 +6366,45 @@ void CSBattlePreviewPage::DrawCanvas(
 	const int ox = m_canvasRect.left - m_scrollX;
 	const int oy = m_canvasRect.top - m_scrollY;
 	const float cell = kCellPixels * m_zoom;
-	const bool currentMapImage = ActiveSession().baseline_capture.ok &&
-		m_mapBitmap != nullptr &&
-		m_activeMapKey == ActiveSession().map_asset_key;
-	const bool projection = currentMapImage &&
-		ActiveSession().editor_state.battle.map.projection_valid &&
-		ActiveSession().editor_state.battle.map.width > 0 &&
-		ActiveSession().editor_state.battle.map.height > 0;
+	const bool dynamicState = m_dynamicPreviewEnabled &&
+		m_dynamicMapBitmap != nullptr &&
+		m_dynamicScene1Baseline.map.projection_valid;
+	const auto& editorState = ActiveSession().editor_state;
+	const auto& dynamicBattle = m_dynamicProjection.battle.map.projection_valid
+		? m_dynamicProjection.battle : m_dynamicScene1Baseline;
+ std::optional<ccz::preview::BattlePreviewState> boundBoard;
+ if(!dynamicState && !ActiveSession().own_unit_bindings.empty()){
+  boundBoard=editorState.battle;std::wstring ignored;ccz::editor_preview::ApplyBattleOwnUnitBindings(*boundBoard,ActiveSession().own_unit_bindings,ignored);
+ }
+ const auto& battle = dynamicState ? dynamicBattle : boundBoard ? *boundBoard : editorState.battle;
+	Gdiplus::Bitmap* mapBitmap = dynamicState
+		? m_dynamicMapBitmap.get() : m_mapBitmap;
+	const bool currentMapImage = dynamicState ||
+		(ActiveSession().baseline_capture.ok && m_mapBitmap != nullptr &&
+		 m_activeMapKey == ActiveSession().map_asset_key);
+	const bool projection = currentMapImage && battle.map.projection_valid &&
+		battle.map.width > 0 && battle.map.height > 0;
 	graphics.SetClip(Gdiplus::Rect(m_canvasRect.left, m_canvasRect.top,
 		m_canvasRect.Width(), m_canvasRect.Height()), Gdiplus::CombineModeReplace);
-	if (currentMapImage) {
-		graphics.DrawImage(m_mapBitmap,
+	if (currentMapImage && mapBitmap != nullptr) {
+		graphics.DrawImage(mapBitmap,
 			Gdiplus::Rect(ox, oy,
-				static_cast<int>(std::lround(m_mapBitmap->GetWidth() * m_zoom)),
-				static_cast<int>(std::lround(m_mapBitmap->GetHeight() * m_zoom))),
-			0, 0, static_cast<INT>(m_mapBitmap->GetWidth()),
-			static_cast<INT>(m_mapBitmap->GetHeight()), Gdiplus::UnitPixel);
+				static_cast<int>(std::lround(mapBitmap->GetWidth() * m_zoom)),
+				static_cast<int>(std::lround(mapBitmap->GetHeight() * m_zoom))),
+			0, 0, static_cast<INT>(mapBitmap->GetWidth()),
+			static_cast<INT>(mapBitmap->GetHeight()), Gdiplus::UnitPixel);
 	}
 	if (projection) {
 		Gdiplus::Pen grid(Gdiplus::Color(105, 255, 255, 255), 1.0f);
-		for (int x = 0; x <= ActiveSession().editor_state.battle.map.width; ++x) {
+		for (int x = 0; x <= battle.map.width; ++x) {
 			const float px = ox + x * cell;
 			graphics.DrawLine(&grid, px, static_cast<float>(oy), px,
-				oy + ActiveSession().editor_state.battle.map.height * cell);
+				oy + battle.map.height * cell);
 		}
-		for (int y = 0; y <= ActiveSession().editor_state.battle.map.height; ++y) {
+		for (int y = 0; y <= battle.map.height; ++y) {
 			const float py = oy + y * cell;
 			graphics.DrawLine(&grid, static_cast<float>(ox), py,
-				ox + ActiveSession().editor_state.battle.map.width * cell, py);
+				ox + battle.map.width * cell, py);
 		}
 		if (m_hoverCell) {
 			Gdiplus::SolidBrush hover(Gdiplus::Color(60, 255, 235, 70));
@@ -5232,10 +6412,104 @@ void CSBattlePreviewPage::DrawCanvas(
 				oy + m_hoverCell->y * cell, cell, cell);
 		}
 	}
-	const auto& state = ActiveSession().editor_state;
+		const auto draw_obstacle_marker = [&](
+			const ccz::preview::BattleCoord& coordinate, int type,
+			BYTE alpha) {
+			if (type >= 0 && type < 3 && m_dynamicObstacleSprites[type]) {
+				Gdiplus::ColorMatrix matrix = {1,0,0,0,0, 0,1,0,0,0,
+					0,0,1,0,0, 0,0,0,alpha / 255.0f,0, 0,0,0,0,1};
+				Gdiplus::ImageAttributes attributes;
+				attributes.SetColorMatrix(&matrix);
+				graphics.DrawImage(m_dynamicObstacleSprites[type].get(),
+					Gdiplus::RectF(ox + coordinate.x * cell, oy + coordinate.y * cell, cell, cell),
+					0,0,48,48,Gdiplus::UnitPixel,&attributes);
+				return;
+			}
+
+			const float pad = (std::max)(2.0f, cell * 0.12f);
+			const Gdiplus::RectF bounds(ox + coordinate.x * cell + pad,
+				oy + coordinate.y * cell + pad,
+				(std::max)(8.0f, cell - pad * 2.0f),
+				(std::max)(8.0f, cell - pad * 2.0f));
+			Gdiplus::SolidBrush plate(Gdiplus::Color(alpha, 28, 24, 18));
+			Gdiplus::Pen border(Gdiplus::Color(alpha, 255, 200, 76),
+				(std::max)(1.3f, m_zoom * 1.5f));
+			border.SetDashStyle(Gdiplus::DashStyleDash);
+			graphics.FillRectangle(&plate, bounds);
+			graphics.DrawRectangle(&border, bounds);
+			const float centerX = bounds.X + bounds.Width * 0.5f;
+			const float centerY = bounds.Y + bounds.Height * 0.47f;
+			const float scale = (std::min)(1.0f,
+				(std::min)(bounds.Width, bounds.Height) / 38.0f);
+			Gdiplus::SolidBrush flame(Gdiplus::Color(alpha, 228, 77, 20));
+			Gdiplus::SolidBrush flameCore(Gdiplus::Color(alpha, 255, 207, 56));
+			Gdiplus::SolidBrush hull(Gdiplus::Color(alpha, 166, 104, 43));
+			Gdiplus::SolidBrush sail(Gdiplus::Color(alpha, 255, 239, 187));
+			Gdiplus::Pen mast(Gdiplus::Color(alpha, 92, 59, 34),
+				(std::max)(1.0f, scale * 1.6f));
+			const auto drawFlame = [&](float cx, float cy, float factor) {
+				Gdiplus::PointF points[] = {
+					{cx - 8.0f * factor, cy + 7.0f * factor},
+					{cx - 6.0f * factor, cy - 1.0f * factor},
+					{cx - 2.0f * factor, cy + 2.0f * factor},
+					{cx + 1.0f * factor, cy - 9.0f * factor},
+					{cx + 4.0f * factor, cy + 1.0f * factor},
+					{cx + 7.0f * factor, cy - 3.0f * factor},
+					{cx + 8.0f * factor, cy + 7.0f * factor}};
+				graphics.FillPolygon(&flame, points,
+					static_cast<INT>(std::size(points)));
+				Gdiplus::PointF core[] = {
+					{cx - 3.0f * factor, cy + 7.0f * factor},
+					{cx - 1.0f * factor, cy + 1.0f * factor},
+					{cx + 2.0f * factor, cy + 3.0f * factor},
+					{cx + 4.0f * factor, cy + 7.0f * factor}};
+				graphics.FillPolygon(&flameCore, core,
+					static_cast<INT>(std::size(core)));
+			};
+			const auto drawBoat = [&](float cx, float cy, float factor) {
+				Gdiplus::PointF boat[] = {
+					{cx - 12.0f * factor, cy + 5.0f * factor},
+					{cx + 12.0f * factor, cy + 5.0f * factor},
+					{cx + 7.0f * factor, cy + 11.0f * factor},
+					{cx - 7.0f * factor, cy + 11.0f * factor}};
+				graphics.FillPolygon(&hull, boat,
+					static_cast<INT>(std::size(boat)));
+				graphics.DrawLine(&mast, cx, cy - 11.0f * factor,
+					cx, cy + 5.0f * factor);
+				Gdiplus::PointF sailPoints[] = {
+					{cx - 1.0f * factor, cy - 9.0f * factor},
+					{cx - 9.0f * factor, cy + 2.0f * factor},
+					{cx - 1.0f * factor, cy + 2.0f * factor}};
+				graphics.FillPolygon(&sail, sailPoints,
+					static_cast<INT>(std::size(sailPoints)));
+			};
+			if (type == 0) drawFlame(centerX, centerY, scale);
+			else if (type == 1) drawBoat(centerX, centerY, scale);
+			else {
+				drawBoat(centerX, centerY + 3.0f * scale, scale * 0.78f);
+				drawFlame(centerX, centerY - 4.0f * scale, scale * 0.68f);
+			}
+		};
+	// Dynamic obstacles are rendered from the Scene1-derived projection using
+	// the exact U_select.e5 thumbnails, beneath the unit sprites.
+	if (dynamicState) {
+		const auto& obstacleBaseline =
+			ccz::editor_preview::BattleDynamicObstacleBaselineForTarget(
+				m_dynamicTargetIsScene1, m_dynamicScene1Obstacles);
+		const auto& obstacles = m_dynamicProjection.battle.map.projection_valid
+			? m_dynamicProjection.obstacles : obstacleBaseline;
+		for (const auto& obstacle : obstacles) {
+			if (obstacle.type < 0 || obstacle.type >=
+				static_cast<int>(m_dynamicObstacleSprites.size())) continue;
+			if (ccz::preview::is_battle_coord_in_bounds(obstacle.coordinate,
+				battle.map.width, battle.map.height))
+				draw_obstacle_marker(obstacle.coordinate, obstacle.type, 255);
+		}
+	}
+	const auto& state = editorState;
 	std::vector<std::uint64_t> selectedCacheIds;
 	selectedCacheIds.reserve(state.selection_group.size());
-	for (const auto& selected : state.selection_group)
+	for (const auto& selected : (dynamicState ? m_dynamicSelection : state.selection_group))
 		selectedCacheIds.push_back(selected.cache_id);
 	std::sort(selectedCacheIds.begin(), selectedCacheIds.end());
 	const auto is_group_selected = [&selectedCacheIds](std::uint64_t cache_id) {
@@ -5243,29 +6517,29 @@ void CSBattlePreviewPage::DrawCanvas(
 			selectedCacheIds.end(), cache_id);
 	};
 	const std::size_t mapCells = projection
-		? static_cast<std::size_t>(state.battle.map.width) *
-			static_cast<std::size_t>(state.battle.map.height)
+		? static_cast<std::size_t>(battle.map.width) *
+			static_cast<std::size_t>(battle.map.height)
 		: 0;
 	std::vector<std::uint8_t> factionMasks(mapCells, 0);
 	std::vector<std::uint16_t> unitCounts(mapCells, 0);
 	std::vector<const ccz::preview::BattleUnit*> visibleUnits;
-	visibleUnits.reserve(state.battle.units.size());
-	const auto visible_in_scope = [&state](
+	visibleUnits.reserve(battle.units.size());
+	const auto visible_in_scope = [&state, dynamicState, &battle](
 		const ccz::preview::BattleUnit& unit) {
 		return unit.fields_decoded && !unit.editor_pending_delete &&
-			(unit.editor_staged_new || in_scope(unit.source_key, state.scope_root)) &&
+			(dynamicState || unit.editor_staged_new ||
+				in_scope(unit.source_key, state.scope_root)) &&
 			!ccz::editor_preview::IsBattleFixedEmptySlot(unit) &&
 			ccz::preview::is_battle_coord_in_bounds(unit.position,
-				state.battle.map.width, state.battle.map.height);
+				battle.map.width, battle.map.height);
 	};
 	int decoded = 0;
 	int ownFactionCount = 0;
 	int friendlyFactionCount = 0;
 	int enemyFactionCount = 0;
-	if (projection) for (std::size_t i = 0;
-		i < ActiveSession().editor_state.battle.units.size(); ++i) {
-		const auto& unit = ActiveSession().editor_state.battle.units[i];
-		const bool moving_group_member =
+	if (projection) for (std::size_t i = 0; i < battle.units.size(); ++i) {
+		const auto& unit = battle.units[i];
+		const bool moving_group_member = !dynamicState &&
 			ActiveSession().editor_state.mode ==
 				ccz::editor_preview::BattleEditorMode::AdjustPosition &&
 				(ActiveSession().editor_state.selection_group.size() > 1
@@ -5279,11 +6553,11 @@ void CSBattlePreviewPage::DrawCanvas(
 		else if (deployment == 0x46) ++friendlyFactionCount;
 		else if (deployment == 0x47) ++enemyFactionCount;
 		const std::size_t cellIndex = static_cast<std::size_t>(
-			unit.position.y * state.battle.map.width + unit.position.x);
+			unit.position.y * battle.map.width + unit.position.x);
 		if (cellIndex < mapCells) {
 			++unitCounts[cellIndex];
 			const std::uint8_t factionBit = deployment == 0x4b ? 0x1
-				: deployment == 0x47 ? 0x2
+				: deployment == 0x47 ? (unit.reinforcement ? 0x8 : 0x2)
 				: deployment == 0x46 ? 0x4 : 0;
 			factionMasks[cellIndex] |= factionBit;
 		}
@@ -5296,8 +6570,10 @@ void CSBattlePreviewPage::DrawCanvas(
 		const int dy = static_cast<int>(std::lround(by)) - size;
 		ccz::editor_preview::BattleAssetCache::UnitSpriteRef spriteRef;
 		Gdiplus::Bitmap* sprite = GetUnitSprite(
-			unit, unit.direction, &spriteRef);
+			unit, PreviewBattleFacing(unit), &spriteRef);
 		if (sprite && sprite->GetLastStatus() == Gdiplus::Ok) {
+            const int drawnSize=(std::max)(8,static_cast<int>(std::lround(spriteRef.frame_pixels*m_zoom)));
+            const int drawnX=dx-(drawnSize-size)/2,drawnY=dy-(drawnSize-size)/2;
 			Gdiplus::ColorMatrix matrix = {
 				1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0,
 				0,0,0,unit.hidden ? 0.42f : 1.0f,0, 0,0,0,0,1};
@@ -5307,16 +6583,16 @@ void CSBattlePreviewPage::DrawCanvas(
 				Gdiplus::Matrix oldTransform;
 				graphics.GetTransform(&oldTransform);
 				Gdiplus::Matrix flip;
-				flip.Translate(static_cast<float>(dx + size),
-					static_cast<float>(dy));
+				flip.Translate(static_cast<float>(drawnX + drawnSize),
+					static_cast<float>(drawnY));
 				flip.Scale(-1.0f, 1.0f);
 				graphics.SetTransform(&flip);
-				graphics.DrawImage(sprite, Gdiplus::Rect(0, 0, size, size),
-					0, 0, 48, 48, Gdiplus::UnitPixel, &attributes);
+				graphics.DrawImage(sprite, Gdiplus::Rect(0, 0, drawnSize, drawnSize),
+					0, 0, spriteRef.frame_pixels, spriteRef.frame_pixels, Gdiplus::UnitPixel, &attributes);
 				graphics.SetTransform(&oldTransform);
 			} else {
-				graphics.DrawImage(sprite, Gdiplus::Rect(dx, dy, size, size),
-					0, 0, 48, 48, Gdiplus::UnitPixel, &attributes);
+				graphics.DrawImage(sprite, Gdiplus::Rect(drawnX, drawnY, drawnSize, drawnSize),
+					0, 0, spriteRef.frame_pixels, spriteRef.frame_pixels, Gdiplus::UnitPixel, &attributes);
 			}
 			} else {
 				if (ccz::preview::is_battle_deployment_slot_marker(unit)) {
@@ -5336,18 +6612,18 @@ void CSBattlePreviewPage::DrawCanvas(
 	}
 	if (projection) {
 		const struct FactionOutline { std::uint8_t bit; std::uint16_t instruction; }
-			outlines[] = {{0x1, 0x4b}, {0x2, 0x47}, {0x4, 0x46}};
-		for (int y = 0; y < state.battle.map.height; ++y) {
-			for (int x = 0; x < state.battle.map.width; ++x) {
+			outlines[] = {{0x1, 0x4b}, {0x2, 0x47}, {0x4, 0x46}, {0x8, 0}};
+		for (int y = 0; y < battle.map.height; ++y) {
+			for (int x = 0; x < battle.map.width; ++x) {
 				const std::size_t index = static_cast<std::size_t>(
-					y * state.battle.map.width + x);
+					y * battle.map.width + x);
 				if (index >= factionMasks.size() || factionMasks[index] == 0) continue;
 				int layer = 0;
 				for (const auto& outline : outlines) {
 					if ((factionMasks[index] & outline.bit) == 0) continue;
 					const float inset = 2.0f + layer * 2.5f;
 					const float widthOnCell = (std::max)(2.0f, cell - inset * 2.0f);
-					Gdiplus::Pen pen(battle_faction_color(outline.instruction),
+					Gdiplus::Pen pen(outline.bit == 0x8 ? Gdiplus::Color(255, 70, 190, 105) : battle_faction_color(outline.instruction),
 						(std::max)(1.2f, m_zoom * 1.6f));
 					graphics.DrawRectangle(&pen,
 						Gdiplus::RectF(ox + x * cell + inset,
@@ -5357,6 +6633,16 @@ void CSBattlePreviewPage::DrawCanvas(
 			}
 		}
 	}
+ if(dynamicState){
+  Gdiplus::Pen stateOutline(Gdiplus::Color(255,232,100,190),2.0f);
+  for(const auto* unit:visibleUnits){
+   const auto detail=m_dynamicProjection.unit_details.find(unit->editor_cache_id);
+   if(detail==m_dynamicProjection.unit_details.end())continue;
+   const auto& d=detail->second;
+   if(d.attribute_changes.empty()&&!d.added_status_bits&&!d.removed_status_bits&&!d.hp_change&&!d.mp_change)continue;
+   graphics.DrawRectangle(&stateOutline,Gdiplus::RectF(ox+unit->position.x*cell+4,oy+unit->position.y*cell+4,(std::max)(1.0f,cell-8),(std::max)(1.0f,cell-8)));
+  }
+ }
 	const auto previewMode = ActiveSession().ui.parameter_preview_mode;
 	if (projection && previewMode ==
 		ccz::editor_preview::BattleParameterPreviewMode::AiPolicy) {
@@ -5383,7 +6669,7 @@ void CSBattlePreviewPage::DrawCanvas(
 					ccz::preview::BattleFieldRole::TargetY)) {
 				target = {unit->target_x, unit->target_y};
 				resolved = ccz::preview::is_battle_coord_in_bounds(target,
-					state.battle.map.width, state.battle.map.height);
+					battle.map.width, battle.map.height);
 			}
 			if (!resolved) continue;
 			Gdiplus::Pen targetLine(battle_faction_color(
@@ -5415,7 +6701,7 @@ void CSBattlePreviewPage::DrawCanvas(
 		centered.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
 		for (const auto* unit : visibleUnits) {
 			const std::size_t cellIndex = static_cast<std::size_t>(
-				unit->position.y * state.battle.map.width + unit->position.x);
+				unit->position.y * battle.map.width + unit->position.x);
 			if (cellIndex >= unitCounts.size() || unitCounts[cellIndex] != 1) continue;
 			std::wstring label;
 			using Mode = ccz::editor_preview::BattleParameterPreviewMode;
@@ -5469,9 +6755,9 @@ void CSBattlePreviewPage::DrawCanvas(
 		}
 	}
 	for (const auto* unit : visibleUnits) {
-		const bool selected = m_selectedUnit.has_value() &&
+		const bool selected = !dynamicState && m_selectedUnit.has_value() &&
 			*m_selectedUnit < state.battle.units.size() &&
-			&state.battle.units[*m_selectedUnit] == unit;
+			state.battle.units[*m_selectedUnit].editor_cache_id == unit->editor_cache_id;
 		if (!selected && !is_group_selected(unit->editor_cache_id)) continue;
 		const float cx = ox + (unit->position.x + 0.5f) * cell;
 		const float by = oy + (unit->position.y + 1.0f) * cell;
@@ -5484,7 +6770,7 @@ void CSBattlePreviewPage::DrawCanvas(
 			(std::max)(1, static_cast<int>(cell * 0.92f)),
 			(std::max)(1, static_cast<int>(cell * 0.92f)));
 	}
-	if (m_editorOps && m_hoverCell &&
+	if (!dynamicState && m_editorOps && m_hoverCell &&
 		(ActiveSession().editor_state.mode == ccz::editor_preview::BattleEditorMode::Place ||
 		 ActiveSession().editor_state.mode ==
 			ccz::editor_preview::BattleEditorMode::AdjustPosition)) {
@@ -5545,7 +6831,10 @@ void CSBattlePreviewPage::DrawCanvas(
 			}
 		}
 	}
-	if (projection && m_battleMapToolMode != BattleMapToolMode::None) {
+	if (projection) {
+		// Draft lifetime does not depend on the sidebar or active brush.
+		for (const auto& draft : m_obstacleDrafts.items())
+			draw_obstacle_marker(draft.coordinate, draft.type, 220);
 		const auto draw_target_outline = [&](
 			const ccz::preview::BattleCoord& coordinate,
 			const Gdiplus::Color& color) {
@@ -5557,115 +6846,59 @@ void CSBattlePreviewPage::DrawCanvas(
 					(std::max)(1.0f, cell - 4.0f),
 					(std::max)(1.0f, cell - 4.0f)));
 		};
-		const auto draw_obstacle_marker = [&](
-			const ccz::preview::BattleCoord& coordinate, int type,
-			int count, BYTE alpha) {
-			const float pad = (std::max)(2.0f, cell * 0.12f);
-			const Gdiplus::RectF bounds(ox + coordinate.x * cell + pad,
-				oy + coordinate.y * cell + pad,
-				(std::max)(8.0f, cell - pad * 2.0f),
-				(std::max)(8.0f, cell - pad * 2.0f));
-			Gdiplus::SolidBrush plate(Gdiplus::Color(alpha, 28, 24, 18));
-			Gdiplus::Pen border(Gdiplus::Color(alpha, 255, 200, 76),
-				(std::max)(1.3f, m_zoom * 1.5f));
-			border.SetDashStyle(count > 1
-				? Gdiplus::DashStyleSolid : Gdiplus::DashStyleDash);
-			graphics.FillRectangle(&plate, bounds);
+
+        if(m_obstacleSelection.enabled){
+            for(const auto& item:m_obstacleSelection.items){
+                draw_target_outline(item.value.coordinate,Gdiplus::Color(255,192,130,245));
+                if(!m_obstacleSelection.moving || !m_hoverCell)continue;
+                auto target=item.value.coordinate;target.x+=m_obstacleSelection.ghost_offset.x;target.y+=m_obstacleSelection.ghost_offset.y;
+                const bool valid=IsObstacleGroupTargetValid(*m_hoverCell);
+                draw_obstacle_marker(target,item.value.type,140);
+                draw_target_outline(target,valid?Gdiplus::Color(255,192,130,245):Gdiplus::Color(255,255,90,90));
+            }
+        }
+
+		const auto draw_role_preview_label = [&](const ccz::preview::BattleCoord& target,
+			const wchar_t* text) {
+			Gdiplus::SolidBrush background(Gdiplus::Color(210, 18, 94, 105));
+			Gdiplus::Pen border(Gdiplus::Color(255, 96, 243, 234), 2.0f);
+			Gdiplus::Font font(L"Microsoft YaHei", 8.0f,
+				Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+			Gdiplus::SolidBrush foreground(Gdiplus::Color(255, 255, 255, 255));
+			Gdiplus::StringFormat format;
+			format.SetAlignment(Gdiplus::StringAlignmentCenter);
+			format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			format.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+			const float height = (std::max)(12.0f,
+				(std::min)(cell * 0.32f, 16.0f));
+			const float width = (std::max)(22.0f,
+				(std::min)(cell - 4.0f, 42.0f));
+			const Gdiplus::RectF bounds(
+				ox + (target.x + 0.5f) * cell - width * 0.5f,
+				oy + (target.y + 1.0f) * cell - height - 2.0f, width, height);
+			graphics.FillRectangle(&background, bounds);
 			graphics.DrawRectangle(&border, bounds);
-			const float centerX = bounds.X + bounds.Width * 0.5f;
-			const float centerY = bounds.Y + bounds.Height * 0.47f;
-			const float scale = (std::min)(1.0f,
-				(std::min)(bounds.Width, bounds.Height) / 38.0f);
-			Gdiplus::SolidBrush flame(Gdiplus::Color(alpha, 228, 77, 20));
-			Gdiplus::SolidBrush flameCore(Gdiplus::Color(alpha, 255, 207, 56));
-			Gdiplus::SolidBrush hull(Gdiplus::Color(alpha, 166, 104, 43));
-			Gdiplus::SolidBrush sail(Gdiplus::Color(alpha, 255, 239, 187));
-			Gdiplus::Pen mast(Gdiplus::Color(alpha, 92, 59, 34),
-				(std::max)(1.0f, scale * 1.6f));
-			const auto drawFlame = [&](float cx, float cy, float factor) {
-				Gdiplus::PointF points[] = {
-					{cx - 8.0f * factor, cy + 7.0f * factor},
-					{cx - 6.0f * factor, cy - 1.0f * factor},
-					{cx - 2.0f * factor, cy + 2.0f * factor},
-					{cx + 1.0f * factor, cy - 9.0f * factor},
-					{cx + 4.0f * factor, cy + 1.0f * factor},
-					{cx + 7.0f * factor, cy - 3.0f * factor},
-					{cx + 8.0f * factor, cy + 7.0f * factor}};
-				graphics.FillPolygon(&flame, points,
-					static_cast<INT>(std::size(points)));
-				Gdiplus::PointF core[] = {
-					{cx - 3.0f * factor, cy + 7.0f * factor},
-					{cx - 1.0f * factor, cy + 1.0f * factor},
-					{cx + 2.0f * factor, cy + 3.0f * factor},
-					{cx + 4.0f * factor, cy + 7.0f * factor}};
-				graphics.FillPolygon(&flameCore, core,
-					static_cast<INT>(std::size(core)));
-			};
-			const auto drawBoat = [&](float cx, float cy, float factor) {
-				Gdiplus::PointF boat[] = {
-					{cx - 12.0f * factor, cy + 5.0f * factor},
-					{cx + 12.0f * factor, cy + 5.0f * factor},
-					{cx + 7.0f * factor, cy + 11.0f * factor},
-					{cx - 7.0f * factor, cy + 11.0f * factor}};
-				graphics.FillPolygon(&hull, boat,
-					static_cast<INT>(std::size(boat)));
-				graphics.DrawLine(&mast, cx, cy - 11.0f * factor,
-					cx, cy + 5.0f * factor);
-				Gdiplus::PointF sailPoints[] = {
-					{cx - 1.0f * factor, cy - 9.0f * factor},
-					{cx - 9.0f * factor, cy + 2.0f * factor},
-					{cx - 1.0f * factor, cy + 2.0f * factor}};
-				graphics.FillPolygon(&sail, sailPoints,
-					static_cast<INT>(std::size(sailPoints)));
-			};
-			if (type == 0) drawFlame(centerX, centerY, scale);
-			else if (type == 1) drawBoat(centerX, centerY, scale);
-			else {
-				drawBoat(centerX, centerY + 3.0f * scale, scale * 0.78f);
-				drawFlame(centerX, centerY - 4.0f * scale, scale * 0.68f);
-			}
-			if (count > 1) {
-				Gdiplus::Font countFont(L"Microsoft YaHei", 7.0f,
-					Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-				Gdiplus::SolidBrush countBackground(
-					Gdiplus::Color(230, 24, 24, 24));
-				Gdiplus::SolidBrush countText(Gdiplus::Color(255, 255, 255, 255));
-				const Gdiplus::RectF countRect(bounds.X + bounds.Width - 17.0f,
-					bounds.Y + 1.0f, 15.0f, 12.0f);
-				graphics.FillRectangle(&countBackground, countRect);
-				graphics.DrawString((L"x" + std::to_wstring(count)).c_str(), -1,
-					&countFont, countRect, nullptr, &countText);
-			}
+			graphics.DrawString(text, -1, &font, bounds, &format, &foreground);
 		};
-		std::map<std::pair<int, int>, std::pair<int, int>> stagedByCoordinate;
-		for (const auto& draft : m_obstacleDrafts.items()) {
-			auto& marker = stagedByCoordinate[{draft.coordinate.x,
-				draft.coordinate.y}];
-			marker = {draft.type, marker.second + 1};
-		}
-		for (const auto& entry : stagedByCoordinate) {
-			draw_obstacle_marker({entry.first.first, entry.first.second},
-				entry.second.first, entry.second.second, 220);
-		}
 		if (m_hoverCell && !m_panActive) {
 			if (m_battleMapToolMode == BattleMapToolMode::MovePickUnit) {
 				const auto hit = HitTestUnit(*m_hoverCell);
-				if (hit && *hit < state.battle.units.size())
+				if (hit && *hit < battle.units.size())
 					draw_target_outline(*m_hoverCell,
 						Gdiplus::Color(245, 74, 230, 145));
 			} else if (m_battleMapToolMode ==
-				BattleMapToolMode::MovePickTarget) {
+				BattleMapToolMode::MovePickTarget || m_battleMapToolMode == BattleMapToolMode::DynamicRoleAdjust) {
 				std::vector<ccz::editor_preview::BattleRoleOperationSource>
 					sources;
 				sources.reserve(m_roleOperationUnits.size());
 				for (const auto& unit : m_roleOperationUnits) {
-					sources.push_back({unit.data_id, unit.position, unit.direction});
+					sources.push_back({ccz::editor_preview::BattlePersonForUnit(unit), unit.position, unit.direction});
 				}
 				std::vector<ccz::editor_preview::BattleMapOperationInstruction>
 					previewInstructions;
 				std::vector<ccz::preview::BattleCoord> targets;
 				std::wstring ignoredDiagnostic;
-				const auto& map = state.battle.map;
+				const auto& map = battle.map;
 				const auto directionOverride = m_roleOperationDirectionAdjusted
 					? std::optional<int>(m_roleOperationDirection)
 					: std::nullopt;
@@ -5697,8 +6930,10 @@ void CSBattlePreviewPage::DrawCanvas(
 							spriteRef;
 						Gdiplus::Bitmap* sprite = GetUnitSprite(
 							ghost, ghost.direction, &spriteRef);
-						if (!sprite || sprite->GetLastStatus() != Gdiplus::Ok)
+						if (!sprite || sprite->GetLastStatus() != Gdiplus::Ok) {
+							draw_role_preview_label(target, L"移动");
 							continue;
+						}
 						const int dx = static_cast<int>(
 							std::lround(centerX)) - size / 2;
 						const int dy = static_cast<int>(
@@ -5720,6 +6955,7 @@ void CSBattlePreviewPage::DrawCanvas(
 								Gdiplus::Rect(dx, dy, size, size),
 								0, 0, 48, 48, Gdiplus::UnitPixel, &attributes);
 						}
+						draw_role_preview_label(target, L"移动");
 					}
 				} else {
 					draw_target_outline(*m_hoverCell,
@@ -5727,11 +6963,6 @@ void CSBattlePreviewPage::DrawCanvas(
 				}
 			} else if (m_battleMapToolMode ==
 				BattleMapToolMode::RevivePickTarget) {
-				Gdiplus::SolidBrush marker(Gdiplus::Color(210, 18, 94, 105));
-				Gdiplus::Pen markerBorder(Gdiplus::Color(255, 96, 243, 234), 2.0f);
-				Gdiplus::Font markerFont(L"Microsoft YaHei", 8.0f,
-					Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-				Gdiplus::SolidBrush markerText(Gdiplus::Color(255, 255, 255, 255));
 				Gdiplus::ColorMatrix ghostMatrix = {
 					1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0,
 					0,0,0,0.55f,0, 0,0,0,0,1};
@@ -5743,12 +6974,12 @@ void CSBattlePreviewPage::DrawCanvas(
 					sources;
 				sources.reserve(m_roleOperationUnits.size());
 				for (const auto& unit : m_roleOperationUnits)
-					sources.push_back({unit.data_id, unit.position, unit.direction});
+					sources.push_back({ccz::editor_preview::BattlePersonForUnit(unit), unit.position, unit.direction});
 				std::vector<ccz::editor_preview::BattleMapOperationInstruction>
 					previewInstructions;
 				std::vector<ccz::preview::BattleCoord> targets;
 				std::wstring ignoredDiagnostic;
-				const auto& map = state.battle.map;
+				const auto& map = battle.map;
 				if (ccz::editor_preview::BuildBattleRoleOperationBatch(
 					ccz::editor_preview::BattleRoleOperationKind::ReviveTo,
 					sources, m_roleOperationAnchorIndex, *m_hoverCell,
@@ -5798,20 +7029,7 @@ void CSBattlePreviewPage::DrawCanvas(
 						}
 					draw_target_outline(target,
 						Gdiplus::Color(245, 75, 224, 218));
-					const float labelHeight = (std::max)(12.0f,
-						(std::min)(cell * 0.32f, 16.0f));
-					const float labelWidth = (std::max)(22.0f,
-						(std::min)(cell - 4.0f, 42.0f));
-					const Gdiplus::RectF markerBounds(
-						ox + target.x * cell + 2.0f,
-						oy + (target.y + 1.0f) * cell - labelHeight - 2.0f,
-						labelWidth, labelHeight);
-					graphics.FillRectangle(&marker, markerBounds);
-					graphics.DrawRectangle(&markerBorder, markerBounds);
-						const std::wstring reviveLabel = L"复" +
-							std::to_wstring(m_roleOperationUnits[index].data_id);
-						graphics.DrawString(reviveLabel.c_str(), -1, &markerFont,
-							markerBounds, nullptr, &markerText);
+						draw_role_preview_label(target, L"复活");
 					}
 				} else {
 					draw_target_outline(*m_hoverCell,
@@ -5819,10 +7037,43 @@ void CSBattlePreviewPage::DrawCanvas(
 				}
 			} else if (m_battleMapToolMode ==
 				BattleMapToolMode::ObstaclePlace) {
-				draw_obstacle_marker(*m_hoverCell, m_selectedObstacleType, 1, 150);
+				draw_obstacle_marker(*m_hoverCell, m_selectedObstacleType, 150);
+			} else if (m_battleMapToolMode == BattleMapToolMode::ObstacleAdjust && m_obstacleEditTarget) {
+				draw_obstacle_marker(*m_hoverCell, m_obstacleEditTarget->value.type, 150);
 			}
 		}
 	}
+	if (dynamicState && !m_dynamicProjection.labels.empty()) {
+		Gdiplus::Font labelFont(L"Microsoft YaHei",
+			(std::max)(7.0f, (std::min)(10.0f, cell * 0.20f)),
+			Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+		Gdiplus::SolidBrush labelBackground(Gdiplus::Color(235, 20, 48, 55));
+		Gdiplus::Pen labelBorder(Gdiplus::Color(255, 96, 243, 234),
+			(std::max)(1.0f, m_zoom));
+		Gdiplus::SolidBrush labelText(Gdiplus::Color(255, 255, 255, 255));
+		Gdiplus::StringFormat labelFormat;
+		labelFormat.SetAlignment(Gdiplus::StringAlignmentCenter);
+		labelFormat.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+		labelFormat.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+		for (const auto& label : m_dynamicProjection.labels) {
+			if (!ccz::preview::is_battle_coord_in_bounds(label.coordinate,
+				battle.map.width, battle.map.height)) continue;
+			const float labelHeight = (std::max)(12.0f,
+				(std::min)(18.0f, cell * 0.34f));
+			const Gdiplus::RectF labelBounds(
+				ox + label.coordinate.x * cell + 2.0f,
+				oy + label.coordinate.y * cell + 2.0f,
+				(std::max)(8.0f, cell - 4.0f), labelHeight);
+			const std::wstring textLabel = label.revived ? L"复活" : L"移动";
+			graphics.FillRectangle(&labelBackground, labelBounds);
+			graphics.DrawRectangle(&labelBorder, labelBounds);
+			graphics.DrawString(textLabel.c_str(), -1, &labelFont,
+				labelBounds, &labelFormat, &labelText);
+		}
+	}
+    if(projection) DrawEnhancedBattleOverlays(graphics,battle,ox,oy,cell);
+	// Keep the hover card above dynamic move/revival tags. In dynamic mode the
+	// card background is opaque so labels underneath cannot bleed through it.
 	if (projection && m_hoverCell && !m_panActive)
 		DrawHoveredUnitCard(graphics, *m_hoverCell, m_hoverPoint, cell);
 	Gdiplus::SolidBrush banner(Gdiplus::Color(220, 20, 20, 20));
@@ -5830,24 +7081,49 @@ void CSBattlePreviewPage::DrawCanvas(
 	Gdiplus::SolidBrush text(Gdiplus::Color(255, 255, 225, 170));
 	CString title;
 	if (projection) title.Format(
-		_T("S 战场预览 地图:%d 网格:%dx%d 全单位 缩放:%.2fx 已解析：总%d"),
-		ActiveSession().editor_state.battle.map.map_id,
-		ActiveSession().editor_state.battle.map.width, ActiveSession().editor_state.battle.map.height,
+		_T("地图:%d 尺寸:%dx%d 缩放:%.2fx 单位统计：总%d"),
+		battle.map.map_id,
+		battle.map.width, battle.map.height,
 		m_zoom, decoded);
-	else title.Format(_T("S 战场预览 地图:%d 网格投影未闭合 缩放:%.2fx"),
-		ActiveSession().editor_state.battle.map.map_id, m_zoom);
+	else title.Format(_T("地图:%d 尺寸未确定 缩放:%.2fx"),
+		battle.map.map_id, m_zoom);
+	if (m_dynamicPreviewEnabled) {
+		CString snapshotBanner;
+		if (!m_dynamicPreviewReady) {
+			snapshotBanner = _T("动态预览（未就绪） ");
+		} else if (!m_dynamicPlan.path_complete && m_dynamicPlan.events.empty()) {
+			snapshotBanner = _T("动态预览（推演中断，详见下方提示） ");
+		} else if (m_dynamicPlan.events.empty()) {
+			snapshotBanner = m_dynamicTargetIsScene1
+				? _T("动态预览（Scene1 结果：无变化） ")
+				: _T("动态预览（Section 结果：无变化） ");
+		} else if (!m_dynamicPlan.path_complete) {
+			snapshotBanner.Format(_T("动态预览（部分推演 %u 项） "),
+				static_cast<unsigned>(m_dynamicPlan.events.size()));
+		} else if (m_dynamicTargetIsSectionRoot) {
+			snapshotBanner.Format(_T("动态预览（Section 末尾 %u 项） "),
+				static_cast<unsigned>(m_dynamicPlan.events.size()));
+		} else if (m_dynamicTargetIsScene1) {
+			snapshotBanner.Format(_T("动态预览（Scene1 推演 %u 项） "),
+				static_cast<unsigned>(m_dynamicPlan.events.size()));
+		} else {
+			snapshotBanner.Format(_T("动态预览（已推演 %u 项） "),
+				static_cast<unsigned>(m_dynamicPlan.events.size()));
+		}
+		title = snapshotBanner + title;
+		if(!m_dynamicPredecessorBanner.empty()) title += (L" 前置："+m_dynamicPredecessorBanner).c_str();
+	}
 	graphics.SetClip(Gdiplus::Rect(0, 0, width, height),
 		Gdiplus::CombineModeReplace);
 	graphics.FillRectangle(&banner, m_canvasRect.left, 0,
 		m_canvasRect.Width(), m_canvasRect.top);
-	if (!m_sidebarVisible && !m_obstaclePageActive &&
-		m_canvasRect.top > kStatusHeaderHeight) {
+	if (m_canvasRect.top > kStatusHeaderHeight) {
 		Gdiplus::SolidBrush toolbarBackground(
 			Gdiplus::Color(255, 36, 36, 36));
 		Gdiplus::Pen toolbarDivider(Gdiplus::Color(255, 70, 70, 70), 1.0f);
 		graphics.FillRectangle(&toolbarBackground, m_canvasRect.left,
 			kStatusHeaderHeight, m_canvasRect.Width(),
-			kCollapsedControlToolbarHeight);
+			kPreviewToolbarHeight);
 		graphics.DrawLine(&toolbarDivider, m_canvasRect.left,
 			kStatusHeaderHeight, m_canvasRect.right,
 			kStatusHeaderHeight);
@@ -5881,7 +7157,6 @@ void CSBattlePreviewPage::DrawCanvas(
 			L"小河", L"大河", L"栅栏", L"城墙", L"城内", L"城门",
 			L"城池", L"关隘", L"鹿柴", L"村落", L"兵营", L"居民",
 			L"宝库", L"水池", L"火焰", L"船", L"祭坛", L"地下"};
-		const auto& battle = ActiveSession().editor_state.battle;
 		const std::size_t terrain_index = static_cast<std::size_t>(
 			m_hoverCell->y * battle.map.width + m_hoverCell->x);
 		std::wstring terrain_name = L"未知";
@@ -5913,11 +7188,12 @@ void CSBattlePreviewPage::DrawCanvas(
 		if (hovered_index && *hovered_index < battle.units.size()) {
 			const auto& unit = battle.units[*hovered_index];
 			const std::uint16_t instruction = battle_unit_deployment(unit);
-			const int battlefield_index = predicted_battlefield_index(
-				ActiveSession().editor_state, unit);
+			const int battlefield_index = dynamicState
+				? unit.battlefield_index
+				: predicted_battlefield_index(ActiveSession().editor_state, unit);
 			std::wstring identity_label;
 			std::wstring label_body;
-			if (instruction == 0x4b) {
+			if (instruction == 0x4b && unit.data_id < 0) {
 				const auto label = own_battle_unit_status_label(battlefield_index);
 				identity_label = label.identity;
 				label_body = label.body;
@@ -5970,6 +7246,10 @@ void CSBattlePreviewPage::DrawCanvas(
 	if (!m_quickModeDiagnostic.IsEmpty() && !m_diagnostic.IsEmpty()) {
 		visibleDiagnostic += _T(" | ");
 		visibleDiagnostic += m_diagnostic;
+	}
+	if (m_dynamicPreviewEnabled && !m_dynamicDiagnostic.empty()) {
+		if (!visibleDiagnostic.IsEmpty()) visibleDiagnostic += _T(" | ");
+		visibleDiagnostic += m_dynamicDiagnostic.c_str();
 	}
 	if (!visibleDiagnostic.IsEmpty()) {
 		Gdiplus::SolidBrush panel(Gdiplus::Color(210, 20, 20, 20));
@@ -6028,18 +7308,35 @@ BOOL CSBattlePreviewPage::OnEraseBkgnd(CDC*)
 
 void CSBattlePreviewPage::OnLButtonDown(UINT, CPoint point)
 {
+	if (m_dynamicPreviewEnabled && !m_dynamicPreviewReady) return;
 	SetFocus();
 	const auto coordinate = BattleCoordFromScreen(point);
 	if (!coordinate) return;
 	const auto mapTool = m_battleMapToolMode;
+ if(mapTool==BattleMapToolMode::CommandPickPoint){OpenBattleCommand(m_mapCommandId,true,0,false,*coordinate,*coordinate);return;}
+ if(mapTool==BattleMapToolMode::CommandPickArea){m_mapCommandStart=m_mapCommandEnd=coordinate;m_mapCommandDragging=true;SetCapture();Invalidate(FALSE);return;}
+
+    if(mapTool==BattleMapToolMode::TurnDirection || mapTool==BattleMapToolMode::TurnPickTarget) {
+        m_hoverCell=coordinate;
+        const ccz::preview::BattleUnit* reference=nullptr;
+        if(mapTool==BattleMapToolMode::TurnPickTarget) {
+            const auto hit=HitTestUnit(*coordinate);
+            if(!hit || *hit>=EditingBattle().units.size()){m_diagnostic=L"朝向武将：请点击目标角色";Invalidate(FALSE);return;}
+            reference=&EditingBattle().units[*hit];
+            if(!ccz::editor_preview::IsRegularBattlePerson(ccz::editor_preview::BattlePersonForUnit(*reference))){AfxMessageBox(L"目标角色的编号尚未确定");return;}
+            if(std::any_of(m_roleOperationUnits.begin(),m_roleOperationUnits.end(),[&](const auto& u){return u.editor_cache_id==reference->editor_cache_id || u.position==reference->position;})){AfxMessageBox(L"请选择不与操作角色相同或同格的目标角色");return;}
+        }
+        ApplyBattleFacing(reference);
+        return;
+    }
 	if (mapTool == BattleMapToolMode::MovePickUnit) {
 		const auto hit = HitTestUnit(*coordinate);
-		if (!hit || *hit >= ActiveSession().editor_state.battle.units.size()) {
+		if (!hit || *hit >= EditingBattle().units.size()) {
 			m_diagnostic = _T("移动至：请点击一个棋盘角色");
 			Invalidate(FALSE);
 			return;
 		}
-		const auto& unit = ActiveSession().editor_state.battle.units[*hit];
+		const auto& unit = EditingBattle().units[*hit];
 		if (!unit.fields_decoded || unit.editor_pending_delete ||
 			ccz::editor_preview::IsBattleFixedEmptySlot(unit) ||
 			unit.data_id < 0 || unit.data_id > 1023) {
@@ -6079,7 +7376,7 @@ void CSBattlePreviewPage::OnLButtonDown(UINT, CPoint point)
 		std::vector<ccz::editor_preview::BattleRoleOperationSource> sources;
 		sources.reserve(m_roleOperationUnits.size());
 		for (const auto& unit : m_roleOperationUnits) {
-			sources.push_back({unit.data_id, unit.position, unit.direction});
+			sources.push_back({ccz::editor_preview::BattlePersonForUnit(unit), unit.position, unit.direction});
 		}
 		const auto directionOverride =
 			m_roleOperationDirectionAdjusted
@@ -6089,7 +7386,7 @@ void CSBattlePreviewPage::OnLButtonDown(UINT, CPoint point)
 			instructions;
 		std::vector<ccz::preview::BattleCoord> targetPositions;
 		std::wstring diagnostic;
-		const auto& map = ActiveSession().editor_state.battle.map;
+		const auto& map = EditingBattle().map;
 		const bool built =
 			ccz::editor_preview::BuildBattleRoleOperationBatch(
 				reviveOperation
@@ -6103,37 +7400,55 @@ void CSBattlePreviewPage::OnLButtonDown(UINT, CPoint point)
 			return;
 		}
 		if (ApplyBattleMapOperations(instructions, diagnostic))
-			CancelBattleMapTool();
+			CancelBattleMapTool(true);
+		return;
+	}
+	// Independent obstacle selection consumes only its own pointer gesture.
+	if (m_obstacleSelection.enabled) {
+		if (m_obstacleSelection.moving) {
+			std::vector<ccz::editor_preview::BattleObstacleDraft> replacements;
+			for (const auto& item : m_obstacleSelection.items) {
+				auto value=item.value; value.coordinate.x += coordinate->x-m_obstacleSelection.anchor.x;
+				value.coordinate.y += coordinate->y-m_obstacleSelection.anchor.y; replacements.push_back(value);
+			}
+			if (ApplyObstacleGroup(replacements,false)) m_obstacleSelection.CancelGesture();
+		} else {
+			ToggleObstacleSelectionAt(*coordinate,true);m_obstacleSelection.gesture_active=true;
+            m_obstacleSelection.press_cell=coordinate;m_obstacleSelection.press_x=point.x;m_obstacleSelection.press_y=point.y;m_obstacleSelection.drag_started=false;
+			m_obstacleSelection.last_cell=coordinate;SetCapture();
+		}
+		Invalidate(FALSE);return;
+	}
+	if (mapTool == BattleMapToolMode::DynamicRoleAdjust) {
+		if (ConfirmDynamicRoleAdjustment(*coordinate)) CancelBattleMapTool(true);
+		return;
+	}
+	if (mapTool == BattleMapToolMode::ObstacleAdjust) {
+		if (m_obstacleEditTarget) {
+			auto replacement = m_obstacleEditTarget->value;
+			replacement.coordinate = *coordinate;
+			if (EditObstacle(replacement)) CancelBattleMapTool(true);
+		}
 		return;
 	}
 	if (mapTool == BattleMapToolMode::ObstaclePlace) {
-		const auto& map = ActiveSession().editor_state.battle.map;
-		if (!m_obstacleDrafts.Add(m_selectedObstacleType, *coordinate,
-			map.width, map.height)) {
-			m_diagnostic = _T("障碍物：无法把障碍放在当前地图范围之外");
-		} else {
-			m_diagnostic = _T("障碍物已暂存；写回按钮会把全部暂存项一次提交");
-		}
-		CString status;
-		status.Format(_T("左键添加，右键移除；已暂存 %u 个，写回提交"),
-			static_cast<unsigned>(m_obstacleDrafts.items().size()));
-		m_mapOperationStatus.SetWindowText(status);
-		CString clearLabel;
-		clearLabel.Format(_T("清空（%u）"),
-			static_cast<unsigned>(m_obstacleDrafts.items().size()));
-		m_clearObstacleDraftsButton.SetWindowText(clearLabel);
-		m_clearObstacleDraftsButton.ShowWindow(
-			m_obstacleDrafts.empty() ? SW_HIDE : SW_SHOW);
-		RefreshEditorControls();
-		Invalidate(FALSE);
+        FinishObstacleStampUndo();
+        auto& history=ActiveSession().map_operations.obstacle_undo;history.reserve(history.size()+1);
+        const auto depth=ActiveSession().native_writeback_transaction.undo_depth();
+        m_obstacleStampUndo=ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo{m_obstacleDrafts,m_obstacleSelection,depth,depth};
+		m_obstacleStampActive = true;
+		m_obstacleLastStamp = *coordinate;
+		SetCapture();
+		StampObstacleAt(*coordinate);
 		return;
 	}
-	if (m_editorOps && ActiveSession().editor_state.mode ==
+
+	if (!m_dynamicPreviewEnabled && m_editorOps && ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::AdjustPosition) {
 		ShowOperationResult(m_editorOps->ConfirmPositionAdjustment(*coordinate));
 		return;
 	}
-	if (m_editorOps && ActiveSession().editor_state.mode ==
+	if (!m_dynamicPreviewEnabled && m_editorOps && ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::Place) {
 		m_leftStampActive = true;
 		m_lastStampCell.reset();
@@ -6141,17 +7456,15 @@ void CSBattlePreviewPage::OnLButtonDown(UINT, CPoint point)
 		StampAt(*coordinate);
 		return;
 	}
-	if (m_editorOps && ActiveSession().editor_state.mode ==
-		ccz::editor_preview::BattleEditorMode::Select) {
+	if (m_dynamicPreviewEnabled || (m_editorOps && ActiveSession().editor_state.mode !=
+		ccz::editor_preview::BattleEditorMode::Place && ActiveSession().editor_state.mode != ccz::editor_preview::BattleEditorMode::AdjustPosition)) {
 		m_selectionGestureActive = true;
 		m_selectionDragStarted = false;
 		m_selectionPressPoint = point;
 		m_selectionPressCell = coordinate;
 		m_selectionLastCell = coordinate;
 		SetCapture();
-		const auto result = m_editorOps->ToggleSelectionAt(*coordinate);
-		if (result.ok && result.changed)
-			ShowSelectionOperationResult(result);
+		SelectBoardCell(*coordinate, true);
 		return;
 	}
 	m_selectedUnit = HitTestUnit(*coordinate);
@@ -6166,6 +7479,27 @@ void CSBattlePreviewPage::OnLButtonDown(UINT, CPoint point)
 
 void CSBattlePreviewPage::OnLButtonUp(UINT, CPoint point)
 {
+ if(m_battleMapToolMode==BattleMapToolMode::CommandPickArea){
+  if(!m_mapCommandDragging)return;
+  const auto end=BattleCoordFromScreen(point),start=m_mapCommandStart;const auto id=m_mapCommandId;
+  m_mapCommandDragging=false;if(GetCapture()==this)ReleaseCapture();
+  if(start&&end)OpenBattleCommand(id,true,0,false,start,end);else CancelBattleMapTool(true);
+  return;
+ }
+
+	if (m_obstacleSelection.gesture_active) {
+        OnMouseMove(MK_LBUTTON,point); // Include the release endpoint even if its move message was coalesced.
+        m_obstacleSelection.CancelGesture();if(GetCapture()==this)ReleaseCapture();Invalidate(FALSE);return;
+    }
+	if (m_obstacleStampActive) {
+        FinishObstacleStampUndo();
+		m_obstacleStampActive = false;
+		m_obstacleLastStamp.reset();
+		if (GetCapture() == this) ReleaseCapture();
+		KillTimer(0xB602);m_brushRefreshPending=false;
+		UpdateObstacleDraftControls();RefreshEditorControls();InvalidateRect(m_canvasRect,FALSE);UpdateWindow();
+		return;
+	}
 	if (m_selectionGestureActive) {
 		if (!m_editorOps) {
 			m_selectionGestureActive = false;
@@ -6184,7 +7518,7 @@ void CSBattlePreviewPage::OnLButtonUp(UINT, CPoint point)
 			(dx >= (std::max)(1, GetSystemMetrics(SM_CXDRAG)) ||
 			dy >= (std::max)(1, GetSystemMetrics(SM_CYDRAG)))) {
 			m_selectionDragStarted = true;
-			m_editorOps->ClearSelectionGroup();
+			ClearBoardSelection();
 			m_selectedUnit.reset();
 			m_selectionLastCell = m_selectionPressCell;
 		}
@@ -6192,7 +7526,7 @@ void CSBattlePreviewPage::OnLButtonUp(UINT, CPoint point)
 			const auto path = ccz::editor_preview::BattleSelectionPathCells(
 				*m_selectionLastCell, *coordinate);
 			for (const auto& crossed : path)
-				m_editorOps->AddSelectionAt(crossed);
+				SelectBoardCell(crossed, false);
 			m_selectionLastCell = coordinate;
 		}
 		const bool was_drag = m_selectionDragStarted;
@@ -6207,22 +7541,25 @@ void CSBattlePreviewPage::OnLButtonUp(UINT, CPoint point)
 	}
 	if (!m_leftStampActive) return;
 	m_leftStampActive = false;
+ KillTimer(0xB602);m_brushRefreshPending=false;
 	m_lastStampCell.reset();
 	if (GetCapture() == this) ReleaseCapture();
 	RefreshCharacterListIfDeploymentChanged();
+ RefreshEditorControls();InvalidateRect(m_canvasRect,FALSE);UpdateWindow();
 }
 
 void CSBattlePreviewPage::OnLButtonDblClk(UINT, CPoint point)
 {
+	if(m_obstacleSelection.enabled){OnLButtonDown(MK_LBUTTON,point);return;}
 	if (m_battleMapToolMode != BattleMapToolMode::None) return;
-	if (!m_editorOps || ActiveSession().editor_state.mode !=
-		ccz::editor_preview::BattleEditorMode::Select) return;
+	if (!m_dynamicPreviewEnabled && (!m_editorOps || ActiveSession().editor_state.mode !=
+		ccz::editor_preview::BattleEditorMode::Select)) return;
 	const auto coordinate = BattleCoordFromScreen(point);
-	const auto& units = ActiveSession().editor_state.battle.units;
+	const auto& units = EditingBattle().units;
 	const bool occupied = coordinate && std::any_of(units.begin(), units.end(),
 		[this, &coordinate](const auto& unit) {
 			return unit.fields_decoded && !unit.editor_pending_delete &&
-				(unit.editor_staged_new || in_scope(unit.source_key,
+				(m_dynamicPreviewEnabled || unit.editor_staged_new || in_scope(unit.source_key,
 					ActiveSession().editor_state.scope_root)) &&
 				!ccz::editor_preview::IsBattleFixedEmptySlot(unit) &&
 				unit.position == *coordinate;
@@ -6231,13 +7568,11 @@ void CSBattlePreviewPage::OnLButtonDblClk(UINT, CPoint point)
 		// Windows sends WM_LBUTTONDBLCLK instead of a second WM_LBUTTONDOWN
 		// for a rapid second click. Treat that message as the second selection
 		// toggle on an occupied tile; otherwise rapid deselection is swallowed.
-		const auto result = m_editorOps->ToggleSelectionAt(*coordinate);
-		if (result.ok && result.changed)
-			ShowSelectionOperationResult(result);
+		SelectBoardCell(*coordinate, true);
 		return;
 	}
 	if (coordinate && !occupied) {
-		ShowOperationResult(m_editorOps->ClearSelectionGroup());
+		ClearBoardSelection();
 		RefreshSelectedUnitIndex();
 		Invalidate(FALSE);
 	}
@@ -6252,10 +7587,12 @@ bool CSBattlePreviewPage::CaptureRoleOperationUnits(
 	anchor_index = 0;
 	diagnostic.clear();
 	const auto& state = ActiveSession().editor_state;
-	const auto find_unit = [&state](
+	const auto& board = EditingBattle();
+	const auto& selection = m_dynamicPreviewEnabled ? m_dynamicSelection : state.selection_group;
+	const auto find_unit = [&board](
 		const ccz::editor_preview::BattleSelection& selected) {
-		return std::find_if(state.battle.units.begin(),
-			state.battle.units.end(), [&selected](const auto& unit) {
+		return std::find_if(board.units.begin(),
+			board.units.end(), [&selected](const auto& unit) {
 				if (unit.editor_pending_delete || !unit.fields_decoded)
 					return false;
 				return selected.cache_id != 0
@@ -6264,26 +7601,32 @@ bool CSBattlePreviewPage::CaptureRoleOperationUnits(
 						unit.record_index == selected.record_index;
 			});
 	};
-	const auto append_unit = [&units, &diagnostic](
+	const auto append_unit = [this, &units, &diagnostic](
 		const ccz::preview::BattleUnit& unit) {
+        auto resolved=unit;
+        if(unit.source_instruction==0x4b && unit.data_id<0){
+         const auto binding=ActiveSession().own_unit_bindings.find(unit.deployment_index);
+         if(binding!=ActiveSession().own_unit_bindings.end())resolved.data_id=binding->second;
+        }
+        if(unit.source_instruction==0x4b && m_roleSelectorBattlefield)resolved.data_id=-1;
 		if (!unit.fields_decoded || unit.editor_pending_delete ||
 			ccz::editor_preview::IsBattleFixedEmptySlot(unit) ||
-			unit.data_id < 0 || unit.data_id > 1023) {
+			!ccz::editor_preview::IsRegularBattlePerson(ccz::editor_preview::BattlePersonForUnit(resolved))) {
 			diagnostic = L"组内有单位缺少可用于地图指令的 Data 号；未启动操作";
 			return false;
 		}
-		units.push_back(unit);
+		units.push_back(resolved);
 		return true;
 	};
 
 	if (include_selection_group) {
-		if (state.selection_group.size() < 2 || anchor_cache_id == 0) {
+		if (selection.size() < 2 || anchor_cache_id == 0) {
 			diagnostic = L"多选角色组已失效；请重新选择后再操作";
 			return false;
 		}
-		for (const auto& selected : state.selection_group) {
+		for (const auto& selected : selection) {
 			const auto found = find_unit(selected);
-			if (found == state.battle.units.end()) {
+			if (found == board.units.end()) {
 				diagnostic = L"多选组中的角色已失效；未启动地图操作";
 				units.clear();
 				return false;
@@ -6296,11 +7639,11 @@ bool CSBattlePreviewPage::CaptureRoleOperationUnits(
 			}
 		}
 	} else {
-		const auto found = std::find_if(state.battle.units.begin(),
-			state.battle.units.end(), [anchor_cache_id](const auto& unit) {
+		const auto found = std::find_if(board.units.begin(),
+			board.units.end(), [anchor_cache_id](const auto& unit) {
 				return unit.editor_cache_id == anchor_cache_id;
 			});
-		if (found == state.battle.units.end()) {
+		if (found == board.units.end()) {
 			diagnostic = L"当前棋盘角色已失效；未启动地图操作";
 			return false;
 		}
@@ -6321,20 +7664,54 @@ bool CSBattlePreviewPage::CaptureRoleOperationUnits(
 
 void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 {
+ if(m_editorOps && ActiveSession().editor_state.mode==ccz::editor_preview::BattleEditorMode::Place){
+  m_leftStampActive=false;m_lastStampCell.reset();if(GetCapture()==this)ReleaseCapture();
+  ShowOperationResult(m_editorOps->CancelPlacementBrush());RefreshCharacterListIfDeploymentChanged();return;
+ }
+ if(m_battleMapToolMode==BattleMapToolMode::ObstaclePlace||m_battleMapToolMode==BattleMapToolMode::CommandPickPoint||m_battleMapToolMode==BattleMapToolMode::CommandPickArea){CancelBattleMapTool(true);return;}
+
+	const bool obstacleModeBeforeContext=m_obstacleSelection.enabled;
+	if (m_obstacleSelection.enabled && HandleObstacleGroupContext(point)) return;
+    const bool roleOnlyContext=obstacleModeBeforeContext&&!m_obstacleSelection.enabled;
+	if (m_dynamicPreviewEnabled && !m_dynamicPreviewReady) return;
 	SetFocus();
+	if (m_battleMapToolMode == BattleMapToolMode::DynamicRoleAdjust || m_battleMapToolMode == BattleMapToolMode::MovePickUnit ||
+		m_battleMapToolMode == BattleMapToolMode::MovePickTarget ||
+		m_battleMapToolMode == BattleMapToolMode::RevivePickTarget ||
+		m_battleMapToolMode == BattleMapToolMode::ObstacleAdjust ||
+        m_battleMapToolMode == BattleMapToolMode::TurnDirection || m_battleMapToolMode == BattleMapToolMode::TurnPickTarget) {
+		CancelBattleMapTool(true);
+		return;
+	}
 	m_hoverPoint = point;
 	const auto coordinate = BattleCoordFromScreen(point);
 	const auto hit = coordinate ? HitTestUnit(*coordinate) : std::nullopt;
-	const bool hasObstacleAt = coordinate && std::any_of(
-		m_obstacleDrafts.items().begin(), m_obstacleDrafts.items().end(),
-		[&coordinate](const auto& draft) {
-			return draft.coordinate == *coordinate;
-		});
+	const auto draftAt = coordinate ? std::find_if(m_obstacleDrafts.items().begin(), m_obstacleDrafts.items().end(),
+		[&](const auto& item) { return item.coordinate == *coordinate; }) : m_obstacleDrafts.items().end();
+	const auto nativeAt = coordinate && m_dynamicPreviewEnabled ? std::find_if(m_dynamicProjection.obstacles.begin(), m_dynamicProjection.obstacles.end(),
+		[&](const auto& item) { return item.coordinate == *coordinate; }) : m_dynamicProjection.obstacles.end();
+	const bool hasDraftAt = draftAt != m_obstacleDrafts.items().end();
+	const bool hasNativeAt = nativeAt != m_dynamicProjection.obstacles.end();
+	const bool hasObstacleAt = !roleOnlyContext && (hasDraftAt || hasNativeAt);
+	if (hasObstacleAt) {
+		ObstacleEditTarget target;
+		target.draft = hasDraftAt;
+		if (hasDraftAt) target.value = *draftAt;
+		else {
+			target.source = *nativeAt;
+			target.value = {nativeAt->type, nativeAt->coordinate};
+			if (nativeAt->source_fields.size() >= 7) target.value.parameters = {nativeAt->source_fields[1], nativeAt->source_fields[2], nativeAt->source_fields[5], nativeAt->source_fields[6]};
+		}
+		target.document_id = ActiveSession().document_id;
+		target.tree_generation = m_dynamicTreeGeneration;
+		target.content_epoch = m_dynamicContentEpoch;
+		m_obstacleEditTarget = target;
+	}
 	const bool hasContextTarget = hit.has_value() || hasObstacleAt;
 	if (!hasContextTarget) {
 		if (m_battleMapToolMode != BattleMapToolMode::None &&
 			m_battleMapToolMode != BattleMapToolMode::ObstaclePlace) {
-			CancelBattleMapTool();
+			CancelBattleMapTool(true);
 			return;
 		}
 		if (m_editorOps && ActiveSession().editor_state.mode ==
@@ -6370,25 +7747,33 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 	constexpr UINT kMoveToCommand = 18;
 	constexpr UINT kReviveToCommand = 19;
 	constexpr UINT kRemoveObstacleCommand = 20;
+	constexpr UINT kAdjustObstacleCommand = 21;
+	constexpr UINT kModifyObstacleCommand = 22;
 	const auto& state = ActiveSession().editor_state;
+	const auto& board = EditingBattle();
+	const auto& selection = m_dynamicPreviewEnabled ? m_dynamicSelection : state.selection_group;
 	std::optional<ccz::preview::BattleUnit> contextUnit;
-	if (hit && *hit < state.battle.units.size())
-		contextUnit = state.battle.units[*hit];
+	if (hit && *hit < board.units.size())
+		contextUnit = board.units[*hit];
+ if(contextUnit && contextUnit->source_instruction==0x4b && contextUnit->data_id<0){
+  const auto binding=ActiveSession().own_unit_bindings.find(contextUnit->deployment_index);
+  if(binding!=ActiveSession().own_unit_bindings.end())contextUnit->data_id=binding->second;
+ }
 	// Validate only the role identity represented by this map object.
 	// Do not inspect the character's dynamic runtime presence here.
 	const bool usableRoleIdentity = contextUnit &&
 		contextUnit->fields_decoded && !contextUnit->editor_pending_delete &&
 		!ccz::editor_preview::IsBattleFixedEmptySlot(*contextUnit) &&
-		contextUnit->data_id >= 0 && contextUnit->data_id <= 1023;
+		ccz::editor_preview::IsRegularBattlePerson(ccz::editor_preview::BattlePersonForUnit(*contextUnit));
 	const std::uint64_t cacheId = contextUnit
 		? contextUnit->editor_cache_id : 0;
 	const bool in_selection_group = contextUnit && std::any_of(
-		state.selection_group.begin(), state.selection_group.end(),
+		selection.begin(), selection.end(),
 		[cacheId](const auto& selected) {
 			return selected.cache_id == cacheId;
 		});
 	const bool group_context = contextUnit &&
-		state.selection_group.size() > 1 && in_selection_group;
+		selection.size() > 1 && in_selection_group;
 	const bool mapOperationsEnabled =
 		ActiveSession().ui.quick_mode_enabled && !ActiveSession().stale &&
 		!ActiveSession().native_writeback_rebase_required &&
@@ -6403,9 +7788,11 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 			return;
 		roleTarget = &roleMenu;
 	} else if (hasObstacleAt && !contextUnit) {
+		menu.AppendMenu(MF_STRING, kAdjustObstacleCommand, L"调整位置");
+		menu.AppendMenu(MF_STRING, kModifyObstacleCommand, L"修改参数");
 		menu.AppendMenu(MF_STRING, kRemoveObstacleCommand,
-			_T("移除此障碍物"));
-	} else if (contextUnit && !group_context && state.mode !=
+			hasDraftAt ? L"移除暂存障碍物" : L"消失");
+	} else if (!m_dynamicPreviewEnabled && contextUnit && !group_context && state.mode !=
 		ccz::editor_preview::BattleEditorMode::Select) {
 		ShowOperationResult(m_editorOps->SelectAt(*coordinate));
 	}
@@ -6424,16 +7811,18 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 		roleTarget->AppendMenu(MF_STRING, kClearSelectionCommand,
 			_T("取消全部选择"));
 		roleTarget->AppendMenu(MF_SEPARATOR);
+		if (!m_dynamicPreviewEnabled) {
 		CString batchEditLabel;
 		batchEditLabel.Format(_T("批量修改参数（%u）"),
-			static_cast<unsigned>(state.selection_group.size()));
+			static_cast<unsigned>(selection.size()));
 		roleTarget->AppendMenu(MF_STRING, kModifyGroupParametersCommand,
 			batchEditLabel);
 		roleTarget->AppendMenu(MF_STRING, kAdjustGroupCommand,
 			_T("批量调整位置"));
 		roleTarget->AppendMenu(MF_STRING, kDeleteGroupCommand,
 			_T("批量删除"));
-	} else if (contextUnit) {
+		}
+	} else if (!m_dynamicPreviewEnabled && contextUnit) {
 		roleTarget->AppendMenu(MF_STRING, kModifyUnitParametersCommand,
 			_T("修改单位参数"));
 		roleTarget->AppendMenu(MF_STRING, kAdjustPositionCommand,
@@ -6451,16 +7840,44 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 		CString reviveLabel = _T("复活至");
 		if (group_context) {
 			moveLabel.Format(_T("批量移动至（%u）"),
-				static_cast<unsigned>(state.selection_group.size()));
+				static_cast<unsigned>(selection.size()));
 			reviveLabel.Format(_T("批量复活至（%u）"),
-				static_cast<unsigned>(state.selection_group.size()));
+				static_cast<unsigned>(selection.size()));
 		}
 		roleTarget->AppendMenu(roleActionFlags, kMoveToCommand, moveLabel);
 		roleTarget->AppendMenu(reviveActionFlags, kReviveToCommand, reviveLabel);
+        if(usableRoleIdentity) {
+            {
+                CMenu directions;directions.CreatePopupMenu();
+                const wchar_t* labels[]={L"朝北",L"朝东",L"朝南",L"朝西"};
+                for(UINT i=0;i<4;++i)directions.AppendMenu(roleActionFlags,60+i,labels[i]);
+                roleTarget->AppendMenu(MF_POPUP | (roleActionFlags & (MF_GRAYED | MF_DISABLED)),
+                    reinterpret_cast<UINT_PTR>(directions.GetSafeHmenu()),group_context?L"统一朝向":L"设置朝向");
+                directions.Detach();
+            }
+            roleTarget->AppendMenu(roleActionFlags,41,group_context?L"批量朝向武将":L"朝向武将");
+            if(group_context && selection.size()==2)roleTarget->AppendMenu(roleActionFlags,42,L"武将相对");
+            roleTarget->AppendMenu(roleActionFlags,43,group_context?L"批量设置战场动作":L"设置战场动作");
+        }
 	}
-	if (splitContext) {
+	if (contextUnit && contextUnit->source_instruction == 0x4b && contextUnit->deployment_index >= 0 && !contextUnit->editor_staged_new)
+		roleTarget->AppendMenu(MF_STRING, 37, L"我军预览绑定");
+	if (usableRoleIdentity) {
+        roleTarget->AppendMenu(MF_SEPARATOR);
+        roleTarget->AppendMenu(roleActionFlags,30,L"状态变更");
+        roleTarget->AppendMenu(roleActionFlags,31,L"方针变更");
+        roleTarget->AppendMenu(roleActionFlags,32,L"高亮人物");
+        roleTarget->AppendMenu(roleActionFlags,33,L"法术");
+        roleTarget->AppendMenu(roleActionFlags,38,group_context?L"批量隐藏武将出现":L"隐藏武将出现");
+        roleTarget->AppendMenu(roleActionFlags,34,L"武将消失");
+        roleTarget->AppendMenu(roleActionFlags,36,L"武将撤退");
+        if(m_dynamicPreviewEnabled) roleTarget->AppendMenu(roleActionFlags,35,group_context?L"批量调整位置":L"调整位置");
+    }
+    if (splitContext) {
+        obstacleMenu.AppendMenu(MF_STRING, kAdjustObstacleCommand, L"调整位置");
+		obstacleMenu.AppendMenu(MF_STRING, kModifyObstacleCommand, L"修改参数");
 		obstacleMenu.AppendMenu(MF_STRING, kRemoveObstacleCommand,
-			_T("移除此障碍物"));
+			hasDraftAt ? L"移除暂存障碍物" : L"消失");
 		menu.AppendMenu(MF_POPUP,
 			reinterpret_cast<UINT_PTR>(roleMenu.GetSafeHmenu()),
 			_T("操作角色"));
@@ -6475,8 +7892,68 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 	const UINT command = menu.TrackPopupMenu(
 		TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
 		screenPoint.x, screenPoint.y, this);
+ // Reject before entering target-picking or parameter UI, not at final commit.
+ const bool immediateInstruction=command==kMoveToCommand||command==kReviveToCommand||
+  (command>=30&&command<=34)||command==36||command==38||(command>=40&&command<=44)||
+  (command>=60&&command<=63)||
+  (command==kRemoveObstacleCommand&&hasNativeAt&&!hasDraftAt);
+ if(immediateInstruction&&!RequireImmediateInstructionSelection())return;
+ m_roleSelectorBattlefield=false;
+ if(immediateInstruction && command!=33) {
+  bool boundOwn=false;
+  for(const auto& unit:board.units) {
+   if(unit.source_instruction!=0x4b || (command==38&&!unit.hidden))continue;
+   const bool chosen=group_context?std::any_of(selection.begin(),selection.end(),[&](const auto& s){return s.cache_id==unit.editor_cache_id;}):unit.editor_cache_id==cacheId;
+   if(chosen && (unit.data_id>=0 || ActiveSession().own_unit_bindings.count(unit.deployment_index)))boundOwn=true;
+  }
+  if(boundOwn){const int mode=AfxMessageBox(L"请选择参数模式：data号/战场编号\n是：data号\n否：战场编号",MB_YESNOCANCEL|MB_ICONQUESTION);if(mode==IDCANCEL)return;m_roleSelectorBattlefield=mode==IDNO;}
+ }
+    if(command>=60&&command<=63){ApplyBatchBattleDirection(cacheId,static_cast<int>(command-60),group_context);return;}
+    if(command==40||command==41){BeginBattleFacing(cacheId,group_context,command==41);return;}
+    if(command==43||command==44){OpenBattleCommand(command==43?0x50:0x4f,false,cacheId,group_context);return;}
+    if(command==42){
+        CancelBattleMapTool(true);CancelConflictingBattleEditorMode();
+        std::vector<ccz::preview::BattleUnit> units;std::size_t anchor;std::wstring problem;
+        std::vector<ccz::editor_preview::BattleMapOperationInstruction> commands;
+        if(!CaptureRoleOperationUnits(cacheId,true,units,anchor,problem) ||
+           !ccz::editor_preview::BuildBattleMutualFacing(units,EditingBattle().map.width,EditingBattle().map.height,commands,problem)) {AfxMessageBox(problem.c_str());return;}
+        OpenFacingDelaySettings(std::move(commands));return;
+    }
+	if(command==37 && contextUnit){OpenOwnUnitBindings(contextUnit->deployment_index);return;}
+	if(command==38){ApplyHiddenBattleAppear(cacheId,group_context);return;}
+	if(command==36){OpenBattleCommand(0x53,false,cacheId,group_context);return;}
+    if(command>=30&&command<=34) {
+        const std::uint16_t ids[]={0x4d,0x4e,0x5c,0x6b,0x31};
+        OpenBattleCommand(ids[command-30],false,cacheId,group_context);return;
+    }
+    if(command==35){BeginDynamicRoleAdjustment(cacheId,group_context);return;}
+    if (command == kAdjustObstacleCommand && m_obstacleEditTarget) {
+		CancelConflictingBattleEditorMode();
+		m_battleMapToolMode = BattleMapToolMode::ObstacleAdjust;
+		m_diagnostic = L"障碍物调整位置：左键确认目标，右键或Esc取消";
+		Invalidate(FALSE); return;
+	}
+	if (command == kModifyObstacleCommand && m_obstacleEditTarget) { ShowObstacleParameters(); return; }
+	if (command == kRemoveObstacleCommand && hasNativeAt && !hasDraftAt && m_obstacleEditTarget) {
+		auto replacement = m_obstacleEditTarget->value;
+		replacement.parameters.visibility = 1;
+		ccz::editor_preview::BattleMapOperationInstruction instruction;
+		std::wstring diagnostic;
+		const auto& map = EditingBattle().map;
+		if (ccz::editor_preview::BuildBattleObstacleInstruction(replacement.type,
+			replacement.coordinate, map.width, map.height, instruction, diagnostic,
+			replacement.parameters)) {
+			// Disappearance is a new event, not an edit of the original show command.
+			ApplyBattleMapOperations({instruction}, diagnostic);
+		} else AppendDiagnostic(diagnostic);
+		return;
+	}
 	if (command == kRemoveObstacleCommand) {
+        auto& history=ActiveSession().map_operations.obstacle_undo;history.reserve(history.size()+1);
+        const auto depth=ActiveSession().native_writeback_transaction.undo_depth();
+        ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo undo{m_obstacleDrafts,m_obstacleSelection,depth,depth};
 		if (m_obstacleDrafts.RemoveAt(*coordinate)) {
+            history.push_back(std::move(undo));
 			m_diagnostic = _T("已移除当前格最后添加的障碍物");
 			CString status;
 			status.Format(_T("左键添加，右键菜单移除；已暂存 %u 个，写回提交"),
@@ -6487,12 +7964,29 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 				static_cast<unsigned>(m_obstacleDrafts.items().size()));
 			m_clearObstacleDraftsButton.SetWindowText(clearLabel);
 			m_clearObstacleDraftsButton.ShowWindow(
-				m_obstacleDrafts.empty() ? SW_HIDE : SW_SHOW);
+		SW_SHOW);
+	if((m_clearObstacleDraftsButton.IsWindowEnabled()!=FALSE)!=!m_obstacleDrafts.empty())m_clearObstacleDraftsButton.EnableWindow(!m_obstacleDrafts.empty());
 			Invalidate(FALSE);
 		}
 		return;
 	}
-	if (splitContext && !group_context && contextUnit && state.mode !=
+	if (m_dynamicPreviewEnabled && group_context) {
+		if (command >= kFilterOwnCommand && command <= kFilterEnemyCommand) {
+			const int deployment = command == kFilterOwnCommand ? 0x4b
+				: command == kFilterAllyCommand ? 0x46 : 0x47;
+			m_dynamicSelection.erase(std::remove_if(m_dynamicSelection.begin(), m_dynamicSelection.end(),
+				[&board, deployment](const auto& selected) {
+					const auto unit = std::find_if(board.units.begin(), board.units.end(),
+						[&selected](const auto& u) { return u.editor_cache_id == selected.cache_id; });
+					return unit == board.units.end() || battle_unit_deployment(*unit) != deployment;
+				}), m_dynamicSelection.end());
+			Invalidate(FALSE);
+			return;
+		}
+		if (command == kRemoveSelectionCommand) { SelectBoardCell(*coordinate, true); return; }
+		if (command == kClearSelectionCommand) { ClearBoardSelection(); return; }
+	}
+	if (!m_dynamicPreviewEnabled && splitContext && !group_context && contextUnit && state.mode !=
 		ccz::editor_preview::BattleEditorMode::Select &&
 		(command == kModifyUnitParametersCommand ||
 		 command == kAdjustPositionCommand ||
@@ -6578,6 +8072,9 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 	} else if (group_context && command == kModifyGroupParametersCommand) {
 		OpenBatchUnitParameters();
 	} else if (group_context && command == kAdjustGroupCommand) {
+		m_obstacleSelection.enabled = false;
+    m_obstacleSelection.items.clear();
+		m_obstacleSelection.CancelGesture();
 		ShowOperationResult(m_editorOps->BeginPositionAdjustment(cacheId));
 	} else if (group_context && command == kDeleteGroupCommand) {
 		ShowOperationResult(m_editorOps->DeleteSelectionGroup());
@@ -6585,6 +8082,9 @@ void CSBattlePreviewPage::OnRButtonDown(UINT, CPoint point)
 	} else if (!group_context && command == kModifyUnitParametersCommand) {
 		OpenSingleUnitParameters(cacheId);
 	} else if (!group_context && command == kAdjustPositionCommand) {
+		m_obstacleSelection.enabled = false;
+    m_obstacleSelection.items.clear();
+		m_obstacleSelection.CancelGesture();
 		ShowOperationResult(m_editorOps->BeginPositionAdjustment(cacheId));
 	} else if (!group_context && command == kDeleteUnitCommand) {
 		ShowOperationResult(m_editorOps->DeleteAt(*coordinate));
@@ -6603,7 +8103,7 @@ void CSBattlePreviewPage::OnKeyDown(UINT character, UINT repeat_count,
 {
 	if (character == VK_ESCAPE &&
 		m_battleMapToolMode != BattleMapToolMode::None) {
-		CancelBattleMapTool();
+		CancelBattleMapTool(true);
 		return;
 	}
 	if (character == VK_ESCAPE && m_editorOps && ActiveSession().editor_state.mode ==
@@ -6611,11 +8111,23 @@ void CSBattlePreviewPage::OnKeyDown(UINT character, UINT repeat_count,
 		ShowOperationResult(m_editorOps->CancelPositionAdjustment());
 		return;
 	}
+	if(character==VK_ESCAPE && m_obstacleSelection.enabled) {m_obstacleSelection.CancelGesture();if(GetCapture()==this)ReleaseCapture();Invalidate(FALSE);return;}
 	CWnd::OnKeyDown(character, repeat_count, flags);
 }
 
 void CSBattlePreviewPage::OnCaptureChanged(CWnd* window)
 {
+ const bool interruptedObstacle=m_obstacleStampActive;
+ KillTimer(0xB602);m_brushRefreshPending=false;
+ if(m_mapCommandDragging){m_mapCommandDragging=false;CancelBattleMapTool(true);}
+
+    FinishObstacleStampUndo();
+ if(interruptedObstacle){UpdateObstacleDraftControls();RefreshEditorControls();InvalidateRect(m_canvasRect,FALSE);}
+	m_obstacleSelection.gesture_active = false;
+    m_obstacleSelection.drag_started=false;m_obstacleSelection.press_cell.reset();
+	m_obstacleSelection.last_cell.reset();
+	m_obstacleStampActive = false;
+	m_obstacleLastStamp.reset();
 	const bool interruptedStamp = m_leftStampActive;
 	const bool interruptedSelection = m_selectionGestureActive;
 	if (m_leftStampActive) {
@@ -6657,6 +8169,9 @@ void CSBattlePreviewPage::OnCharacterSelectionChanged()
 	if (selected == LB_ERR) return;
 	const int dataId = static_cast<int>(m_characterList.GetItemData(selected));
 	if (m_battleMapToolMode != BattleMapToolMode::None) return;
+	m_obstacleSelection.enabled = false;
+    m_obstacleSelection.items.clear();
+	m_obstacleSelection.CancelGesture();
 	const auto result = m_brushTabActive
 		? m_editorOps->SelectMinionBrush(dataId)
 		: m_editorOps->SelectCharacter(dataId);
@@ -6670,9 +8185,11 @@ void CSBattlePreviewPage::OnDeploymentSelectionChanged()
 
 void CSBattlePreviewPage::OnCharacterTab()
 {
-	if (m_obstaclePageActive && m_battleMapToolMode ==
-		BattleMapToolMode::ObstaclePlace)
-		CancelBattleMapTool(true);
+	CancelBattleMapTool(true);
+	CancelConflictingBattleEditorMode();
+	m_obstacleSelection.CancelGesture();
+	m_obstacleSelection.enabled = false;
+    m_obstacleSelection.items.clear();
 	m_obstaclePageActive = false;
 	m_sidebarVisible = true;
 	m_brushTabActive = false;
@@ -6683,9 +8200,11 @@ void CSBattlePreviewPage::OnCharacterTab()
 
 void CSBattlePreviewPage::OnBrushTab()
 {
-	if (m_obstaclePageActive && m_battleMapToolMode ==
-		BattleMapToolMode::ObstaclePlace)
-		CancelBattleMapTool(true);
+	CancelBattleMapTool(true);
+	CancelConflictingBattleEditorMode();
+	m_obstacleSelection.CancelGesture();
+	m_obstacleSelection.enabled = false;
+    m_obstacleSelection.items.clear();
 	m_obstaclePageActive = false;
 	m_sidebarVisible = true;
 	m_brushTabActive = true;
@@ -6715,6 +8234,38 @@ void CSBattlePreviewPage::OnNextCharacterPage()
 
 void CSBattlePreviewPage::OnUndo()
 {
+ FinishObstacleStampUndo();
+ auto& obstacleHistory=ActiveSession().map_operations.obstacle_undo;
+ const auto depth=ActiveSession().native_writeback_transaction.undo_depth();
+ if(!ActiveSession().stale&&!obstacleHistory.empty()&&obstacleHistory.back().native_depth_after==depth) {
+  const auto record=obstacleHistory.back();
+  bool undone=true;std::wstring diagnostic;
+  if(record.native_depth_after!=record.native_depth_before) {
+   auto* frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());auto* child=frame?frame->MDIGetActive():nullptr;
+   auto* view=child?DYNAMIC_DOWNCAST(CcczEditor2View,child->GetActiveView()):nullptr;
+   if(!view){undone=false;diagnostic=L"障碍物组撤回失败：没有活动原生剧本";}
+   else undone=UndoNativeWriteback(*view,diagnostic);
+  }
+  if(undone) {
+   const bool selectionEnabled=m_obstacleSelection.enabled;
+   m_obstacleDrafts=record.before;m_obstacleSelection=record.selection;m_obstacleSelection.enabled=selectionEnabled;m_obstacleSelection.CancelGesture();if(!selectionEnabled)m_obstacleSelection.items.clear();
+   // Native replay changes the content epoch. Bind restored selections to replayed sources.
+   auto& items=m_obstacleSelection.items;
+   for(auto it=items.begin();it!=items.end();) {
+    if(!it->draft) {
+     const auto source=std::find_if(m_dynamicProjection.obstacles.begin(),m_dynamicProjection.obstacles.end(),[&](const auto& native){return native.source_handle==it->identity;});
+     if(source==m_dynamicProjection.obstacles.end()){it=items.erase(it);continue;}
+     it->source=*source;it->value={source->type,source->coordinate};
+     if(source->source_fields.size()>=7)it->value.parameters={source->source_fields[1],source->source_fields[2],source->source_fields[5],source->source_fields[6]};
+    }
+    it->document_id=ActiveSession().document_id;it->tree_generation=m_dynamicTreeGeneration;it->content_epoch=m_dynamicContentEpoch;++it;
+   }
+   ActiveSession().map_operations.obstacle_undo.pop_back();
+   m_diagnostic=L"障碍物组已整体撤回";UpdateObstacleDraftControls();
+  }else AppendDiagnostic(diagnostic);
+  RefreshEditorControls();Invalidate(FALSE);return;
+ }
+
 	if (ActiveSession().native_writeback_transaction.undo_available()) {
 		CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
 		CMDIChildWnd* child = frame != nullptr ? frame->MDIGetActive() : nullptr;
@@ -6732,7 +8283,7 @@ void CSBattlePreviewPage::OnUndo()
 		Invalidate(FALSE);
 		return;
 	}
-	if (m_editorOps) {
+	if (!m_dynamicPreviewEnabled && m_editorOps) {
 		ShowOperationResult(m_editorOps->Undo());
 		RefreshCharacterListIfDeploymentChanged();
 	}
@@ -6740,6 +8291,7 @@ void CSBattlePreviewPage::OnUndo()
 
 void CSBattlePreviewPage::OnQuickModeClicked()
 {
+	if (m_dynamicPreviewEnabled) return;
 	auto* host = static_cast<CScenePreviewWnd*>(GetParent());
 	const bool requested = m_quickModeButton.GetCheck() == BST_CHECKED;
 	if (host == nullptr || !host->SetBattleQuickModeEnabled(requested)) {
@@ -6750,7 +8302,8 @@ void CSBattlePreviewPage::OnQuickModeClicked()
 
 void CSBattlePreviewPage::OnCopyPersonModeClicked()
 {
-	if (m_restoringSessionUi || m_activeSession == nullptr) return;
+	if (m_dynamicPreviewEnabled || m_restoringSessionUi ||
+		m_activeSession == nullptr) return;
 	const bool enabled = m_copyPersonModeButton.GetCheck() == BST_CHECKED;
 	ActiveSession().ui.copy_person_mode = enabled;
 	ActiveSession().editor_state.copy_person_mode = enabled;
@@ -6763,7 +8316,8 @@ void CSBattlePreviewPage::OnCopyPersonModeClicked()
 
 void CSBattlePreviewPage::OnUnrestrictedTerrainModeClicked()
 {
-	if (m_restoringSessionUi || m_activeSession == nullptr) return;
+	if (m_dynamicPreviewEnabled || m_restoringSessionUi ||
+		m_activeSession == nullptr) return;
 	const bool enabled =
 		m_unrestrictedTerrainModeButton.GetCheck() == BST_CHECKED;
 	ActiveSession().ui.unrestricted_terrain_mode = enabled;
@@ -6778,34 +8332,49 @@ void CSBattlePreviewPage::OnUnrestrictedTerrainModeClicked()
 
 void CSBattlePreviewPage::OnWriteback()
 {
+    FinishObstacleStampUndo();
+	if (m_dynamicPreviewEnabled && (m_obstacleDrafts.empty() || HasPendingPreviewDrafts())) return;
 	std::wstring diagnostic;
 	CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
 	CMDIChildWnd* child = frame != nullptr ? frame->MDIGetActive() : nullptr;
 	CcczEditor2View* view = child != nullptr
 		? DYNAMIC_DOWNCAST(CcczEditor2View, child->GetActiveView()) : nullptr;
+ if(view != nullptr && !m_obstacleDrafts.empty() && !HasPendingPreviewDrafts() &&
+    !RequireBattleInsertionSelection(*view,diagnostic))return;
 	if (view == nullptr) {
 		diagnostic = L"S 战场写回拒绝：没有活动的原生剧本文档";
 	} else if (!m_obstacleDrafts.empty() && !HasPendingPreviewDrafts()) {
-		const auto& map = ActiveSession().editor_state.battle.map;
+		const auto& map = EditingBattle().map;
 		std::vector<ccz::editor_preview::BattleMapOperationInstruction>
 			instructions;
 		try {
 			instructions.reserve(m_obstacleDrafts.items().size());
 			for (const auto& draft : m_obstacleDrafts.items()) {
+				if (m_dynamicPreviewEnabled && draft.parameters.visibility == 0 && std::any_of(
+					m_dynamicProjection.obstacles.begin(), m_dynamicProjection.obstacles.end(),
+					[&draft](const auto& obstacle) { return obstacle.coordinate == draft.coordinate; })) {
+					diagnostic = L"障碍物写回拒绝：当前推演中该格已有障碍物，请移除冲突草稿";
+					break;
+				}
 				ccz::editor_preview::BattleMapOperationInstruction instruction;
 				if (!ccz::editor_preview::BuildBattleObstacleInstruction(
 					draft.type, draft.coordinate, map.width, map.height,
-					instruction, diagnostic)) break;
+					instruction, diagnostic, draft.parameters)) break;
 				instructions.push_back(std::move(instruction));
 			}
 		} catch (...) {
 			diagnostic = L"S 障碍物写回拒绝：无法准备有序写入列表";
 		}
+        auto& obstacleHistory=ActiveSession().map_operations.obstacle_undo;
+        obstacleHistory.reserve(obstacleHistory.size()+1);
+        ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo obstacleWriteback{m_obstacleDrafts,m_obstacleSelection,ActiveSession().native_writeback_transaction.undo_depth(),0};
 		if (diagnostic.empty() && instructions.size() ==
 			m_obstacleDrafts.items().size() &&
 			ApplyBattleMapOperations(instructions, diagnostic)) {
+            obstacleWriteback.native_depth_after=ActiveSession().native_writeback_transaction.undo_depth();
+            ActiveSession().map_operations.obstacle_undo.push_back(std::move(obstacleWriteback));
 			m_obstacleDrafts.Clear();
-			CancelBattleMapTool();
+			CancelBattleMapTool(false);
 			m_diagnostic = diagnostic.c_str();
 			diagnostic.clear();
 		}
@@ -6830,6 +8399,12 @@ void CSBattlePreviewPage::OnWriteback()
 
 void CSBattlePreviewPage::CancelConflictingBattleEditorMode()
 {
+	// Selection is retained, but its pointer gesture must not consume the new tool.
+	const bool obstacleSelectionWasEnabled = m_obstacleSelection.enabled;
+	m_obstacleSelection.enabled = false;
+    m_obstacleSelection.items.clear();
+	m_obstacleSelection.CancelGesture();
+	if (obstacleSelectionWasEnabled) RefreshEditorControls();
 	if (m_editorOps == nullptr) return;
 	if (ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::AdjustPosition) {
@@ -6847,7 +8422,15 @@ void CSBattlePreviewPage::CancelConflictingBattleEditorMode()
 
 void CSBattlePreviewPage::CancelBattleMapTool(bool preserveObstacles)
 {
+    FinishObstacleStampUndo();
+	m_obstacleParametersPane.Hide();
 	m_battleMapToolMode = BattleMapToolMode::None;
+ m_mapCommandDragging=false;m_mapCommandStart.reset();m_mapCommandEnd.reset();m_mapCommandId=0;
+
+	m_obstacleEditTarget.reset();
+	m_obstacleStampActive = false;
+	m_obstacleLastStamp.reset();
+	if (GetCapture() == this) ReleaseCapture();
 	m_roleOperationUnits.clear();
 	m_roleOperationAnchorIndex = 0;
 	m_roleOperationDirectionAdjusted = false;
@@ -6879,6 +8462,7 @@ bool CSBattlePreviewPage::ApplyBattleMapOperations(
 		AppendDiagnostic(diagnostic);
 		return false;
 	}
+	if (!RequireBattleInsertionSelection(*view, diagnostic)) return false;
 	const bool applied = ApplyPendingNativeWritebackTransaction(*view,
 		view->GetTreeCtrl().GetSelectedItem(), diagnostic, true, &instructions);
 	if (applied) m_diagnostic = diagnostic.c_str();
@@ -6886,6 +8470,112 @@ bool CSBattlePreviewPage::ApplyBattleMapOperations(
 	RefreshEditorControls();
 	Invalidate(FALSE);
 	return applied;
+}
+
+void CSBattlePreviewPage::UpdateObstacleDraftControls()
+{
+ CString status;status.Format(L"按住左键添加；暂存%u个，写回提交",static_cast<unsigned>(m_obstacleDrafts.items().size()));
+ m_mapOperationStatus.SetWindowText(status);
+ CString label;label.Format(L"清空（%u）",static_cast<unsigned>(m_obstacleDrafts.items().size()));
+ m_clearObstacleDraftsButton.SetWindowText(label);
+ m_clearObstacleDraftsButton.ShowWindow(m_obstaclePageActive?SW_SHOW:SW_HIDE);
+ if((m_clearObstacleDraftsButton.IsWindowEnabled()!=FALSE)!=!m_obstacleDrafts.empty())m_clearObstacleDraftsButton.EnableWindow(!m_obstacleDrafts.empty());
+}
+
+bool CSBattlePreviewPage::StampObstacleAt(const ccz::preview::BattleCoord& coordinate)
+{
+ const auto& map=EditingBattle().map;
+ std::optional<ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo> single;
+ if(!m_obstacleStampUndo){auto& history=ActiveSession().map_operations.obstacle_undo;history.reserve(history.size()+1);const auto depth=ActiveSession().native_writeback_transaction.undo_depth();single=ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo{m_obstacleDrafts,m_obstacleSelection,depth,depth};}
+ const bool occupied=m_dynamicPreviewEnabled&&std::any_of(m_dynamicProjection.obstacles.begin(),m_dynamicProjection.obstacles.end(),[&](const auto& item){return item.coordinate==coordinate;});
+ if((occupied&&m_obstacleDefaults.visibility==0)||!m_obstacleDrafts.Add(m_selectedObstacleType,coordinate,map.width,map.height,m_obstacleDefaults)) return false;
+ if(single)ActiveSession().map_operations.obstacle_undo.push_back(std::move(*single));
+ m_diagnostic=L"障碍物已暂存；按住左键连续添加，写回统一提交";
+ InvalidateRect(m_canvasRect,FALSE);
+ if(!m_brushRefreshPending){m_brushRefreshPending=true;if(!SetTimer(0xB602,33,nullptr)){m_brushRefreshPending=false;UpdateWindow();}}
+ return true;
+}
+
+void CSBattlePreviewPage::OnObstacleDefaults()
+{
+ CMainFrame* frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());
+ CMDIChildWnd* child=frame?frame->MDIGetActive():nullptr;
+ auto* view=child?DYNAMIC_DOWNCAST(CcczEditor2View,child->GetActiveView()):nullptr;
+ if(!view)return;
+ std::vector<std::wstring> terrains;for(const auto& name:view->hexz)terrains.emplace_back(name);
+ const auto documentId=ActiveSession().document_id;
+ m_obstacleParametersPane.Open(this,true,{m_selectedObstacleType,{0,0},m_obstacleDefaults},terrains,
+  [this,documentId](const auto& value){
+   if(ActiveSession().document_id!=documentId){AfxMessageBox(L"活动剧本已变化，请重新打开默认参数");return false;}
+   ccz::editor_preview::BattleMapOperationInstruction checked;std::wstring diagnostic;
+   if(!ccz::editor_preview::BuildBattleObstacleInstruction(value.type,{0,0},1,1,checked,diagnostic,value.parameters)){AfxMessageBox(diagnostic.c_str());return false;}
+   m_obstacleDefaults=value.parameters;ActiveSession().map_operations.obstacle_defaults=m_obstacleDefaults;return true;
+  });
+}
+
+void CSBattlePreviewPage::ShowObstacleParameters()
+{
+ if(!m_obstacleEditTarget)return;
+ CMainFrame* frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());auto* child=frame?frame->MDIGetActive():nullptr;
+ auto* view=child?DYNAMIC_DOWNCAST(CcczEditor2View,child->GetActiveView()):nullptr;if(!view)return;
+ std::vector<std::wstring> terrains;for(const auto& name:view->hexz)terrains.emplace_back(name);
+ m_obstacleParametersPane.Open(this,false,m_obstacleEditTarget->value,terrains,
+  [this,target=*m_obstacleEditTarget](const auto& replacement) mutable {
+   m_obstacleEditTarget=target;
+   if(!EditObstacle(replacement))return false;
+   if(m_obstacleEditTarget)target=*m_obstacleEditTarget;
+   return true;
+  });
+}
+
+bool CSBattlePreviewPage::EditObstacle(const ccz::editor_preview::BattleObstacleDraft& replacement)
+{
+ FinishObstacleStampUndo();
+ if(!m_obstacleEditTarget)return false;
+ auto target=*m_obstacleEditTarget;
+ const auto reject=[&](const wchar_t* message){AfxMessageBox(message,MB_OK|MB_ICONINFORMATION);return false;};
+ if(target.document_id!=ActiveSession().document_id)return reject(L"障碍物编辑来源已变化，请重新选择");
+ const auto& map=EditingBattle().map;
+ ccz::editor_preview::BattleMapOperationInstruction instruction;std::wstring diagnostic;
+ if(!ccz::editor_preview::BuildBattleObstacleInstruction(replacement.type,replacement.coordinate,map.width,map.height,instruction,diagnostic,replacement.parameters))return reject(diagnostic.c_str());
+ const bool moving=replacement.coordinate!=target.value.coordinate;
+ if(replacement.parameters.visibility==0||moving){
+  for(const auto& item:m_obstacleDrafts.items())if(item.coordinate==replacement.coordinate&&(!target.draft||item.coordinate!=target.value.coordinate))return reject(L"目标格已有暂存障碍物，不能叠放");
+  if(m_dynamicPreviewEnabled)for(const auto& item:m_dynamicProjection.obstacles)
+   if(item.coordinate==replacement.coordinate&&(target.draft||item.source_handle!=target.source.source_handle))return reject(L"目标格已有障碍物，不能叠放");
+ }
+ if(target.draft){
+  const auto original=std::find_if(m_obstacleDrafts.items().begin(),m_obstacleDrafts.items().end(),[&](const auto& item){return item.coordinate==target.value.coordinate;});
+  if(original==m_obstacleDrafts.items().end()||original->type!=target.value.type||original->parameters.visibility!=target.value.parameters.visibility||original->parameters.terrain!=target.value.parameters.terrain||original->parameters.viewpoint!=target.value.parameters.viewpoint||original->parameters.sound!=target.value.parameters.sound)return reject(L"暂存障碍物已被修改，请重新选择");
+  auto& history=ActiveSession().map_operations.obstacle_undo;
+  history.reserve(history.size()+1);const auto depth=ActiveSession().native_writeback_transaction.undo_depth();
+  ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo undo{m_obstacleDrafts,m_obstacleSelection,depth,depth};
+  if(!m_obstacleDrafts.UpdateAt(target.value.coordinate,replacement,map.width,map.height))return reject(L"暂存障碍物已改变，请重新选择");
+  history.push_back(std::move(undo));target.value=replacement;m_obstacleEditTarget=target;UpdateObstacleDraftControls();RefreshEditorControls();Invalidate(FALSE);return true;
+ }
+ CMainFrame* frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());auto* child=frame?frame->MDIGetActive():nullptr;
+ auto* view=child?DYNAMIC_DOWNCAST(CcczEditor2View,child->GetActiveView()):nullptr;
+ auto* document=view?view->GetDocument():nullptr;
+ if(!m_dynamicPreviewEnabled||!m_dynamicPreviewReady||!document||document->GetSPreviewDocumentId()!=target.document_id||document->GetPreviewTreeGeneration()!=target.tree_generation||document->GetPreviewContentEpoch()!=target.content_epoch||ActiveSession().stale||ActiveSession().native_writeback_rebase_required||HasPendingPreviewDrafts())return reject(L"障碍物来源已过期或有未提交的单位改动，请重新选择或先写回");
+ const auto section=reinterpret_cast<HTREEITEM>(ActiveSession().baseline_capture.snapshot.section_root.runtime_handle);
+ MfcBattleWritebackNativeHost host(*view,section);
+ ccz::editor_preview::BattleWritebackNativeNodeSnapshot source;
+ if(!host.NodeExists(target.source.source_handle)||!host.CaptureNode(target.source.source_handle,source)||source.instruction_id!=0x58||source.int_data!=target.source.source_fields)return reject(L"对应的58号指令已变化，请重新选择障碍物");
+ if(instruction.int_data.size()<source.int_data.size())instruction.int_data.resize(source.int_data.size(),0);
+ ccz::editor_preview::BattleWritebackNativeChange change;
+ change.kind=ccz::editor_preview::BattleWritebackChangeKind::UpdateInstruction;
+ change.instruction_id=0x58;change.item_handle=source.handle;change.parent_handle=source.parent_handle;change.source_ordinal=source.ordinal;
+ change.original_int_data=source.int_data;change.int_data=instruction.int_data;change.map_width=map.width;change.map_height=map.height;
+ ccz::editor_preview::BattleWritebackNativeBatch batch;batch.ok=true;batch.changes.push_back(change);
+ BattlePreviewRefreshSuppression suppress(*view);
+ if(!ActiveSession().native_writeback_transaction.Apply(batch,host,diagnostic))return reject(diagnostic.c_str());
+ ActiveSession().native_writeback_rebase_required=true;
+ document->MarkEditorContentChanged();
+ if(!RebaseBattlePreviewAfterNativeWriteback(*view,section,diagnostic)){AppendDiagnostic(diagnostic);return true;}
+ RefreshDynamicPreview(view->GetTreeCtrl(),view->GetTreeCtrl().GetSelectedItem(),document->pathName);
+ target.value=replacement;target.source.type=replacement.type;target.source.coordinate=replacement.coordinate;target.source.source_fields=instruction.int_data;
+ target.content_epoch=document->GetPreviewContentEpoch();target.tree_generation=document->GetPreviewTreeGeneration();m_obstacleEditTarget=target;
+ m_diagnostic=L"障碍物参数已修改；可使用撤回恢复";RefreshEditorControls();Invalidate(FALSE);return true;
 }
 
 void CSBattlePreviewPage::OnObstaclePageClicked()
@@ -6935,6 +8625,12 @@ void CSBattlePreviewPage::OnObstacleTypeClicked(UINT controlId)
 
 void CSBattlePreviewPage::OnClearObstacleDrafts()
 {
+ FinishObstacleStampUndo();
+ if(!m_obstacleDrafts.empty()){
+  auto& history=ActiveSession().map_operations.obstacle_undo;history.reserve(history.size()+1);
+  const auto depth=ActiveSession().native_writeback_transaction.undo_depth();
+  history.push_back({m_obstacleDrafts,m_obstacleSelection,depth,depth});
+ }
 	m_obstacleDrafts.Clear();
 	RefreshEditorControls();
 	LayoutEditorControls();
@@ -6948,8 +8644,8 @@ void CSBattlePreviewPage::OnHideSidebar()
 
 void CSBattlePreviewPage::OnShowSidebar()
 {
-	if (m_battleMapToolMode == BattleMapToolMode::ObstaclePlace)
-		CancelBattleMapTool(true);
+	CancelBattleMapTool(true);
+	CancelConflictingBattleEditorMode();
 	SetSidebarVisible(true);
 }
 
@@ -6993,8 +8689,34 @@ void CSBattlePreviewPage::OnMouseMove(UINT flags, CPoint point)
 		SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
 		return;
 	}
+	const auto previousPoint = m_hoverPoint;
 	m_hoverPoint = point;
 	const auto cell = BattleCoordFromScreen(point);
+	// All editor modes share hover refresh, including the early-return
+	// obstacle selection path. The card also follows movement within a cell.
+	if (cell != m_hoverCell || point != previousPoint) {
+		m_hoverCell = cell;
+		Invalidate(FALSE);
+	}
+	SetCursor(cell ? LoadCursor(nullptr, IDC_HAND)
+		: LoadCursor(nullptr, IDC_ARROW));
+ if(m_battleMapToolMode==BattleMapToolMode::CommandPickArea||m_battleMapToolMode==BattleMapToolMode::CommandPickPoint){
+  if(m_mapCommandDragging&&cell){m_mapCommandEnd=cell;Invalidate(FALSE);}return;
+ }
+	if(m_obstacleSelection.enabled) {
+		if(m_obstacleSelection.moving && cell){
+            m_obstacleSelection.ghost_offset={cell->x-m_obstacleSelection.anchor.x,cell->y-m_obstacleSelection.anchor.y};
+            const bool invalid=!IsObstacleGroupTargetValid(*cell);
+            m_diagnostic=invalid?L"目标位置越界或已有障碍物，请调整位置":L"批量调整障碍物位置：左键确认，右键或 Esc 取消";
+            Invalidate(FALSE);
+        }
+		if(m_obstacleSelection.gesture_active && (flags&MK_LBUTTON) && cell && m_obstacleSelection.last_cell) {
+            if(!m_obstacleSelection.drag_started && (std::abs(point.x-m_obstacleSelection.press_x)>=GetSystemMetrics(SM_CXDRAG)||std::abs(point.y-m_obstacleSelection.press_y)>=GetSystemMetrics(SM_CYDRAG))){m_obstacleSelection.drag_started=true;m_obstacleSelection.items.clear();m_obstacleSelection.last_cell=m_obstacleSelection.press_cell;if(m_obstacleSelection.press_cell)ToggleObstacleSelectionAt(*m_obstacleSelection.press_cell,false);}
+			if(m_obstacleSelection.drag_started && *cell!=*m_obstacleSelection.last_cell)for(const auto& crossed:ccz::editor_preview::BattleSelectionPathCells(*m_obstacleSelection.last_cell,*cell))if(crossed!=*m_obstacleSelection.last_cell)ToggleObstacleSelectionAt(crossed,false);
+			m_obstacleSelection.last_cell=cell;Invalidate(FALSE);
+		}
+		return;
+	}
 	if (m_selectionGestureActive && (flags & MK_LBUTTON) && m_editorOps &&
 		m_selectionPressCell) {
 		const int dx = std::abs(point.x - m_selectionPressPoint.x);
@@ -7003,7 +8725,7 @@ void CSBattlePreviewPage::OnMouseMove(UINT flags, CPoint point)
 			(dx >= (std::max)(1, GetSystemMetrics(SM_CXDRAG)) ||
 			 dy >= (std::max)(1, GetSystemMetrics(SM_CYDRAG)))) {
 			m_selectionDragStarted = true;
-			m_editorOps->ClearSelectionGroup();
+			ClearBoardSelection();
 			m_selectedUnit.reset();
 			m_selectionLastCell = m_selectionPressCell;
 		}
@@ -7011,18 +8733,19 @@ void CSBattlePreviewPage::OnMouseMove(UINT flags, CPoint point)
 			const auto path = ccz::editor_preview::BattleSelectionPathCells(
 				*m_selectionLastCell, *cell);
 			for (const auto& crossed : path)
-				m_editorOps->AddSelectionAt(crossed);
+				SelectBoardCell(crossed, false);
 			m_selectionLastCell = cell;
 			Invalidate(FALSE);
 		}
 	}
-	if (m_leftStampActive && cell) StampAt(*cell);
-	if (cell != m_hoverCell) {
-		m_hoverCell = cell;
-		Invalidate(FALSE);
+	if (m_obstacleStampActive && (flags & MK_LBUTTON) && cell) {
+		if (m_obstacleLastStamp) {
+			for (const auto& crossed : ccz::editor_preview::BattleSelectionPathCells(*m_obstacleLastStamp, *cell)) StampObstacleAt(crossed);
+		} else StampObstacleAt(*cell);
+		m_obstacleLastStamp = cell;
 	}
-	SetCursor(cell ? LoadCursor(nullptr, IDC_HAND)
-		: LoadCursor(nullptr, IDC_ARROW));
+	if (m_leftStampActive && cell) StampAt(*cell);
+
 }
 
 void CSBattlePreviewPage::OnMouseLeave()
@@ -7044,12 +8767,23 @@ BOOL CSBattlePreviewPage::OnMouseWheel(
 		m_wheelRemainder = 0;
 		return TRUE;
 	}
+    if(m_battleMapToolMode==BattleMapToolMode::TurnDirection) {
+        if(!m_canvasRect.PtInRect(point)){m_wheelRemainder=0;return TRUE;}
+        m_wheelRemainder+=delta;const int steps=m_wheelRemainder/WHEEL_DELTA;
+        if(steps){m_wheelRemainder-=steps*WHEEL_DELTA;m_roleOperationDirection=(m_roleOperationDirection+steps)%4;if(m_roleOperationDirection<0)m_roleOperationDirection+=4;Invalidate(FALSE);}
+        return TRUE;
+    }
+	if (m_dynamicPreviewEnabled && m_battleMapToolMode != BattleMapToolMode::DynamicRoleAdjust && m_battleMapToolMode != BattleMapToolMode::MovePickTarget &&
+		m_battleMapToolMode != BattleMapToolMode::RevivePickTarget) {
+		m_wheelRemainder = 0;
+		return TRUE;
+	}
 	const bool placing = ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::Place;
 	const bool adjustingPosition = ActiveSession().editor_state.mode ==
 		ccz::editor_preview::BattleEditorMode::AdjustPosition;
 	const bool choosingRoleOperationTarget =
-		(m_battleMapToolMode == BattleMapToolMode::MovePickTarget ||
+		(m_battleMapToolMode == BattleMapToolMode::DynamicRoleAdjust || m_battleMapToolMode == BattleMapToolMode::MovePickTarget ||
 		 m_battleMapToolMode == BattleMapToolMode::RevivePickTarget) &&
 		!m_roleOperationUnits.empty();
 	if (!m_canvasRect.PtInRect(point) ||
@@ -7140,4 +8874,174 @@ void CSBattlePreviewPage::OnVScroll(UINT code, UINT position, CScrollBar*)
 	default: return;
 	}
 	SetViewportScroll(m_scrollX, next);
+}
+
+
+void CSBattlePreviewPage::OnObstacleMultiSelect()
+{
+ const bool enable = !m_obstacleSelection.enabled;
+ m_obstacleSelection.enabled=enable;
+ CancelBattleMapTool(true);
+ if(m_editorOps && ActiveSession().editor_state.mode==ccz::editor_preview::BattleEditorMode::AdjustPosition)m_editorOps->CancelPositionAdjustment();
+ if(m_editorOps && ActiveSession().editor_state.mode==ccz::editor_preview::BattleEditorMode::Place)m_editorOps->CancelPlacementBrush();
+ m_obstacleSelection.CancelGesture();
+ if(!enable)m_obstacleSelection.items.clear();
+ if(GetCapture()==this)ReleaseCapture();
+ ClearBoardSelection();
+ m_diagnostic=m_obstacleSelection.enabled?L"多选障碍物：点击切换，按住左键沿路径添加；右键操作选中组":L"障碍物多选已关闭";
+ RefreshEditorControls();Invalidate(FALSE);
+}
+
+bool CSBattlePreviewPage::ToggleObstacleSelectionAt(const ccz::preview::BattleCoord& coordinate,bool toggle)
+{
+ ccz::editor_preview::BattleObstacleSelectionItem item;
+ const auto draft=std::find_if(m_obstacleDrafts.items().begin(),m_obstacleDrafts.items().end(),[&](const auto& value){return value.coordinate==coordinate;});
+ if(draft!=m_obstacleDrafts.items().end()){item.draft=true;item.value=*draft;item.identity=draft->identity;}
+ else {
+  if(!m_dynamicPreviewEnabled)return false;
+  const auto native=std::find_if(m_dynamicProjection.obstacles.begin(),m_dynamicProjection.obstacles.end(),[&](const auto& value){return value.coordinate==coordinate;});
+  if(native==m_dynamicProjection.obstacles.end())return false;
+  item.source=*native;item.identity=native->source_handle;item.value={native->type,native->coordinate};
+  if(native->source_fields.size()>=7)item.value.parameters={native->source_fields[1],native->source_fields[2],native->source_fields[5],native->source_fields[6]};
+ }
+ m_obstacleSelection.section_handle=ActiveSession().baseline_capture.snapshot.section_root.runtime_handle;
+ item.document_id=ActiveSession().document_id;item.tree_generation=m_dynamicTreeGeneration;item.content_epoch=m_dynamicContentEpoch;
+ m_obstacleSelection.Select(item,toggle);return true;
+}
+
+bool CSBattlePreviewPage::IsObstacleGroupTargetValid(const ccz::preview::BattleCoord& anchorTarget) const
+{
+    const auto& map=EditingBattle().map;
+    for(const auto& item:m_obstacleSelection.items){
+        auto target=item.value.coordinate;target.x+=anchorTarget.x-m_obstacleSelection.anchor.x;target.y+=anchorTarget.y-m_obstacleSelection.anchor.y;
+        if(!ccz::preview::is_battle_coord_in_bounds(target,map.width,map.height))return false;
+        for(const auto& d:m_obstacleDrafts.items())if(d.coordinate==target&&!m_obstacleSelection.Contains(true,d.identity))return false;
+        for(const auto& d:m_dynamicProjection.obstacles)if(d.coordinate==target&&!m_obstacleSelection.Contains(false,d.source_handle))return false;
+    }
+    return !m_obstacleSelection.items.empty();
+}
+
+bool CSBattlePreviewPage::HandleObstacleGroupContext(CPoint point)
+{
+ if(m_obstacleSelection.moving){m_obstacleSelection.CancelGesture();Invalidate(FALSE);return true;}
+ const auto cell=BattleCoordFromScreen(point);if(!cell)return false;
+  const bool obstacleHere=std::any_of(m_obstacleDrafts.items().begin(),m_obstacleDrafts.items().end(),[&](const auto& d){return d.coordinate==*cell;}) || (m_dynamicPreviewEnabled && std::any_of(m_dynamicProjection.obstacles.begin(),m_dynamicProjection.obstacles.end(),[&](const auto& d){return d.coordinate==*cell;}));
+  if(!obstacleHere)return false;
+  if(HitTestUnit(*cell)){
+   CMenu split;split.CreatePopupMenu();split.AppendMenu(MF_STRING,1,L"操作角色");split.AppendMenu(MF_STRING,2,L"操作障碍物");CPoint screen=point;ClientToScreen(&screen);
+   const auto choice=split.TrackPopupMenu(TPM_RETURNCMD|TPM_RIGHTBUTTON,screen.x,screen.y,this);
+   if(choice==1){m_obstacleSelection.items.clear();m_obstacleSelection.enabled=false;RefreshEditorControls();return false;}
+   if(choice!=2)return true;
+  }
+  if(std::none_of(m_obstacleSelection.items.begin(),m_obstacleSelection.items.end(),[&](const auto& i){return i.value.coordinate==*cell;})){m_obstacleSelection.items.clear();ToggleObstacleSelectionAt(*cell,false);}
+ // Context clicks on a member choose a temporary move anchor without changing the group.
+ const auto selected=std::find_if(m_obstacleSelection.items.begin(),m_obstacleSelection.items.end(),[&](const auto& item){return item.value.coordinate==*cell;});
+ if(selected==m_obstacleSelection.items.end())return true;
+ CMenu menu;menu.CreatePopupMenu();menu.AppendMenu(MF_STRING,1,L"调整位置");menu.AppendMenu(MF_STRING,2,L"批量修改参数");menu.AppendMenu(MF_STRING,3,L"消失");
+ CPoint screen=point;ClientToScreen(&screen);const auto command=menu.TrackPopupMenu(TPM_RETURNCMD|TPM_RIGHTBUTTON,screen.x,screen.y,this);
+ if(command==1){m_obstacleSelection.anchor=*cell;m_obstacleSelection.ghost_offset={};m_obstacleSelection.moving=true;Invalidate(FALSE);}
+ if(command==2)ShowObstacleGroupParameters();
+ if(command==3 && std::any_of(m_obstacleSelection.items.begin(),m_obstacleSelection.items.end(),[](const auto& item){return !item.draft;}) && !RequireImmediateInstructionSelection())return true;
+ if(command==3){std::vector<ccz::editor_preview::BattleObstacleDraft> values;for(const auto& item:m_obstacleSelection.items)values.push_back(item.value);ApplyObstacleGroup(values,true);}
+ return true;
+}
+
+void CSBattlePreviewPage::ShowObstacleGroupParameters()
+{
+ if(m_obstacleSelection.items.empty())return;
+ auto* frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());auto* child=frame?frame->MDIGetActive():nullptr;
+ auto* view=child?DYNAMIC_DOWNCAST(CcczEditor2View,child->GetActiveView()):nullptr;if(!view)return;
+ std::vector<std::wstring> terrains;for(const auto& name:view->hexz)terrains.emplace_back(name);
+ const auto selected=m_obstacleSelection.items;
+ m_obstacleBatchPane.Open(this,selected.front().value,terrains,[this,selected](const auto& value,const std::array<bool,5>& fields){
+  if(m_obstacleSelection.items.size()!=selected.size())return false;
+  for(std::size_t i=0;i<selected.size();++i)if(m_obstacleSelection.items[i].identity!=selected[i].identity||m_obstacleSelection.items[i].draft!=selected[i].draft||m_obstacleSelection.items[i].document_id!=selected[i].document_id||m_obstacleSelection.items[i].tree_generation!=selected[i].tree_generation||m_obstacleSelection.items[i].content_epoch!=selected[i].content_epoch){AfxMessageBox(L"障碍物来源已变化，请重新打开参数窗口");return false;}
+  std::vector<ccz::editor_preview::BattleObstacleDraft> replacements;
+  for(const auto& item:m_obstacleSelection.items){auto next=item.value;if(fields[0])next.type=value.type;if(fields[1])next.parameters.visibility=value.parameters.visibility;if(fields[2])next.parameters.terrain=value.parameters.terrain;if(fields[3])next.parameters.viewpoint=value.parameters.viewpoint;if(fields[4])next.parameters.sound=value.parameters.sound;replacements.push_back(next);}
+  return ApplyObstacleGroup(replacements,false);
+ });
+}
+
+bool CSBattlePreviewPage::ApplyObstacleGroup(const std::vector<ccz::editor_preview::BattleObstacleDraft>& replacements,bool disappear)
+{
+ FinishObstacleStampUndo();
+ using namespace ccz::editor_preview;
+ const auto selected=m_obstacleSelection.items;
+ auto& groupHistory=ActiveSession().map_operations.obstacle_undo;
+ groupHistory.reserve(groupHistory.size()+1);
+ ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo groupUndo{m_obstacleDrafts,m_obstacleSelection,ActiveSession().native_writeback_transaction.undo_depth(),0};
+ const auto reject=[&](const wchar_t* text){AfxMessageBox(text,MB_OK|MB_ICONINFORMATION);return false;};
+ if(selected.empty()||selected.size()!=replacements.size())return false;
+  const auto same=[](const auto& a,const auto& b){return a.coordinate==b.coordinate&&a.type==b.type&&a.parameters.visibility==b.parameters.visibility&&a.parameters.terrain==b.parameters.terrain&&a.parameters.viewpoint==b.parameters.viewpoint&&a.parameters.sound==b.parameters.sound;};
+  if(!disappear){bool changed=false;for(std::size_t i=0;i<selected.size();++i)changed=changed||!same(selected[i].value,replacements[i]);if(!changed)return true;}
+ const auto& map=EditingBattle().map;
+ BattleObstacleDraftQueue pending=m_obstacleDrafts;
+ // Validate the complete final layout, excluding the selected group's old cells.
+ for(std::size_t i=0;i<selected.size();++i){
+  const auto& target=selected[i];const auto& next=replacements[i];
+  if(target.document_id!=ActiveSession().document_id)return reject(L"障碍物组所属剧本已变化，请重新选择");
+  if(next.coordinate.x<0||next.coordinate.y<0||next.coordinate.x>=map.width||next.coordinate.y>=map.height)return reject(L"障碍物组超出地图边界");
+  if(!disappear){
+   for(std::size_t j=0;j<i;++j)if(replacements[j].coordinate==next.coordinate)return reject(L"障碍物组不能叠放");
+   for(const auto& draft:m_obstacleDrafts.items())if(draft.coordinate==next.coordinate&&!m_obstacleSelection.Contains(true,draft.identity))return reject(L"目标格已有非选中暂存障碍物");
+   for(const auto& native:m_dynamicProjection.obstacles)if(native.coordinate==next.coordinate&&!m_obstacleSelection.Contains(false,native.source_handle))return reject(L"目标格已有非选中障碍物");
+  }
+  if(target.draft){const auto found=std::find_if(pending.items().begin(),pending.items().end(),[&](const auto& draft){return draft.identity==target.identity;});if(found==pending.items().end()||found->coordinate!=target.value.coordinate||found->type!=target.value.type||found->parameters.visibility!=target.value.parameters.visibility||found->parameters.terrain!=target.value.parameters.terrain||found->parameters.viewpoint!=target.value.parameters.viewpoint||found->parameters.sound!=target.value.parameters.sound)return reject(L"暂存障碍物来源已变化，请重新选择");}
+ }
+ // Remove old group coordinates first so a translation can occupy another member's old cell.
+ for(const auto& target:selected)if(target.draft)pending.RemoveAt(target.value.coordinate);
+ if(!disappear)for(std::size_t i=0;i<selected.size();++i)if(selected[i].draft){
+  if(!pending.Add(replacements[i].type,replacements[i].coordinate,map.width,map.height,replacements[i].parameters))return reject(L"暂存障碍物组修改预检失败");
+ }
+ const bool hasNative=std::any_of(selected.begin(),selected.end(),[](const auto& item){return !item.draft;});
+ std::vector<BattleMapOperationInstruction> inserts;BattleWritebackNativeBatch batch;batch.ok=true;
+ auto* frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());auto* child=frame?frame->MDIGetActive():nullptr;
+ auto* view=child?DYNAMIC_DOWNCAST(CcczEditor2View,child->GetActiveView()):nullptr;auto* document=view?view->GetDocument():nullptr;
+ std::wstring diagnostic;
+ if(hasNative){
+  if(view && ActiveSession().ui.quick_mode_enabled && view->GetTreeCtrl().GetSafeHwnd()!=m_sourceTreeWindow)return reject(L"活动窗口不是障碍物组绑定的剧本树");
+  if(!m_dynamicPreviewEnabled||!m_dynamicPreviewReady||!document||ActiveSession().stale||ActiveSession().native_writeback_rebase_required||HasPendingPreviewDrafts())return reject(L"障碍物组来源不可写入，请重新读取或先写回单位改动");
+  const auto section=reinterpret_cast<HTREEITEM>(ActiveSession().baseline_capture.snapshot.section_root.runtime_handle);MfcBattleWritebackNativeHost host(*view,section);
+  for(std::size_t i=0;i<selected.size();++i)if(!selected[i].draft){
+   const auto& target=selected[i];if(document->GetSPreviewDocumentId()!=target.document_id||document->GetPreviewTreeGeneration()!=target.tree_generation||document->GetPreviewContentEpoch()!=target.content_epoch)return reject(L"原生障碍物来源已过期，请重新选择");
+   BattleWritebackNativeNodeSnapshot source;if(!host.NodeExists(target.source.source_handle)||!host.CaptureNode(target.source.source_handle,source)||source.instruction_id!=0x58||source.int_data!=target.source.source_fields)return reject(L"障碍物对应58号指令已变化");
+   auto next=replacements[i];if(disappear)next.parameters.visibility=1;
+   BattleMapOperationInstruction instruction;if(!BuildBattleObstacleInstruction(next.type,next.coordinate,map.width,map.height,instruction,diagnostic,next.parameters))return reject(diagnostic.c_str());
+   if(disappear){inserts.push_back(instruction);continue;}
+   if(instruction.int_data.size()<source.int_data.size())instruction.int_data.resize(source.int_data.size(),0);
+   BattleWritebackNativeChange change;change.kind=BattleWritebackChangeKind::UpdateInstruction;change.instruction_id=0x58;change.item_handle=source.handle;change.parent_handle=source.parent_handle;change.source_ordinal=source.ordinal;change.original_int_data=source.int_data;change.int_data=instruction.int_data;change.map_width=map.width;change.map_height=map.height;batch.changes.push_back(change);
+  }
+  if(disappear){
+   if(!RequireBattleInsertionSelection(*view,diagnostic))return false;
+   CapturedEditorTree snapshot;if(!CaptureEditorDocumentSnapshot(view->GetTreeCtrl(),std::wstring(document->pathName),snapshot,diagnostic))return reject(diagnostic.c_str());
+   CapturedEditorTree pinned;
+   if(!SelectCapturedBattleSection(std::move(snapshot),ActiveSession().baseline_capture.snapshot.section_root.runtime_handle,ActiveSession().baseline_capture.snapshot.section_path,pinned,diagnostic))return reject(diagnostic.c_str());
+   auto capture=BuildBattlePreviewInput(std::move(pinned));if(!capture.ok)return reject(capture.diagnostic.c_str());if(!ValidateBattleWritebackNextOrdinal(capture.snapshot,view->cur_code_ord,diagnostic))return reject(diagnostic.c_str());auto insertion=BuildBattleWritebackInsertBatchAfterSelection(capture,inserts);if(!insertion.ok)return reject(insertion.diagnostic.c_str());batch=std::move(insertion);
+  }
+  BattlePreviewRefreshSuppression suppress(*view);
+  if(!ActiveSession().native_writeback_transaction.Apply(batch,host,diagnostic))return reject(diagnostic.c_str());
+  if(disappear)RevealNativeWritebackInstruction(*view,batch,host.last_inserted_handle());
+  // Draft publication follows native success, preserving atomicity on native failure.
+  groupUndo.native_depth_after=ActiveSession().native_writeback_transaction.undo_depth();
+  groupHistory.push_back(std::move(groupUndo));
+  m_obstacleDrafts=pending;ActiveSession().native_writeback_rebase_required=true;document->MarkEditorContentChanged();
+  if(!RebaseBattlePreviewAfterNativeWriteback(*view,section,diagnostic)){AppendDiagnostic(diagnostic);m_obstacleSelection.items.clear();UpdateObstacleDraftControls();return true;}
+  RefreshDynamicPreview(view->GetTreeCtrl(),view->GetTreeCtrl().GetSelectedItem(),document->pathName);
+ }else { groupUndo.native_depth_after=groupUndo.native_depth_before;groupHistory.push_back(std::move(groupUndo));m_obstacleDrafts=pending; }
+ m_obstacleSelection.items.clear();
+ if(!disappear)for(const auto& value:replacements)ToggleObstacleSelectionAt(value.coordinate,false);
+ m_diagnostic=disappear?L"障碍物组已消失；原生指令可整体撤回":L"障碍物组已统一修改；原生修改可整体撤回";
+ UpdateObstacleDraftControls();RefreshEditorControls();Invalidate(FALSE);return true;
+}
+
+#include "PreviewIntegration/BattleEnhancedEditing.inl"
+
+void CSBattlePreviewPage::FinishObstacleStampUndo()
+{
+ if(!m_obstacleStampUndo)return;
+ if(m_activeSession && m_obstacleDrafts.items().size()!=m_obstacleStampUndo->before.items().size())
+  ActiveSession().map_operations.obstacle_undo.push_back(std::move(*m_obstacleStampUndo));
+ m_obstacleStampUndo.reset();
+ m_obstacleStampActive=false;
+ m_obstacleLastStamp.reset();
 }

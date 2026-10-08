@@ -20,6 +20,11 @@ struct BattleParseOptions {
     // a valid branch with no reachable deployments.
     bool filter_deployment_nodes{};
     std::vector<LogicalNodeKey> reachable_deployment_keys;
+    // Dynamic Scene1 baseline callers can optionally restrict map records to
+    // the condition-tree path they resolved.  Other previews keep the
+    // default Section-scoped behavior.
+    bool filter_map_nodes{};
+    std::vector<LogicalNodeKey> reachable_map_keys;
 };
 
 struct BattleParseResult {

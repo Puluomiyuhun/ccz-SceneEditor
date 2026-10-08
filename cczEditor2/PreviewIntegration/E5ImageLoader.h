@@ -8,4 +8,4 @@
 // separate.
 Gdiplus::Bitmap* LoadBitmapFromE5(const CString& e5_file_path,
 	int image_index, CString& diagnostic,
-	bool apply_top_left_transparency = true);
+	bool apply_top_left_transparency = true, int raw_width = 48);

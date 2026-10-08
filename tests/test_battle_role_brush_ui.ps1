@@ -129,7 +129,7 @@ Assert-Text $ops 'const int retained_direction = state_->mouse_direction[\s\S]*?
 	'Advancing the brush Data ID retains the wheel-selected direction.'
 Assert-Text $page 'OnUndo[\s\S]*?UndoNativeWriteback[\s\S]*?m_editorOps->Undo\(' `
 	'Undo button must route to the active native transaction or temporary BattleEditorOps transaction.'
-Assert-Text $page 'const bool undoEnabled = !ActiveSession\(\)\.stale &&\s*\(ActiveSession\(\)\.native_writeback_transaction\.undo_available\(\) \|\|' `
+Assert-Text $page 'const bool undoEnabled = !ActiveSession\(\)\.stale &&\s*!m_dynamicPreviewEnabled &&\s*\(ActiveSession\(\)\.native_writeback_transaction\.undo_available\(\) \|\|' `
 	'Undo button must expose an available native or temporary undo.'
 Assert-Text $page 'void CSBattlePreviewPage::SetSidebarVisible\(bool visible\)[\s\S]*?LayoutEditorControls\(\)' `
 	'Sidebar visibility must relayout the canvas.'
@@ -185,10 +185,22 @@ Assert-Text $createControls 'm_characterList\.SetFont\(&m_uiFont\)' `
     'The role and brush list must receive the explicit S preview font.'
 
 $layout = Get-FunctionBlock $page 'void CSBattlePreviewPage::LayoutEditorControls('
-Assert-Text $layout 'm_conditionTreeButton\.MoveWindow\(left, y, width, 22\)[\s\S]*?m_writebackButton\.MoveWindow\(left, y, width, 22\)[\s\S]*?m_searchEdit\.MoveWindow\(left, y, width, 22\)' `
-    'Writeback must be a full-width control directly after quick mode/condition tree and before search.'
+$globalToolbar = Get-FunctionBlock $page 'void CSBattlePreviewPage::LayoutPreviewControlToolbar('
+$obstacleLayout = Get-FunctionBlock $page 'void CSBattlePreviewPage::LayoutObstacleSidebar('
+Assert-Text $layout 'LayoutPreviewControlToolbar\(\);[\s\S]*?if\s*\(m_obstaclePageActive\)' `
+	'Global preview controls must be placed before choosing the role or map-tools page.'
+Assert-Text $globalToolbar 'm_writebackButton\.MoveWindow\(writebackX, toolbarY[\s\S]*?m_quickModeButton[\s\S]*?m_dynamicPreviewButton[\s\S]*?m_previewModeButton' `
+	'Quick mode, dynamic preview, preview display, and writeback stay in the canvas-wide control row.'
+if ($layout -match 'm_dynamicPreviewButton\.MoveWindow\(left') {
+	throw 'Dynamic preview must not be embedded in the role/brush page.'
+}
+if ($obstacleLayout -match 'm_dynamicPreviewButton') {
+	throw 'Dynamic preview must not be embedded in the map-tools page.'
+}
+Assert-Text $obstacleLayout 'm_obstaclePageTitle\.MoveWindow[\s\S]*?m_mapOperationStatus\.MoveWindow' `
+	'The map-tools page has a separate title above its obstacle instructions.'
 if ($layout -match 'm_writebackButton\.MoveWindow\(left \+ undoWidth') {
-    throw 'Writeback must no longer share the bottom row with Undo.'
+	throw 'Writeback must no longer share the bottom row with Undo.'
 }
 
 $listRefresh = Get-FunctionBlock $page 'void CSBattlePreviewPage::RefreshCharacterList('
@@ -224,34 +236,33 @@ Assert-Text $captureChanged 'interruptedStamp[\s\S]*?RefreshCharacterListIfDeplo
 
 Assert-Text $page 'kStatusHeaderHeight\s*=\s*60' `
     'The normal status header must retain its existing height.'
-Assert-Text $page 'kCollapsedControlToolbarHeight\s*=\s*28' `
-    'Collapsed-sidebar controls must have one compact row below the status text.'
+Assert-Text $page 'kPreviewToolbarHeight\s*=\s*28' `
+	'Global preview controls reserve one compact row below the status text.'
 Assert-Text $page 'kStatusFooterHeight\s*=\s*26' `
     'The map viewport must reserve the bottom diagnostic strip.'
 $layout = Get-FunctionBlock $page 'void CSBattlePreviewPage::LayoutEditorControls('
 Assert-Text $layout 'm_canvasRect\.SetRect\(0, headerHeight,[\s\S]*?footerTop\)' `
     'Map drawing and hit testing must use the area below and above the status bands.'
-Assert-Text $layout 'sidePanelVisible\s*\?\s*kStatusHeaderHeight\s*:\s*kStatusHeaderHeight\s*\+\s*kCollapsedControlToolbarHeight' `
-	'Any expanded sidebar page must reserve its own header without the collapsed toolbar row.'
-Assert-Text $layout 'LayoutCollapsedControlToolbar\(\)' `
-    'The collapsed sidebar must lay out the persistent compact control row.'
-Assert-Text $layout 'if\s*\(m_sidebarVisible\)\s*\{[\s\S]*?m_quickModeButton\.MoveWindow\(left,[\s\S]*?\}\s*else\s*\{[\s\S]*?LayoutCollapsedControlToolbar\(\)' `
-    'Expanded sidebar controls must retain their existing side-panel placement; only the hidden-sidebar state uses the toolbar row.'
-$collapsedToolbar = Get-FunctionBlock $page 'void CSBattlePreviewPage::LayoutCollapsedControlToolbar('
-Assert-Text $collapsedToolbar 'm_writebackButton\.MoveWindow\(writebackX, toolbarY[\s\S]*?m_quickModeButton[\s\S]*?m_copyPersonModeButton[\s\S]*?m_unrestrictedTerrainModeButton[\s\S]*?m_conditionTreeButton[\s\S]*?control\.button->MoveWindow\(x, toolbarY' `
-    'The quick-mode, condition-tree, special-mode and writeback controls must share the collapsed toolbar row.'
-Assert-Text $collapsedToolbar 'controls\.push_back\(\{ &m_quickModeButton[\s\S]*?controls\.push_back\(\{ &m_copyPersonModeButton[\s\S]*?controls\.push_back\(\{ &m_unrestrictedTerrainModeButton[\s\S]*?controls\.push_back\(\{ &m_previewModeButton' `
-    'The three checkbox controls must be consecutive before the pushbutton controls in the collapsed toolbar.'
+Assert-Text $layout 'kStatusHeaderHeight\s*\+\s*kPreviewToolbarHeight' `
+	'Every side-page state reserves the same global preview toolbar row.'
+Assert-Text $layout 'LayoutPreviewControlToolbar\(\)' `
+	'The preview control row stays available with the sidebar open or collapsed.'
+Assert-Text $globalToolbar 'm_writebackButton\.MoveWindow\(writebackX, toolbarY[\s\S]*?controls\.push_back\(\{ &m_quickModeButton[\s\S]*?controls\.push_back\(\{ &m_dynamicPreviewButton[\s\S]*?control\.button->MoveWindow\(x, toolbarY' `
+	'The global toolbar owns the preview modes and writeback control.'
+Assert-Text $globalToolbar 'const int toolbarY\s*=\s*kStatusHeaderHeight\s*\+\s*3[\s\S]*?const int toolbarHeight\s*=\s*22' `
+	'Global preview controls fit inside the reserved toolbar row below the status band.'
+Assert-Text $globalToolbar 'm_writebackButton\.ShowWindow\(SW_SHOW\)' `
+	'Writeback remains available while either side page is hidden.'
 $modeControls = Get-FunctionBlock $page 'void CSBattlePreviewPage::CreateEditorControls()'
 Assert-Text $modeControls 'm_quickModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER[\s\S]*?m_copyPersonModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER[\s\S]*?m_unrestrictedTerrainModeButton\.Create[\s\S]*?BS_AUTOCHECKBOX \| BS_VCENTER' `
     'All three preview-mode checkboxes must use single-line text with vertical centering.'
 if ($modeControls -match 'm_(quickMode|copyPersonMode|unrestrictedTerrainMode)Button\.Create[\s\S]*?BS_MULTILINE') {
     throw 'Preview-mode checkbox captions must not wrap onto multiple lines.'
 }
-Assert-Text $collapsedToolbar 'const int toolbarY\s*=\s*kStatusHeaderHeight\s*\+\s*3[\s\S]*?const int toolbarHeight\s*=\s*22' `
-    'Collapsed controls must fit inside the reserved toolbar row below the status band.'
-Assert-Text $collapsedToolbar 'm_writebackButton\.ShowWindow\(SW_SHOW\)' `
-    'Writeback must remain visible while the role/brush sidebar is hidden.'
+Assert-Text $globalToolbar 'const int toolbarY\s*=\s*kStatusHeaderHeight\s*\+\s*3[\s\S]*?const int toolbarHeight\s*=\s*22' `
+	'Global controls fit inside the reserved toolbar row below the status band.'
+Assert-Text $globalToolbar 'm_writebackButton\.ShowWindow\(SW_SHOW\)' `
+	'Writeback remains visible with the role/brush page open or hidden.'
 Assert-Text $page 'CBattlePrimaryActionButton|BS_OWNERDRAW' `
     'Writeback must use a visually distinct primary-action button.'
 Assert-Text $page 'RGB\(194,\s*87,\s*33\)' `
@@ -259,13 +270,13 @@ Assert-Text $page 'RGB\(194,\s*87,\s*33\)' `
 $viewport = Get-FunctionBlock $page 'void CSBattlePreviewPage::UpdateViewport('
 Assert-Text $viewport 'availableHeight\s*=\s*footerTop\s*-\s*headerHeight' `
     'Vertical scrollbar visibility must use the reserved map viewport height.'
-Assert-Text $viewport 'sidePanelVisible\s*\?\s*kStatusHeaderHeight\s*:\s*kStatusHeaderHeight\s*\+\s*kCollapsedControlToolbarHeight' `
-	'Scrollbar calculations must account for either expanded sidebar page.'
+Assert-Text $viewport 'kStatusHeaderHeight\s*\+\s*kPreviewToolbarHeight' `
+	'Scrollbar calculations must always account for the global preview toolbar.'
 Assert-Text $viewport 'CRect clientBefore;[\s\S]*?ShowScrollBar\([\s\S]*?CRect clientAfter;[\s\S]*?if\s*\(clientBefore\.Width\(\)\s*!=\s*clientAfter\.Width\(\)\s*\|\|\s*clientBefore\.Height\(\)\s*!=\s*clientAfter\.Height\(\)\)[\s\S]*?LayoutEditorControls\(\)' `
     'Map pan must not relayout sidebar children unless scrollbar changes alter the client area.'
 $drawCanvas = Get-FunctionBlock $page 'void CSBattlePreviewPage::DrawCanvas('
-Assert-Text $drawCanvas 'if\s*\(!m_sidebarVisible\s*&&\s*!m_obstaclePageActive[\s\S]*?kCollapsedControlToolbarHeight' `
-	'The dedicated toolbar background must be shown only while both sidebar pages are hidden.'
+Assert-Text $drawCanvas 'if\s*\(m_canvasRect\.top\s*>\s*kStatusHeaderHeight\)[\s\S]*?kPreviewToolbarHeight' `
+	'The global toolbar background remains visible with either sidebar page open.'
 Assert-Text $drawCanvas 'FillRectangle\(&banner, m_canvasRect\.left, 0,[\s\S]*?m_canvasRect\.top' `
     'The top title strip must be drawn outside the clipped map viewport.'
 Assert-Text $drawCanvas 'm_canvasRect\.bottom[\s\S]*?visibleDiagnostic' `

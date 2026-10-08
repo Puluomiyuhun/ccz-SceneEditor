@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-07",
+  "review_start": "03:00 Asia/Shanghai",
+  "scope_boundary": "component audit using delivery reports and timestamps; no exact 03:00 Git snapshot",
+  "skill": "code-quality-workflow",
+  "A0": {
+    "route": "code-quality-workflow",
+    "document": "ST-A0",
+    "snapshot": "2026-08-18",
+    "goal": "review recent code, fix concrete bugs, deliver manual acceptance checklist",
+    "red_lines": "preserve pre-existing changes, user scripts, template data; no unrelated refactor, Git commit or shutdown",
+    "acceptance": "478 core passes, native/production path fixtures, source wiring checks, final Release build and manual checklist"
+  },
+  "production_files_changed": 4,
+  "findings_fixed": 5,
+  "checklist_items": 61,
+  "exe_sha256": "CC996D720D93A3F5A43EF07DCC30690E4970F52C6CE3586C0F7924D8B1BA421D",
+  "manual_ui_acceptance": "pending user"
+}

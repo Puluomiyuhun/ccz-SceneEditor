@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -96,6 +97,13 @@ enum class IntegerEvaluationState : std::uint8_t {
 struct SimulationEnvironment {
     std::map<std::int32_t, bool> boolean_variables;
     std::map<std::int32_t, std::int32_t> integer_variables;
+    bool boolean_values_invalidated{};
+    std::set<std::int32_t> known_boolean_assignments;
+    std::set<std::int32_t> unknown_integer_variables;
+    // S-only preview identity context; R replay does not use this state.
+    bool battle_unit_identity_available{};
+    std::set<std::int32_t> known_battle_unit_data_ids;
+    std::set<std::int32_t> unresolved_battle_status_data_ids;
 };
 
 // 0x05 stores two fixed-width variable lists in int_data rather than a
@@ -159,6 +167,8 @@ struct SectionInput {
 
 // Canonical replay state is keyed by logical node identity.
 struct ReplayOptions {
+    // Derived S preview display state; does not replace explicit user choices.
+    std::set<LogicalNodeKey> unresolved_status_conditions;
     std::map<LogicalNodeKey, PredicateState> predicate_states;
     std::map<LogicalNodeKey, LogicalNodeKey> selected_case_by_choice;
     SimulationEnvironment simulated_variables;

@@ -23,6 +23,8 @@ public:
         int resource_index{-1};
         int frame{-1};
         bool flip_x{false};
+        int archive{}; // 0 mov, 1 atk, 2 spc
+        int frame_pixels{48};
     };
 
     bool LoadForDocument(const std::wstring& document_path, int map_id,
@@ -60,7 +62,14 @@ public:
     // visual resolver applies Pro's painter-side 3 - raw-direction mapping;
     // parser and writeback code intentionally keep the raw value unchanged.
     bool ResolveUnitSprite(int data_id, int arm_kind, int direction,
-                           UnitSpriteRef* result) const noexcept;
+                           UnitSpriteRef* result, int action = -1) const noexcept;
+    std::uint64_t sprite_revision() const noexcept { return root_revision_; }
+    std::wstring UnitSpritePath(int archive) const {
+        if(archive==0)return unit_mov_path_;
+        const auto slash=unit_mov_path_.find_last_of(L"\\/");
+        if(slash==std::wstring::npos)return {};
+        return unit_mov_path_.substr(0,slash+1)+(archive==1?L"Unit_atk.e5":L"Unit_spc.e5");
+    }
     bool unit_sprite_ready() const noexcept { return unit_sprite_ready_; }
 
 private:

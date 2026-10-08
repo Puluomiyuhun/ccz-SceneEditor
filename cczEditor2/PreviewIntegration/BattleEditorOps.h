@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <ccz/preview/battle_preview.h>
 #include <ccz/preview/battle_movement_terrain.h>
@@ -149,6 +149,7 @@ struct BattleEditorState {
         movement_terrain;
     ccz::preview::LogicalNodeKey scope_root;
     BattleCharacterListState characters;
+    std::map<int,int> own_unit_bindings;
     std::vector<BattleMinionBrush> minion_brushes;
     std::optional<BattleMinionBrush> selected_minion_brush;
     std::uint64_t next_minion_brush_batch_id{1};
@@ -311,7 +312,8 @@ private:
     static int WrappedDirection(int value);
     static bool CompleteTerrain(const BattleEditorState& state);
     bool TerrainAllows(const ccz::preview::BattleCoord& coordinate,
-                       int data_id, std::wstring& diagnostic) const;
+                       int data_id, std::wstring& diagnostic, int movement_class_override = -1) const;
+    bool TerrainAllowsUnit(const ccz::preview::BattleCoord&, const ccz::preview::BattleUnit&, std::wstring&) const;
     int NextAvailableBrushDataId(const BattleMinionBrush& brush) const;
     bool RefreshSelectedBrushDataId(bool reset_direction = false);
     void ApplyPlacementProfileToDefaults();

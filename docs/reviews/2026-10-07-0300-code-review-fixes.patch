@@ -1,0 +1,188 @@
+--- before/cczEditor2/BattlePreviewPage.cpp
++++ after/cczEditor2/BattlePreviewPage.cpp
+@@ -2018,7 +2018,7 @@
+ 		UpdateSessionAssetKeys();
+ 		if (!m_unitSpritePath.empty() &&
+ 			(m_unitSpritePath != m_assets.unit_mov_path() ||
+-			 m_unitSpriteRevision != m_assets.unit_mov_revision())) {
++			 m_unitSpriteRevision != m_assets.sprite_revision())) {
+ 			ClearUnitSprites();
+ 		}
+ 		if (!assetDiagnostic.empty()) AppendDiagnostic(assetDiagnostic);
+@@ -3785,7 +3785,7 @@
+ 	EnsureDynamicObstacleSprites();
+ 	m_dynamicBaselineDiagnostic = m_dynamicDiagnostic;
+ 	if (m_assets.unit_mov_path() != m_unitSpritePath ||
+-		m_assets.unit_mov_revision() != m_unitSpriteRevision) {
++		m_assets.sprite_revision() != m_unitSpriteRevision) {
+ 		ClearUnitSprites();
+ 		m_unitSpritePath = m_assets.unit_mov_path();
+ 		m_unitSpriteRevision = m_assets.sprite_revision();
+@@ -4989,7 +4989,7 @@
+ 	UpdateSessionAssetKeys();
+ 	if (!m_unitSpritePath.empty() &&
+ 		(m_unitSpritePath != m_assets.unit_mov_path() ||
+-		 m_unitSpriteRevision != m_assets.unit_mov_revision())) {
++		 m_unitSpriteRevision != m_assets.sprite_revision())) {
+ 		ClearUnitSprites();
+ 	}
+ 	AppendDiagnostic(assetsDiagnostic);
+@@ -5757,7 +5757,7 @@
+ 		m_unitSpriteRevision != m_assets.sprite_revision()) {
+ 		ClearUnitSprites();
+ 		m_unitSpritePath = m_assets.unit_mov_path();
+-		m_unitSpriteRevision = m_assets.unit_mov_revision();
++		m_unitSpriteRevision = m_assets.sprite_revision();
+ 	}
+ 	const int key = spriteRef->resource_index * 64 + spriteRef->archive * 16 + spriteRef->frame;
+ 	const auto found = m_unitSprites.find(key);
+@@ -5788,7 +5788,7 @@
+ 		delete sheet;
+ 		m_unitSprites[key] = nullptr;
+ 		if (!diagnostic.IsEmpty())
+-			AppendDiagnostic(std::wstring(L"Unit_mov 读取失败：") +
++			AppendDiagnostic(spritePath + L" 读取失败：" +
+ 				diagnostic.GetString());
+ 		return nullptr;
+ 	}
+@@ -5798,7 +5798,7 @@
+ 		spriteRef->frame >= frameCount) {
+ 		delete sheet;
+ 		m_unitSprites[key] = nullptr;
+-		AppendDiagnostic(L"Unit_mov 帧尺寸无效");
++		AppendDiagnostic(spritePath + L" 帧尺寸无效");
+ 		return nullptr;
+ 	}
+ 	auto* frame = new Gdiplus::Bitmap(
+@@ -6151,15 +6151,19 @@
+ 		if (unit_has_battle_role(unit, ccz::preview::BattleFieldRole::Reinforcement))
+ 			lines.push_back(std::wstring(L"援军：") +
+ 				(unit.reinforcement ? L"是" : L"否"));
+-		if (unit_has_battle_role(unit, ccz::preview::BattleFieldRole::AiPolicy))
++		const auto policyDetails=m_dynamicProjection.unit_details.find(unit.editor_cache_id);
++		const bool projectedPolicy=dynamic && policyDetails!=m_dynamicProjection.unit_details.end() && policyDetails->second.policy>=0;
++		if (projectedPolicy || unit_has_battle_role(unit, ccz::preview::BattleFieldRole::AiPolicy))
+ 			lines.push_back(L"行动方针：" +
+ 				std::wstring(battle_ai_policy_name(unit.ai_policy)));
+ 		if ((unit.ai_policy == 3 || unit.ai_policy == 5) &&
+-			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetDataId))
+-			lines.push_back(L"目标 Data：" + std::to_wstring(unit.target));
++			(projectedPolicy || unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetDataId)))
++			lines.push_back(unit.target>=1028 && unit.target<=1277
++				? L"目标战场编号：" + std::to_wstring(unit.target-1028)
++				: L"目标 Data：" + std::to_wstring(unit.target));
+ 		if ((unit.ai_policy == 4 || unit.ai_policy == 6) &&
+-			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetX) &&
+-			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetY))
++			(projectedPolicy || (unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetX) &&
++			unit_has_battle_role(unit, ccz::preview::BattleFieldRole::TargetY))))
+ 			lines.push_back(L"目标坐标：(" + std::to_wstring(unit.target_x) + L", " +
+ 				std::to_wstring(unit.target_y) + L")");
+ 	}
+@@ -7896,6 +7900,8 @@
+ 	} else if (group_context && command == kModifyGroupParametersCommand) {
+ 		OpenBatchUnitParameters();
+ 	} else if (group_context && command == kAdjustGroupCommand) {
++		m_obstacleSelection.enabled = false;
++		m_obstacleSelection.CancelGesture();
+ 		ShowOperationResult(m_editorOps->BeginPositionAdjustment(cacheId));
+ 	} else if (group_context && command == kDeleteGroupCommand) {
+ 		ShowOperationResult(m_editorOps->DeleteSelectionGroup());
+@@ -7903,6 +7909,8 @@
+ 	} else if (!group_context && command == kModifyUnitParametersCommand) {
+ 		OpenSingleUnitParameters(cacheId);
+ 	} else if (!group_context && command == kAdjustPositionCommand) {
++		m_obstacleSelection.enabled = false;
++		m_obstacleSelection.CancelGesture();
+ 		ShowOperationResult(m_editorOps->BeginPositionAdjustment(cacheId));
+ 	} else if (!group_context && command == kDeleteUnitCommand) {
+ 		ShowOperationResult(m_editorOps->DeleteAt(*coordinate));
+@@ -7919,7 +7927,6 @@
+ void CSBattlePreviewPage::OnKeyDown(UINT character, UINT repeat_count,
+ 	UINT flags)
+ {
+-	if(character==VK_ESCAPE && m_obstacleSelection.enabled) {m_obstacleSelection.CancelGesture();if(GetCapture()==this)ReleaseCapture();Invalidate(FALSE);return;}
+ 	if (character == VK_ESCAPE &&
+ 		m_battleMapToolMode != BattleMapToolMode::None) {
+ 		CancelBattleMapTool(true);
+@@ -7930,6 +7937,7 @@
+ 		ShowOperationResult(m_editorOps->CancelPositionAdjustment());
+ 		return;
+ 	}
++	if(character==VK_ESCAPE && m_obstacleSelection.enabled) {m_obstacleSelection.CancelGesture();if(GetCapture()==this)ReleaseCapture();Invalidate(FALSE);return;}
+ 	CWnd::OnKeyDown(character, repeat_count, flags);
+ }
+ 
+@@ -7981,6 +7989,8 @@
+ 	if (selected == LB_ERR) return;
+ 	const int dataId = static_cast<int>(m_characterList.GetItemData(selected));
+ 	if (m_battleMapToolMode != BattleMapToolMode::None) return;
++	m_obstacleSelection.enabled = false;
++	m_obstacleSelection.CancelGesture();
+ 	const auto result = m_brushTabActive
+ 		? m_editorOps->SelectMinionBrush(dataId)
+ 		: m_editorOps->SelectCharacter(dataId);
+@@ -8208,6 +8218,11 @@
+ 
+ void CSBattlePreviewPage::CancelConflictingBattleEditorMode()
+ {
++	// Selection is retained, but its pointer gesture must not consume the new tool.
++	const bool obstacleSelectionWasEnabled = m_obstacleSelection.enabled;
++	m_obstacleSelection.enabled = false;
++	m_obstacleSelection.CancelGesture();
++	if (obstacleSelectionWasEnabled) RefreshEditorControls();
+ 	if (m_editorOps == nullptr) return;
+ 	if (ActiveSession().editor_state.mode ==
+ 		ccz::editor_preview::BattleEditorMode::AdjustPosition) {
+--- before/cczEditor2/TemplateLibrary/TemplateNativeEditing.inl
++++ after/cczEditor2/TemplateLibrary/TemplateNativeEditing.inl
+@@ -25,6 +25,11 @@
+   if (!ordToKey.emplace(data->ord, node.key).second)
+     throw std::runtime_error("ambiguous ordinals");
+   node.params = data->int_data;
++  // Preview writeback stores compact semantic vectors; templates use the
++  // editor's full storage layout so they can also be saved/reused as EEX.
++  const std::size_t nativeFields = node.id == 0x46 || node.id == 0x47 ? 1000u
++      : node.id == 0x05 ? 60u : 20u;
++  if (node.params.size() < nativeFields) node.params.resize(nativeFields, 0);
+   node.has_text = data->long_char_data != nullptr;
+   if (node.has_text) {
+     auto length =
+--- before/cczEditor2/PreviewIntegration/BattleDynamicMapReplay.cpp
++++ after/cczEditor2/PreviewIntegration/BattleDynamicMapReplay.cpp
+@@ -505,6 +505,9 @@
+                 }
+                 if(event.kind==BattleDynamicMapEventKind::PolicyChange) {
+                     details.policy=f[7];details.policy_target=f[8];details.policy_coordinate={f[9],f[10]};
++                    auto& projectedUnit=result.battle.units[i];
++                    projectedUnit.ai_policy=f[7];projectedUnit.target=f[8];
++                    projectedUnit.target_x=f[9];projectedUnit.target_y=f[10];
+                 } else {
+                     if(f[8]>=0&&f[9]>=0) details.attribute_changes[f[8]]=f[9];
+                     if(f[10]>=0) {
+@@ -563,12 +566,12 @@
+             if(details!=result.unit_details.end())details->second.retreat_kind=-1;
+         }
+         result.labels.erase(std::remove_if(result.labels.begin(),
+-            result.labels.end(), [&unit](const BattleDynamicMapLabel& label) {
+-                return label.data_id == unit.data_id;
++            result.labels.end(), [&matches](const BattleDynamicMapLabel& label) {
++                return label.unit_index == matches.front();
+             }), result.labels.end());
+         result.labels.push_back({
+             event.kind == BattleDynamicMapEventKind::Revive,
+-            unit.data_id, event.coordinate});
++            unit.data_id, event.coordinate, matches.front()});
+     }
+     return result;
+ }
+--- before/cczEditor2/PreviewIntegration/BattleDynamicMapReplay.h
++++ after/cczEditor2/PreviewIntegration/BattleDynamicMapReplay.h
+@@ -44,6 +44,7 @@
+     bool revived{};
+     int data_id{-1};
+     ccz::preview::BattleCoord coordinate;
++    std::size_t unit_index{}; // Stable in the fixed Scene1 record order.
+ };
+ 
+ struct BattleDynamicMapEvent {

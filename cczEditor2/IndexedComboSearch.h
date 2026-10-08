@@ -23,7 +23,18 @@ struct IndexedOption {
     // Reserved item numbers such as 255/511 remain selectable from the
     // native list, but must not be accepted from a typed decimal query.
     bool numeric_resolvable = true;
+    bool hexadecimal = false;
 };
+
+inline bool ParseHexCode(const std::wstring& text,int& value) {
+    std::size_t start=text.size()>2&&text[0]==L'0'&&(text[1]==L'x'||text[1]==L'X')?2:0;
+    if(start==text.size()||text.empty())return false;
+    unsigned int parsed=0;
+    for(std::size_t i=start;i<text.size();++i){auto c=std::towlower(text[i]);int d=c>=L'0'&&c<=L'9'?c-L'0':c>=L'a'&&c<=L'f'?c-L'a'+10:-1;
+        if(d<0||parsed>(static_cast<unsigned int>((std::numeric_limits<int>::max)())-d)/16)return false;parsed=parsed*16+d;}
+    value=static_cast<int>(parsed);return true;
+}
+inline std::wstring HexCode(int value){const wchar_t* digits=L"0123456789abcdef";std::wstring s;do{s.insert(s.begin(),digits[value%16]);value/=16;}while(value);return s;}
 
 inline bool ParseDecimalCode(const std::wstring& text, int& value)
 {
@@ -88,6 +99,7 @@ inline bool MatchesIndexedOption(
     // Some entries deliberately display a non-numeric label (for example
     // “无”) while still carrying a stable numeric code.  Keep that code in
     // the same live-search index as the visible label.
+    if(option.hexadecimal){int code=-1;if(ParseHexCode(query,code)&&code==option.numeric_code)return true;return ContainsInsensitive(HexCode(option.numeric_code),query);}
     return ContainsInsensitive(std::to_wstring(option.numeric_code), query);
 }
 
@@ -170,6 +182,11 @@ inline bool ResolveDecimalCode(
             return true;
         }
     }
+    return false;
+}
+
+inline bool ResolveIndexedCode(const std::vector<IndexedOption>& options,const std::wstring& text,int& value) {
+    for(auto& option:options){int code=-1;if((option.hexadecimal?ParseHexCode(text,code):ParseDecimalCode(text,code))&&option.numeric_resolvable&&option.numeric_code==code){value=option.selection_value;return true;}}
     return false;
 }
 

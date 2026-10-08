@@ -1,4 +1,4 @@
-#include "ConditionTreePane.h"
+﻿#include "ConditionTreePane.h"
 
 #include <algorithm>
 #include <array>
@@ -62,7 +62,8 @@ bool action_enabled(const ccz::preview::ConditionTreeActionState& state,
 
 bool replay_options_equal(const ccz::preview::ReplayOptions& left,
 	const ccz::preview::ReplayOptions& right) {
-	return left.predicate_states == right.predicate_states &&
+	return left.unresolved_status_conditions == right.unresolved_status_conditions &&
+		left.predicate_states == right.predicate_states &&
 		left.selected_case_by_choice == right.selected_case_by_choice &&
 		left.simulated_variables.boolean_variables ==
 			right.simulated_variables.boolean_variables &&

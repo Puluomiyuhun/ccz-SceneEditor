@@ -56,6 +56,18 @@ $view = Get-Content -LiteralPath $viewSourcePath -Raw -Encoding UTF8
 $previewHeader = Get-Content -LiteralPath $previewHeaderPath -Raw -Encoding UTF8
 $preview = Get-Content -LiteralPath $previewSourcePath -Raw -Encoding UTF8
 $hostSource = Get-Content -LiteralPath $hostSourcePath -Raw -Encoding UTF8
+$appSource = Get-Content -LiteralPath (Join-Path $SourceRoot 'cczEditor2.cpp') -Raw -Encoding UTF8
+$appOpen = Get-FunctionBlock $appSource 'CDocument* CcczEditor2App::OpenDocumentFile(LPCTSTR path, BOOL addToMru)'
+Assert-Contains $appOpen 'BeginDocumentOpen\(\)[\s\S]*~PreviewOpenScope\(\)[\s\S]*EndDocumentOpen\(\)[\s\S]*CWinAppEx::OpenDocumentFile\(path, addToMru\)' `
+    'all MFC document opens must use an exception-safe preview publication scope'
+foreach ($signature in @('void CScenePreviewWnd::ShowPage(', 'bool CScenePreviewWnd::RequestPreviewRefresh(', 'bool CScenePreviewWnd::ActivateScriptPreview(', 'void CScenePreviewWnd::InitCharList(')) {
+    $block = Get-FunctionBlock $hostSource $signature
+    Assert-Contains $block '\{\s*if \(m_documentOpenDepth != 0\) return' `
+        'intermediate open callbacks must not publish or rebind a preview'
+}
+$openComplete = Get-FunctionBlock $hostSource 'void CScenePreviewWnd::EndDocumentOpen()'
+Assert-Contains $openComplete '--m_documentOpenDepth != 0[\s\S]*MDIGetActive\(\)[\s\S]*GetActiveView\(\)[\s\S]*m_previewTreeInitialized[\s\S]*RefreshScenePreview\(\)' `
+    'the outermost completed open must refresh only the current initialized MDI owner'
 $stateMachine = Get-Content -LiteralPath $stateMachineHeaderPath -Raw -Encoding UTF8
 $decision = Get-Content -LiteralPath $decisionHeaderPath -Raw -Encoding UTF8
 $documentSource = Get-Content -LiteralPath $documentSourcePath -Raw -Encoding UTF8
@@ -75,9 +87,20 @@ $refreshBlock = Get-FunctionBlock $view 'bool CcczEditor2View::RefreshScenePrevi
 $createRootBlock = Get-FunctionBlock $view 'void CcczEditor2View::CreateRoot('
 $viewDestroyBlock = Get-FunctionBlock $view 'void CcczEditor2View::OnDestroy('
 $viewActivateBlock = Get-FunctionBlock $view 'void CcczEditor2View::OnActivateView('
+$initialUpdateBlock = Get-FunctionBlock $view 'void CcczEditor2View::OnInitialUpdate()'
+Assert-Contains $viewHeader 'm_previewTreeInitialized\s*=\s*false' `
+    'view preview readiness must start false before initial MFC activation'
+Assert-Contains $viewActivateBlock 'activate && m_previewTreeInitialized[\s\S]*ActivateScriptPreview' `
+    'initial activation must not display a preview before the script tree is complete'
+Assert-Contains $initialUpdateBlock 'm_previewTreeInitialized\s*=\s*false[\s\S]*CTreeView::OnInitialUpdate\(\)[\s\S]*CreateFileTree\(\)[\s\S]*CreateNewTree\(\)[\s\S]*m_previewTreeInitialized\s*=\s*true[\s\S]*RefreshScenePreview\(\)' `
+    'first preview refresh must run only after tree construction finishes'
+Assert-Contains $refreshBlock 'if \(!m_previewTreeInitialized\) return true;[\s\S]*RequestPreviewRefresh' `
+    'selection notifications during tree initialization must not bind partial previews'
 $treeDestroyedBlock = Get-FunctionBlock $hostSource 'void CScenePreviewWnd::EditorTreeDestroyed('
 $treeRebuildBlock = Get-FunctionBlock $hostSource 'void CScenePreviewWnd::PrepareForTreeRebuild('
 $scriptActivationBlock = Get-FunctionBlock $hostSource 'bool CScenePreviewWnd::ActivateScriptPreview('
+$activationButtonBlock = Get-FunctionBlock $preview 'void CRScenePreviewPage::OnActivationButtonClicked()'
+$conditionActionRefreshBlock = Get-FunctionBlock $preview 'void CRScenePreviewPage::RequestConditionActionRefresh()'
 $invalidateBlock = Get-FunctionBlock $hostSource 'void CScenePreviewWnd::InvalidatePendingPreviewRefresh('
 $hostRefreshBlock = Get-FunctionBlock $hostSource 'bool CScenePreviewWnd::RequestPreviewRefresh('
 $sBattleRefreshStart = $hostRefreshBlock.IndexOf('if (page == Page::SBattle)')
@@ -109,6 +132,14 @@ Assert-NotContains $viewActivateBlock 'RefreshScenePreview\s*\(' `
     'MDI activation still forces the full preview refresh path'
 Assert-Contains $scriptActivationBlock 'm_rPage\.ActivateDocument[\s\S]*!reusedUnchangedSession[\s\S]*m_rPage\.RequestPreviewRefresh' `
     'R activation checks the document session before requesting a full refresh'
+Assert-Contains $activationButtonBlock 'ActivateTarget[\s\S]*PostMessage\s*\(\s*kConditionActionMessage' `
+    'R activation defers its full preview refresh to a later window-message turn'
+Assert-Contains $activationButtonBlock 'if\s*\(\s*PostMessage\s*\(\s*kConditionActionMessage[\s\S]*==\s*FALSE\s*\)\s*\{\s*RequestConditionActionRefresh\s*\(\s*\)' `
+    'R activation falls back to an immediate refresh only when message posting fails'
+Assert-Contains $conditionActionRefreshBlock 'GetActiveEditorView\(\)[\s\S]*GetTreeCtrl\(\)[\s\S]*GetSelectedItem\(\)[\s\S]*RequestPreviewRefresh\([^;]*\*view->GetDocument\(\)' `
+    'R condition actions refresh from the active document tree and current selection'
+Assert-NotContains $conditionActionRefreshBlock 'RequestPreviewRefreshForCurrentDocument\(\*m_pTreeCtrl' `
+    'R condition actions do not silently depend on a cached tree pointer'
 Assert-NotContains $sBattleRefreshBlock 'm_rPage\.InvalidatePendingPreviewRefresh\s*\(' `
     'S battle activation clears R preview state instead of preserving independent R state'
 Assert-Contains $sBattleRefreshBlock 'm_rPage\.ParkActiveDocument\s*\(' `

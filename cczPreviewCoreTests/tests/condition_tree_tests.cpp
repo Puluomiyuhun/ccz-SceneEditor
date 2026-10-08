@@ -32,6 +32,7 @@ InstructionCatalog fixture_catalog() {
     InstructionCatalog catalog;
     catalog.valid = true;
     catalog.names.emplace(static_cast<std::uint16_t>(0x00), L"事件结束");
+    catalog.names.emplace(static_cast<std::uint16_t>(0x01), L"子事件设定");
     catalog.names.emplace(static_cast<std::uint16_t>(0x02), L"内部信息");
     catalog.names.emplace(static_cast<std::uint16_t>(0x03), L"else");
     catalog.names.emplace(static_cast<std::uint16_t>(0x05), L"变量测试");
@@ -251,6 +252,48 @@ CCZ_TEST(condition_tree_activation_targets_waiting_integer_predicate) {
                    99);
 }
 
+CCZ_TEST(condition_tree_activation_targets_s_0x05_true_branch_by_runtime_node) {
+    constexpr std::uintptr_t kBoundaryHandle = 100;
+    constexpr std::uintptr_t kPredicateHandle = 101;
+    constexpr std::uintptr_t kTargetHandle = 102;
+    const LogicalNodeKey predicate_key = L"section|predicate:var700";
+    const LogicalNodeKey target_key =
+        L"section|predicate:var700|true|deployment:47";
+
+    RawReplayNode boundary = raw_node(
+        L"section|boundary", 0x00, L"0:事件结束");
+    boundary.runtime_handle = kBoundaryHandle;
+    RawReplayNode target = raw_node(
+        target_key.c_str(), 0x47, L"47:敌军出场设定");
+    target.runtime_handle = kTargetHandle;
+    std::vector<std::int32_t> boolean_fields(50, -1);
+    boolean_fields[0] = 700;
+    RawReplayNode predicate = raw_node(
+        predicate_key.c_str(), 0x05, L"5:变量测试 Var700 :无",
+        {std::move(target)}, std::move(boolean_fields));
+    predicate.runtime_handle = kPredicateHandle;
+
+    SectionInput input;
+    input.section_key = L"section";
+    input.nodes = {std::move(boundary), std::move(predicate)};
+    ReplayOptions options;
+    options.simulated_variables.boolean_variables[700] = false;
+    auto catalog = fixture_catalog();
+    catalog.names.emplace(static_cast<std::uint16_t>(0x47), L"敌军出场设定");
+    const SectionExecutionModel model =
+        build_section_execution_model(input, catalog, options);
+
+    CCZ_REQUIRE_EQ(model.body.size(), std::size_t(2));
+    CCZ_REQUIRE_EQ(model.body[1].runtime_handle, kPredicateHandle);
+    CCZ_REQUIRE_EQ(model.body[1].true_children.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(model.body[1].true_children[0].runtime_handle,
+                   kTargetHandle);
+    CCZ_REQUIRE(condition_tree_model_can_activate_target(
+        model, target_key, options));
+    CCZ_REQUIRE(activate_condition_tree_target(options, model, target_key));
+    CCZ_REQUIRE(options.simulated_variables.boolean_variables.at(700));
+}
+
 CCZ_TEST(condition_tree_activation_applies_nested_choice_and_boolean_steps) {
     const LogicalNodeKey choice_key = L"section|choice:1";
     const LogicalNodeKey case_key = L"section|choice:1|case:1";
@@ -285,6 +328,42 @@ CCZ_TEST(condition_tree_activation_applies_nested_choice_and_boolean_steps) {
     CCZ_REQUIRE(activate_condition_tree_target(options, model, target));
     CCZ_REQUIRE_EQ(options.selected_case_by_choice.at(choice_key), case_key);
     CCZ_REQUIRE(options.simulated_variables.boolean_variables.at(600));
+}
+
+CCZ_TEST(condition_tree_activation_binds_else_across_editor_markers) {
+    std::vector<std::int32_t> boolean_data(50, -1);
+    boolean_data[25] = 1200;
+    SectionInput input;
+    input.section_key = L"fixture|section:marker-else";
+    input.nodes = {
+        raw_node(L"section-boundary", 0x00, L"0:事件结束"),
+        raw_node(L"marker-before-condition", 0x01, L"1:子事件设定",
+            {raw_node(L"predicate", 0x05, L"5:变量测试",
+                {raw_node(L"true-dialogue", 0x14, L"14:真分支对白"),
+                 raw_node(L"true-end", 0x00, L"0:事件结束")},
+                boolean_data)}),
+        raw_node(L"marker-before-else", 0x01, L"1:子事件设定",
+            {raw_node(L"else", 0x03, L"3:else",
+                {raw_node(L"false-dialogue", 0x14, L"14:假分支对白"),
+                 raw_node(L"false-end", 0x00, L"0:事件结束")})}),
+    };
+
+    const InstructionCatalog catalog = fixture_catalog();
+    ReplayOptions options;
+    options.simulated_variables.boolean_variables[1200] = false;
+    SectionExecutionModel model =
+        build_section_execution_model(input, catalog, options);
+    const LogicalNodeKey target = L"false-dialogue";
+
+    CCZ_REQUIRE(!execution_nodes_reach_target(
+        model.body, target, options));
+    CCZ_REQUIRE(condition_tree_model_can_activate_target(
+        model, target, options));
+    CCZ_REQUIRE(activate_condition_tree_target(options, model, target));
+    CCZ_REQUIRE(options.simulated_variables.boolean_variables.at(1200));
+
+    model = build_section_execution_model(input, catalog, options);
+    CCZ_REQUIRE(execution_nodes_reach_target(model.body, target, options));
 }
 
 CCZ_TEST(condition_tree_activation_rejects_diagnostic_or_blocked_target) {

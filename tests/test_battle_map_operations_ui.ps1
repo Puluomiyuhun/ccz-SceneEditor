@@ -40,6 +40,7 @@ $obstaclePage = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnObstaclePag
 $obstacleType = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnObstacleTypeClicked('
 $leftClick = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnLButtonDown('
 $rightClick = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnRButtonDown('
+$keyDown = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnKeyDown('
 $captureRoleOperationUnits = Get-FunctionBlock $page 'bool CSBattlePreviewPage::CaptureRoleOperationUnits('
 $mouseWheel = Get-FunctionBlock $page 'BOOL CSBattlePreviewPage::OnMouseWheel('
 $drawCanvas = Get-FunctionBlock $page 'void CSBattlePreviewPage::DrawCanvas('
@@ -74,6 +75,10 @@ if ($hitTest -match 'unit\.hidden') {
 }
 Assert-Text $rightClick 'command\s*==\s*kMoveToCommand[\s\S]*CaptureRoleOperationUnits\(cacheId,\s*group_context[\s\S]*command\s*==\s*kReviveToCommand[\s\S]*CaptureRoleOperationUnits\(cacheId,\s*group_context' 'Single and multi-select move/revive both capture the map role or selected group.'
 Assert-Text $leftClick 'BuildBattleRoleOperationBatch\([\s\S]*m_roleOperationAnchorIndex[\s\S]*ApplyBattleMapOperations\(instructions,\s*diagnostic\)' 'Move and revive translate the full group from the clicked anchor and write one complete instruction batch.'
+Assert-Text $leftClick 'ApplyBattleMapOperations\(instructions,\s*diagnostic\)\)\s*CancelBattleMapTool\(true\)' 'Confirming a role operation explicitly preserves staged obstacle drafts.'
+Assert-Text $rightClick 'm_battleMapToolMode\s*!=\s*BattleMapToolMode::ObstaclePlace\)\s*\{\s*CancelBattleMapTool\(true\)' 'Right-click cancellation of a role operation explicitly preserves staged obstacle drafts.'
+Assert-Text $keyDown 'character\s*==\s*VK_ESCAPE[\s\S]*?m_battleMapToolMode\s*!=\s*BattleMapToolMode::None\)\s*\{\s*CancelBattleMapTool\(true\)' 'Escape cancellation of a role operation explicitly preserves staged obstacle drafts.'
+Assert-Text (Get-FunctionBlock $page 'void CSBattlePreviewPage::OnWriteback(') 'm_obstacleDrafts\.Clear\(\);\s*CancelBattleMapTool\(false\)' 'Successful obstacle writeback explicitly discards only the committed drafts.'
 Assert-Text $mouseWheel 'choosingRoleOperationTarget[\s\S]*MovePickTarget[\s\S]*RevivePickTarget[\s\S]*m_roleOperationDirection\s*\+\s*notches[\s\S]*m_roleOperationDirectionAdjusted\s*=\s*true[\s\S]*Invalidate\(FALSE\)' 'Move and revive direction changes are staged in the preview and do not mutate units before target confirmation.'
 Assert-Text $drawCanvas 'BuildBattleRoleOperationBatch[\s\S]*for\s*\(std::size_t index\s*=\s*0;[\s\S]*targets\[index\][\s\S]*GetUnitSprite' 'Move and revive previews display the translated positions of every group member.'
 Assert-Text $leftClick 'const auto directionOverride\s*=\s*m_roleOperationDirectionAdjusted\s*\?\s*std::optional<int>\(m_roleOperationDirection\)' 'Target confirmation forwards staged direction for both move and revive.'
@@ -115,15 +120,19 @@ Assert-Text $refreshControls 'const bool obstacleOnlyWriteback\s*=\s*!m_obstacle
     'Obstacle-only writeback has an explicit path independent of deployment draft resolution.'
 Assert-Text $refreshControls 'active_condition_scope\.writeback_scope_resolved\s*\|\|\s*obstacleOnlyWriteback' `
     'Unresolved unit deployment branches do not disable explicit obstacle insertion after selection.'
-Assert-Text $leftClick 'm_obstacleDrafts\.Add\([\s\S]*m_mapOperationStatus\.SetWindowText\(status\)[\s\S]*m_clearObstacleDraftsButton\.ShowWindow\(\s*m_obstacleDrafts\.empty\(\)\s*\?\s*SW_HIDE\s*:\s*SW_SHOW\s*\)' `
-    'Adding the first obstacle immediately updates its count and clear control.'
-Assert-Text $rightClick 'const bool hasObstacleAt = coordinate && std::any_of\(\s*m_obstacleDrafts\.items\(\)\.begin\(\),\s*m_obstacleDrafts\.items\(\)\.end\(\)' `
-    'Right-click dispatch identifies a staged obstacle at the target coordinate.'
+Assert-Text $leftClick 'ObstaclePlace[\s\S]*m_obstacleStampActive = true[\s\S]*SetCapture[\s\S]*StampObstacleAt' `
+    'Obstacle brush starts mouse capture and uses the shared stamp path.'
+Assert-Text $page 'StampObstacleAt[\s\S]*m_obstacleDrafts\.Add[\s\S]*UpdateObstacleDraftControls' `
+    'Successful stamps update the draft controls.'
+Assert-Text $page 'void CSBattlePreviewPage::UpdateObstacleDraftControls[\s\S]*m_mapOperationStatus.SetWindowText[\s\S]*m_clearObstacleDraftsButton.ShowWindow' `
+    'Shared draft control refresh maintains status and clear visibility.'
+Assert-Text $rightClick 'hasObstacleAt = hasDraftAt \|\| hasNativeAt' `
+    'Right-click identifies both staged and projected native obstacles.'
 Assert-Text $rightClick 'hasObstacleAt && !contextUnit[\s\S]*kRemoveObstacleCommand[\s\S]*TrackPopupMenu[\s\S]*command == kRemoveObstacleCommand[\s\S]*m_obstacleDrafts\.RemoveAt' `
     'A lone obstacle opens its own context menu and removes only after the menu command is chosen.'
 Assert-Text $rightClick 'splitContext = contextUnit\.has_value\(\) && hasObstacleAt[\s\S]*roleTarget = &roleMenu[\s\S]*操作角色[\s\S]*操作障碍物' `
     'A character and obstacle on the same tile first show the requested operation chooser.'
-Assert-Text $rightClick 'if \(splitContext && !group_context[\s\S]*SelectAt\(\*coordinate\)' `
+Assert-Text $rightClick 'if \(!m_dynamicPreviewEnabled && splitContext && !group_context[\s\S]*SelectAt\(\*coordinate\)' `
     'Overlapping targets do not select or mutate the character until the user chooses a role action.'
 if ($rightClick -match 'if\s*\(m_obstaclePageActive\)') {
     throw 'Right-click menu routing must follow the hit target, not the currently open sidebar page.'
@@ -140,3 +149,20 @@ Assert-Text $brushTab 'm_obstaclePageActive\s*=\s*false[\s\S]*LayoutEditorContro
     'Returning to the brush tab exits the obstacle page and relayouts immediately.'
 
 Write-Output 'BATTLE_MAP_OPERATIONS_UI_PASS'
+
+$mouseMove = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnMouseMove('
+$mouseUp = Get-FunctionBlock $page 'void CSBattlePreviewPage::OnLButtonUp('
+$edit = Get-FunctionBlock $page 'bool CSBattlePreviewPage::EditObstacle('
+Assert-Text $mouseMove 'm_obstacleStampActive[\s\S]*BattleSelectionPathCells[\s\S]*StampObstacleAt' 'Held obstacle brush fills the movement path.'
+Assert-Text $mouseUp 'm_obstacleStampActive = false[\s\S]*ReleaseCapture' 'Releasing the brush stops stamping and releases capture.'
+Assert-Text $rightClick 'kAdjustObstacleCommand[\s\S]*kModifyObstacleCommand[\s\S]*ObstacleAdjust[\s\S]*ShowObstacleParameters' 'Obstacle right-click has position and parameter actions.'
+Assert-Text $edit 'source.int_data!=target.source.source_fields[\s\S]*UpdateInstruction[\s\S]*native_writeback_transaction.Apply[\s\S]*RefreshDynamicPreview' 'Native obstacle edits validate the preimage and share transaction/refresh logic.'
+Assert-Text $session 'BattleObstacleDefaults obstacle_defaults' 'Obstacle defaults belong to the document session.'
+
+$controlIds = @{}
+foreach ($match in [regex]::Matches($page, 'constexpr UINT (\w+Id) = (0x[0-9A-Fa-f]+);')) {
+    $value = [Convert]::ToInt32($match.Groups[2].Value.Substring(2),16)
+    if ($controlIds.ContainsKey($value)) { throw "Duplicate preview control IDs: $($controlIds[$value]) and $($match.Groups[1].Value)" }
+    $controlIds[$value] = $match.Groups[1].Value
+}
+Write-Output 'BATTLE_PREVIEW_CONTROL_IDS_UNIQUE_PASS'

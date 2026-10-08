@@ -26,6 +26,8 @@ public:
 public:
 	virtual BOOL InitInstance();
 	virtual int ExitInstance();
+	CDocument* OpenDocumentFile(LPCTSTR path) override;
+	CDocument* OpenDocumentFile(LPCTSTR path, BOOL add_to_mru) override;
 
 	void deleteCopy(ItemData *data);
 

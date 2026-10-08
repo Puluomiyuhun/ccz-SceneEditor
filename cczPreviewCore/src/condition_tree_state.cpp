@@ -60,9 +60,12 @@ PredicateState effective_predicate_state_for_ui(
     const ExecutionNode& node, const ReplayOptions& options) {
     const auto override_state =
         options.predicate_states.find(node.logical_key);
-    return override_state == options.predicate_states.end()
-               ? node.predicate_state
-               : override_state->second;
+    const auto state = override_state == options.predicate_states.end()
+        ? node.predicate_state : override_state->second;
+    if (options.unresolved_status_conditions.count(node.logical_key) &&
+        state != PredicateState::ExplicitTrue && state != PredicateState::ExplicitFalse)
+        return PredicateState::Unsupported;
+    return state;
 }
 
 bool evaluate_predicate_for_ui(const ExecutionNode& node,
@@ -113,7 +116,8 @@ std::wstring state_text(const ExecutionNode& node,
                 const PredicateState state =
                     effective_predicate_state_for_ui(node, options);
                 if (state == PredicateState::Unsupported) {
-                    return L"不可模拟";
+                    return options.unresolved_status_conditions.count(node.logical_key)
+                        ? L"状态未知，请指定结果" : L"不可模拟";
                 }
                 if (state == PredicateState::ExplicitTrue) {
                     return L"已设真";
@@ -310,8 +314,8 @@ ConditionTreeActionState condition_tree_action_state(
         }
     } else if (selected_node->category == ExecutionCategory::Predicate &&
                selected_node->predicate_kind != PredicateKind::Unsupported &&
-               effective_predicate_state_for_ui(*selected_node, options) !=
-                   PredicateState::Unsupported) {
+               (effective_predicate_state_for_ui(*selected_node, options) != PredicateState::Unsupported ||
+                options.unresolved_status_conditions.count(selected_node->logical_key))) {
         // A missing branch is still a meaningful outcome: selecting that
         // outcome means the branch is skipped and replay continues with the
         // following sibling.  In particular, a predicate with only a true
@@ -339,12 +343,7 @@ bool condition_tree_predicate_branch_reachable(const ExecutionNode& node,
         return false;
     }
 
-    const auto override_state =
-        options.predicate_states.find(node.logical_key);
-    const PredicateState state =
-        override_state == options.predicate_states.end()
-            ? node.predicate_state
-            : override_state->second;
+    const PredicateState state = effective_predicate_state_for_ui(node, options);
     if (state == PredicateState::Unsupported) {
         return false;
     }

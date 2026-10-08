@@ -5,6 +5,7 @@
 #pragma once
 #include "CMyComboBox.h"
 #include "TextWrapEditSession.h"
+#include "TemplateLibrary/TemplateModel.h"
 #include <vector>
 
 class CcczEditor2View : public CTreeView
@@ -20,6 +21,19 @@ public:
 // 操作
 public:
 	HTREEITEM cur_item;
+	bool CaptureTemplateSelection(ccz::templates::Entry& entry, CString& error);
+	bool InsertTemplate(const ccz::templates::Entry& entry, CString& error);
+	bool CanUndoTemplateInsertion() const;
+	bool UndoTemplateInsertion(CString& error);
+	afx_msg void OnSaveTemplate();
+	struct TemplateInsertionUndo {
+		std::vector<HTREEITEM> roots;
+		HTREEITEM anchor = nullptr;
+		std::uint64_t epoch = 0, generation = 0;
+		int ordinal_before = 0;
+		bool modified_before = false;
+	};
+	std::vector<TemplateInsertionUndo> m_templateUndo;
 	int cur_code;
 	int cur_code_ord = 0;
 
@@ -322,6 +336,8 @@ public:
 	afx_msg BOOL OnEraseBkgnd(CDC* pDC);
 	afx_msg void OnDestroy();
 	bool m_suppressPreviewRefreshOnce = false;
+	// MFC may activate a view before OnInitialUpdate builds its script tree.
+	bool m_previewTreeInitialized = false;
 	// S battle native writeback suppresses selection-triggered preview reloads
 	// until its complete transaction (or rollback) has restored a stable state.
 	bool m_suppressBattleWritebackPreview = false;

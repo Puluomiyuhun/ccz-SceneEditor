@@ -23,11 +23,13 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <map>
 #include <string>
 #include "myTool.h"
 #include "TextWrapAssist.h"
 #include "TextWrapEditSession.h"
 #include "PreviewIntegration/PreviewWritebackGate.h"
+#include "PreviewIntegration/BattleMapOperations.h"
 #pragma comment(lib, "version.lib")
 #include <atlimage.h>
 
@@ -56,6 +58,7 @@ BEGIN_MESSAGE_MAP(CcczEditor2View, CTreeView)
 	ON_WM_LBUTTONDOWN()
 	ON_WM_KEYDOWN()
 	ON_COMMAND(ID_COPY, &CcczEditor2View::OnCopyMsg)
+	ON_COMMAND(ID_TEMPLATE_SAVE, &CcczEditor2View::OnSaveTemplate)
 	ON_COMMAND(ID_PASTE, &CcczEditor2View::OnPaste)
 	ON_WM_KEYUP()
 	ON_COMMAND(ID_CUT, &CcczEditor2View::OnCut)
@@ -100,7 +103,7 @@ void CcczEditor2View::OnActivateView(BOOL activate, CView* activateView,
 	CView* deactivateView)
 {
 	CTreeView::OnActivateView(activate, activateView, deactivateView);
-	if (activate && GetSafeHwnd() != nullptr &&
+	if (activate && m_previewTreeInitialized && GetSafeHwnd() != nullptr &&
 		GetTreeCtrl().GetSafeHwnd() != nullptr && GetDocument() != nullptr) {
 		CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
 		if (frame != nullptr) {
@@ -134,6 +137,7 @@ void CcczEditor2View::OnDraw(CDC* pDC)
 
 void CcczEditor2View::OnInitialUpdate()
 {
+	m_previewTreeInitialized = false;
 	if (!m_bBgLoaded)
 	{
 		//m_bBgLoaded = (m_bgImage.Load(_T("D:\\1.bmp")) == S_OK);
@@ -145,6 +149,7 @@ void CcczEditor2View::OnInitialUpdate()
 		CreateNewTree();
 	}
 	cur_item = GetTreeCtrl().GetSelectedItem();
+	m_previewTreeInitialized = true;
 	RefreshScenePreview();
 }
 void CcczEditor2View::ReadString()
@@ -1971,7 +1976,7 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 	case 0x32:
 	case 0x55: expectedSize = 6U; break;
 	case 0x58: expectedSize = 7U; break;
-	default: break;
+	default: expectedSize=ccz::editor_preview::BattleMapInstructionFieldCount(static_cast<std::uint16_t>(instructionId));break;
 	}
 	if (expectedSize == 0 || intData.size() != expectedSize || !parent)
 		return nullptr;
@@ -2006,8 +2011,7 @@ HTREEITEM CcczEditor2View::InsertBattleInstructionAt(
 	}
 	ItemData* terminalData = reinterpret_cast<ItemData*>(
 		tree.GetItemData(lastChild));
-	const bool sectionEntryEventBoundary = instructionId == 0x32 ||
-		instructionId == 0x55 || instructionId == 0x58;
+	const bool sectionEntryEventBoundary = ccz::editor_preview::BattleMapInstructionFieldCount(static_cast<std::uint16_t>(instructionId))!=0;
 	const bool isSection = parentData->id == -2;
 	if (terminalData == nullptr || terminalData->id != 0 ||
 		(tree.GetChildItem(lastChild) != nullptr &&
@@ -2609,6 +2613,7 @@ BOOL Dialog_SelectCode::OnInitDialog()
 
 	combo1.SetItemHeight(0, 18);
 	combo1.SetMinVisibleItems(30);
+	combo1.EnableInstructionSearch();
 
 	combo1.SetCurSel(theApp.last_item_use);
 
@@ -2618,6 +2623,10 @@ BOOL Dialog_SelectCode::OnInitDialog()
 
 void Dialog_SelectCode::OnBnClickedOk()
 {
+	if (!combo1.CommitIndexedInput() || combo1.GetCurSel() < 0) {
+		AfxMessageBox(L"请输入有效的十六进制代码或指令名称", MB_ICONWARNING);
+		return;
+	}
 	CcczEditor2View* pView = (CcczEditor2View*)(((CMainFrame*)AfxGetMainWnd())->MDIGetActive()->GetActiveView());
 	theApp.last_item_use = combo1.GetCurSel();
 
@@ -8180,6 +8189,10 @@ void CcczEditor2View::OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult)
 
 bool CcczEditor2View::RefreshScenePreview()
 {
+	// Activation/selection notifications during initial tree construction must
+	// not bind or display a partially initialized R/S page. OnInitialUpdate
+	// performs the single first refresh after the completed tree is published.
+	if (!m_previewTreeInitialized) return true;
 	CMainFrame* frame = static_cast<CMainFrame*>(AfxGetMainWnd());
 	if (frame == nullptr) return true;
 	cur_item = GetTreeCtrl().GetSelectedItem();
@@ -8388,3 +8401,5 @@ BOOL CcczEditor2View::OnEraseBkgnd(CDC* pDC)
 	}
 	return CTreeView::OnEraseBkgnd(pDC);
 }
+
+#include "TemplateLibrary/TemplateNativeEditing.inl"

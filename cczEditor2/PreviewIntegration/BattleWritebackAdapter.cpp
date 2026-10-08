@@ -1,4 +1,4 @@
-#include "BattleWritebackAdapter.h"
+﻿#include "BattleWritebackAdapter.h"
 #include "BattlePreviewPredicates.h"
 #include "EditorTreeSnapshot.h"
 #include "PreviewWritebackGate.h"
@@ -216,15 +216,9 @@ bool key_in_scope(const ccz::preview::LogicalNodeKey& key,
 }
 
 std::size_t native_vector_size(std::uint16_t instruction) {
-    switch (instruction) {
-    case 0x4b: return 20U;
-    case 0x46:
-    case 0x47: return 1000U;
-    case 0x32:
-    case 0x55: return 6U;
-    case 0x58: return 7U;
-    default: return 0U;
-    }
+    if(instruction==0x4b)return 20;
+    if(instruction==0x46||instruction==0x47)return 1000;
+    return BattleMapInstructionFieldCount(instruction);
 }
 
 std::size_t record_count(const BattleFieldSpec& spec) {
@@ -373,9 +367,8 @@ bool is_battle_deployment(std::uint16_t instruction_id) {
            instruction_id == 0x47;
 }
 
-bool is_battle_map_operation(std::uint16_t instruction_id) {
-    return instruction_id == 0x32 || instruction_id == 0x55 ||
-           instruction_id == 0x58;
+bool is_battle_map_operation(std::uint16_t id) {
+    return BattleMapInstructionFieldCount(id)!=0;
 }
 
 bool is_map_operation_insert_valid(std::uint16_t instruction_id,
@@ -575,12 +568,9 @@ bool CanDeleteBattleWritebackNativeNode(
     const bool is_single_unit = node.instruction_id == 0x4b;
     const bool is_multi_unit_page = node.instruction_id == 0x46 ||
         node.instruction_id == 0x47;
-    const bool is_map_operation =
-        node.instruction_id == 0x32 || node.instruction_id == 0x55 ||
-        node.instruction_id == 0x58;
-    const std::size_t expected_size = is_single_unit ? 20U
-        : is_multi_unit_page ? 1000U
-        : node.instruction_id == 0x58 ? 7U : 6U;
+    const auto semantic_size=BattleMapInstructionFieldCount(node.instruction_id);
+    const bool is_map_operation=semantic_size!=0;
+    const std::size_t expected_size=is_single_unit?20:is_multi_unit_page?1000:semantic_size;
     return node.handle != 0 &&
         (is_single_unit || is_multi_unit_page || is_map_operation) &&
         node.int_data.size() == expected_size && !node.has_children &&
@@ -1946,13 +1936,17 @@ bool BattleWritebackNativeTransaction::Apply(
                 is_map_operation_insert_valid(change.instruction_id,
                     change.int_data, change.map_width, change.map_height,
                     diagnostic);
+            const bool valid_obstacle_update = (change.instruction_id == 0x58 || change.instruction_id == 0x32 || change.instruction_id == 0x55) &&
+                change.kind == BattleWritebackChangeKind::UpdateInstruction &&
+                is_map_operation_insert_valid(change.instruction_id, change.int_data,
+                    change.map_width, change.map_height, diagnostic);
             const bool valid_deployment_change =
                 is_battle_deployment(change.instruction_id) &&
                 (four_b_group ? valid_four_b_group
                     : change.int_data.size() ==
                         native_vector_size(change.instruction_id));
-            if ((!valid_deployment_change && !valid_map_insert) ||
-                (map_operation && !valid_map_insert)) {
+            if ((!valid_deployment_change && !valid_map_insert && !valid_obstacle_update) ||
+                (map_operation && !valid_map_insert && !valid_obstacle_update)) {
                 if (diagnostic.empty())
                     diagnostic = L"S 战场事务拒绝：指令类型或完整字段长度无效";
                 return false;
@@ -2009,7 +2003,7 @@ bool BattleWritebackNativeTransaction::Apply(
                     source.instruction_id != change.instruction_id ||
                     source.ordinal != change.source_ordinal ||
                     source.int_data != change.original_int_data ||
-                    source.int_data.size() != native_vector_size(change.instruction_id) ||
+                    (!valid_obstacle_update && source.int_data.size() != native_vector_size(change.instruction_id)) ||
                     source.has_children || source.has_long_text ||
                     source.has_structural_links) {
                     diagnostic = L"S 战场事务拒绝：来源节点与预检时的完整原值不一致";

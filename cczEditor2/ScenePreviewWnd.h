@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 #include <map>
@@ -8,6 +8,7 @@
 #include <memory>
 #include <GdiPlus.h>
 #include "MapPortraitState.h"
+#include "PreviewPrimaryActionButton.h"
 #include "SceneCoordinate.h"
 #include "ScenePositionSource.h"
 #include "PreviewIntegration/PreviewRefreshStateMachine.h"
@@ -153,11 +154,11 @@ private:
 	CEdit m_editSearch;
 	CListBox m_listChars;
 	CButton m_conditionButton;
-	CButton m_activationButton;
+	CBattlePrimaryActionButton m_activationButton;
 	CConditionTreePane m_conditionTreePane;
 	CButton m_variableButton;
 	CVariableControlPane m_variableControlPane;
-	CButton m_undoButton;
+	CBattlePrimaryActionButton m_undoButton;
 	CButton m_playbackStartTargetButton;
 	CButton m_playbackTargetEndButton;
 	CButton m_playbackResetButton;
@@ -178,6 +179,7 @@ private:
 	bool m_undoButtonVisible = false;
 	bool m_playbackVisible = false;
 	CFont m_listFont;
+	CFont m_undoFont;
 	wchar_t(*m_pPer2)[30] = nullptr;
 	bool m_charListInited = false;
 	int m_selectedCharID = -1;
@@ -362,7 +364,7 @@ private:
 	void AppendDiagnostic(const CString& message);
 	void ExecutePreviewRefresh(const PendingPreviewRequest& request);
 	CTreeCtrl* ResolvePreviewTree(const PendingPreviewRequest& request);
-	void ClearNativePreviewState();
+	void ClearNativePreviewState(bool clearUndo = true);
 	void UpdateConditionPaneFromFrame();
 	void UpdateActivationButtonFromFrame();
 	void UpdateVariablePaneFromFrame();
@@ -459,12 +461,22 @@ private:
 		int oldDirection = 0;
 		int newDirection = 0;
 	};
+	struct InsertedUndoSnapshot {
+		HTREEITEM item = nullptr;
+		HTREEITEM parent = nullptr;
+		int id = 0;
+		std::vector<int> values;
+		CString text;
+	};
 	struct PreviewUndoTransaction {
-		enum class Kind { Coordinate, Inserted };
+		enum class Kind { Coordinate, Inserted, Deleted };
 		Kind kind = Kind::Coordinate;
 		std::wstring label;
 		std::vector<CoordinateUndoEntry> coordinates;
 		std::vector<HTREEITEM> insertedItems;
+		std::vector<InsertedUndoSnapshot> insertedSnapshots;
+		HTREEITEM deletedPrevious = nullptr;
+		int deletedOrd = 0;
 		HTREEITEM restoreSelection = nullptr;
 		std::uint64_t treeGeneration = 0;
 	};
@@ -508,6 +520,7 @@ private:
 	void RecordInsertedUndo(const wchar_t* label,
 		std::vector<HTREEITEM> items, HTREEITEM restoreSelection);
 	void ClearPreviewUndo();
+	void DeletePreviewCharacter(int charID);
 	void ClearRBitmapCaches();
 	void UpdateUndoButton();
 	bool UndoLastPreviewOperation();

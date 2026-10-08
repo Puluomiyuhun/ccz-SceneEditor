@@ -224,6 +224,8 @@
 #define IDC_WRAP_BYTES_LABEL            1026
 #define IDS_SCENE_PREVIEW               309
 #define ID_VIEW_SCENEPREVIEW            390
+#define ID_VIEW_TEMPLATELIBRARY         393
+#define ID_TEMPLATE_SAVE               32910
 #define ID_SCENE_DIR_0                  40010
 #define ID_SCENE_DIR_1                  40011
 #define ID_SCENE_DIR_2                  40012

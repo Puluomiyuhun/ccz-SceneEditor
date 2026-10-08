@@ -1,4 +1,4 @@
-#include "test_framework.h"
+﻿#include "test_framework.h"
 
 #include <ccz/preview/battle_field_spec.h>
 #include <ccz/preview/battle_preview.h>
@@ -1080,13 +1080,11 @@ public:
 		const auto parent = nodes.find(parent_handle);
 		const std::size_t expected = instruction_id == 0x4b ? 20U
 			: instruction_id == 0x46 || instruction_id == 0x47 ? 1000U
-			: instruction_id == 0x58 ? 7U
-			: instruction_id == 0x32 || instruction_id == 0x55 ? 6U : 0U;
+			: ccz::editor_preview::BattleMapInstructionFieldCount(instruction_id);
 		if (parent == nodes.end() || children.find(parent_handle) == children.end() ||
 			int_data.size() != expected ||
 			(instruction_id != 0x4b && instruction_id != 0x46 &&
-			 instruction_id != 0x47 && instruction_id != 0x32 &&
-			 instruction_id != 0x55 && instruction_id != 0x58)) return false;
+			 instruction_id != 0x47 && ccz::editor_preview::BattleMapInstructionFieldCount(instruction_id)==0)) return false;
         auto& siblings = children[parent_handle];
         std::size_t index = 0;
         if (after_handle != 0) {
@@ -1379,6 +1377,8 @@ public:
         children[20] = {21};
         RefreshRevision();
     }
+
+    void PadExistingObstacleForTest(std::uintptr_t handle) { nodes.at(handle).int_data.resize(20,0); RefreshRevision(); }
 
     DocumentState state;
     mutable int capture_document_state_calls{};
@@ -3271,4 +3271,67 @@ CCZ_TEST(battle_editor_brush_delete_compacts_only_its_selection_batch) {
                    second_second_batch->editor_minion_brush_batch_id);
     CCZ_REQUIRE(second_first_batch->editor_minion_brush_batch_id !=
                 first_second_batch->editor_minion_brush_batch_id);
+}
+
+CCZ_TEST(battle_obstacle_native_updates_support_continuous_undo_and_stale_preimage_rejection) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    const std::vector<std::int32_t> original={0,0,26,3,4,0,0};
+    std::uintptr_t handle=0;
+    CCZ_REQUIRE(host.InsertBattleNode(10,12,0x58,original,30,handle));
+    host.state.next_ordinal=31;
+    BattleWritebackNativeNodeSnapshot node;
+    CCZ_REQUIRE(host.CaptureNode(handle,node));
+    BattleWritebackNativeChange change;
+    change.kind=BattleWritebackChangeKind::UpdateInstruction;change.instruction_id=0x58;
+    change.item_handle=handle;change.parent_handle=node.parent_handle;change.source_ordinal=node.ordinal;
+    change.original_int_data=original;change.int_data={2,0,16,6,7,1,1};change.map_width=20;change.map_height=20;
+    BattleWritebackNativeBatch batch;batch.ok=true;batch.changes={change};
+    BattleWritebackNativeTransaction transaction;std::wstring diagnostic;
+    CCZ_REQUIRE(transaction.Apply(batch,host,diagnostic));
+    CCZ_REQUIRE(host.CaptureNode(handle,node));CCZ_REQUIRE(node.int_data==change.int_data);
+    CCZ_REQUIRE(!transaction.Apply(batch,host,diagnostic)); // original preimage is now stale
+    change.original_int_data=node.int_data;change.int_data[3]=9;batch.changes={change};
+    CCZ_REQUIRE(transaction.Apply(batch,host,diagnostic));
+    CCZ_REQUIRE(transaction.Undo(host,diagnostic));
+    CCZ_REQUIRE(host.CaptureNode(handle,node));CCZ_REQUIRE_EQ(node.int_data[3],6);
+    CCZ_REQUIRE(transaction.Undo(host,diagnostic));
+    CCZ_REQUIRE(host.CaptureNode(handle,node));CCZ_REQUIRE(node.int_data==original);
+    CCZ_REQUIRE(!transaction.undo_available());
+}
+
+CCZ_TEST(battle_obstacle_native_update_preserves_editor_padding_and_failed_swap_is_atomic) {
+    using namespace ccz::editor_preview;
+    FakeBattleWritebackNativeHost host;
+    std::vector<std::int32_t> original={1,0,27,3,4,0,0};
+    std::uintptr_t handle=0;
+    CCZ_REQUIRE(host.InsertBattleNode(10,12,0x58,original,30,handle));host.PadExistingObstacleForTest(handle);original.resize(20,0);host.state.next_ordinal=31;
+    BattleWritebackNativeNodeSnapshot node;CCZ_REQUIRE(host.CaptureNode(handle,node));
+    BattleWritebackNativeChange change;
+    change.kind=BattleWritebackChangeKind::UpdateInstruction;change.instruction_id=0x58;
+    change.item_handle=handle;change.parent_handle=node.parent_handle;change.source_ordinal=node.ordinal;
+    change.original_int_data=original;change.int_data=original;change.int_data[3]=9;change.map_width=20;change.map_height=20;
+    BattleWritebackNativeBatch batch;batch.ok=true;batch.changes={change};
+    BattleWritebackNativeTransaction transaction;std::wstring diagnostic;
+    host.FailNext(L"swap");CCZ_REQUIRE(!transaction.Apply(batch,host,diagnostic));
+    CCZ_REQUIRE(host.CaptureNode(handle,node));CCZ_REQUIRE(node.int_data==original);CCZ_REQUIRE(!transaction.undo_available());
+    CCZ_REQUIRE(transaction.Apply(batch,host,diagnostic));
+    CCZ_REQUIRE(transaction.Undo(host,diagnostic));
+    CCZ_REQUIRE(host.CaptureNode(handle,node));CCZ_REQUIRE(node.int_data==original);
+}
+
+CCZ_TEST(battle_new_commands_native_insert_readback_and_continuous_undo) {
+ using namespace ccz::editor_preview;
+ FakeBattleWritebackNativeHost host;const auto original=host.Children(10);
+ BattleWritebackNativeTransaction transaction;std::wstring diagnostic;
+ for(auto id:{0x4d,0x4e,0x5b,0x5c,0x6b,0x31,0x53}){
+  BattleWritebackNativeChange insertion;insertion.kind=BattleWritebackChangeKind::InsertInstruction;insertion.instruction_id=(std::uint16_t)id;insertion.parent_handle=10;insertion.insert_after_handle=host.Children(10)[host.Children(10).size()-2];insertion.insert_before_handle=13;insertion.int_data=DefaultBattleCommandConfiguration((std::uint16_t)id).fields;insertion.map_width=19;insertion.map_height=18;
+  BattleWritebackNativeBatch batch;batch.ok=true;batch.changes={insertion};
+  CCZ_REQUIRE(transaction.Apply(batch,host,diagnostic));
+  BattleWritebackNativeNodeSnapshot source;const auto children=host.Children(10);CCZ_REQUIRE(host.CaptureNode(children[children.size()-2],source));
+  CCZ_REQUIRE_EQ(source.instruction_id,(std::uint16_t)id);CCZ_REQUIRE(CanDeleteBattleWritebackNativeNode(source));
+ }
+ CCZ_REQUIRE_EQ(transaction.undo_depth(),std::size_t(7));
+ while(transaction.undo_available())CCZ_REQUIRE(transaction.Undo(host,diagnostic));
+ CCZ_REQUIRE_EQ(host.Children(10),original);
 }

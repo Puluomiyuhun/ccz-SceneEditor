@@ -15,6 +15,8 @@ class CScenePreviewWnd : public CDockablePane
 public:
 	CScenePreviewWnd() noexcept = default;
 	virtual ~CScenePreviewWnd() = default;
+	void BeginDocumentOpen() noexcept { ++m_documentOpenDepth; }
+	void EndDocumentOpen();
 
 	bool RequestPreviewRefresh(CTreeCtrl& tree, HTREEITEM selected_item,
 		CcczEditor2Doc& document);
@@ -55,4 +57,5 @@ private:
 		m_closeApprovalDocumentIds;
 	CStatic m_neutralLabel;
 	Page m_activePage = Page::Neutral;
+	unsigned m_documentOpenDepth{};
 };

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -130,6 +130,7 @@
     <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleMovementTerrainResourceCache.h" />
     <ClInclude Include="..\cczEditor2\TextWrapEditSession.h" />
     <ClCompile Include="tests\test_main.cpp" />
+    <ClCompile Include="tests\template_library_tests.cpp" />
     <ClCompile Include="tests\dialogue_profile_tests.cpp" />
     <ClCompile Include="tests\dialogue_model_tests.cpp" />
     <ClCompile Include="tests\face_archive_tests.cpp" />
@@ -168,9 +169,16 @@
     <ClCompile Include="tests\battle_interaction_tests.cpp" />
     <ClCompile Include="tests\battle_writeback_tests.cpp" />
     <ClCompile Include="tests\battle_map_operation_tests.cpp" />
+    <ClCompile Include="tests\battle_dynamic_map_replay_tests.cpp" />
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleDynamicMapReplay.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleMapOperations.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="tests\battle_command_operations_tests.cpp" />
+    <ClCompile Include="..\tests\preview_integration\battle_section_relations_tests.cpp" />
+    <ClCompile Include="..\tests\preview_integration\battle_section_environment_tests.cpp" />
     <ClCompile Include="..\tests\preview_integration\battle_editor_ops_tests.cpp" />
     <ClCompile Include="..\tests\preview_integration\battle_character_catalog_tests.cpp" />
     <ClCompile Include="..\cczEditor2\PreviewIntegration\EditorPreviewAdapter.cpp">

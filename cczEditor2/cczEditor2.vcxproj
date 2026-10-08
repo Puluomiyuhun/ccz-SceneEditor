@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -221,10 +221,15 @@
     <ClInclude Include="FileView.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="MainFrm.h" />
+    <ClInclude Include="TemplateLibraryPane.h" />
+    <ClInclude Include="TemplateLibrary\TemplateModel.h" />
+    <ClInclude Include="TemplateLibrary\TemplateStore.h" />
     <ClInclude Include="myTool.h" />
     <ClInclude Include="OutputWnd.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PropertiesWnd.h" />
+    <ClInclude Include="PreviewIntegration\BattleObstacleParametersPane.h" />
+    <ClInclude Include="PreviewPrimaryActionButton.h" />
     <ClInclude Include="ScenePreviewWnd.h" />
     <ClInclude Include="ScenePreviewHost.h" />
     <ClInclude Include="BattlePreviewPage.h" />
@@ -252,6 +257,7 @@
     <ClInclude Include="PreviewIntegration\FreeRPreviewResolver.h" />
     <ClInclude Include="PreviewIntegration\FreeRReplayComposer.h" />
     <ClInclude Include="PreviewIntegration\PreviewRefreshStateMachine.h" />
+    <ClInclude Include="PreviewIntegration\CurrentTreeItemIndex.h" />
     <ClInclude Include="PreviewIntegration\PreviewRefreshDecision.h" />
     <ClInclude Include="PreviewIntegration\PreviewSession.h" />
     <ClInclude Include="PreviewIntegration\PreviewAssetCache.h" />
@@ -260,6 +266,8 @@
     <ClInclude Include="PreviewIntegration\VariableControlPane.h" />
     <ClInclude Include="PreviewIntegration\BattleUnitParametersPane.h" />
     <ClInclude Include="PreviewIntegration\DynamicPlaybackSession.h" />
+    <ClInclude Include="PreviewIntegration\BattleDynamicMapReplay.h" />
+    <ClInclude Include="PreviewIntegration\BattleFacing.h" />
     <ClInclude Include="PreviewIntegration\PlaybackInterpolation.h" />
   </ItemGroup>
   <ItemGroup>
@@ -272,6 +280,7 @@
     <ClCompile Include="CMyTreeCtrl.cpp" />
     <ClCompile Include="FileView.cpp" />
     <ClCompile Include="MainFrm.cpp" />
+    <ClCompile Include="TemplateLibraryPane.cpp" />
     <ClCompile Include="OutputWnd.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
@@ -352,6 +361,9 @@
     <ClCompile Include="PreviewIntegration\DynamicPlaybackSession.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleDynamicMapReplay.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="cczEditor2.rc" />
@@ -390,6 +402,7 @@
   <ItemGroup>
     <None Include="res\cczEditor2.rc2" />
     <None Include="Instructions.json" />
+    <None Include="TemplateLibrary\TemplateNativeEditing.inl" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\cczPreviewCore\cczPreviewCore.vcxproj">

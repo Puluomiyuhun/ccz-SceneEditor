@@ -89,8 +89,10 @@ ccz::preview::InstructionCatalog MakeEditorPreviewCatalog() {
     ccz::preview::InstructionCatalog catalog;
     catalog.valid = true;
     catalog.names = {
-        {0x00, L"事件结束"}, {0x02, L"内部信息"},
-        {0x03, L"else"}, {0x0a, L"初始化局部变量"},
+        {0x00, L"事件结束"}, {0x01, L"子事件设定"},
+        {0x02, L"内部信息"},
+        {0x03, L"else"}, {0x05, L"变量测试"},
+        {0x0a, L"初始化局部变量"},
         {0x12, L"选择框"}, {0x13, L"case"},
         {0x14, L"对话"}, {0x15, L"对话2"}, {0x16, L"信息"},
         {0x17, L"场所名设定"}, {0x18, L"事件名称设定"},
@@ -102,8 +104,10 @@ ccz::preview::InstructionCatalog MakeEditorPreviewCatalog() {
         {0x32, L"武将移动"}, {0x33, L"武将转向"},
         {0x34, L"武将动作"}, {0x36, L"武将状态测试"},
         {0x37, L"钱、章节编号、忠奸测试"},
+        {0x55, L"战场复活"}, {0x58, L"战场障碍"},
         {0x44, L"战斗初始化"}, {0x46, L"友军出场设定"},
         {0x47, L"敌军出场设定"}, {0x4b, L"我军出场设定"},
+        {0x4c, L"隐藏武将出现"},
         {0x63, L"单挑对话"}, {0x69, L"旁白"},
         {0x79, L"变量测试"}, {0x7a, L"对话3"},
     };

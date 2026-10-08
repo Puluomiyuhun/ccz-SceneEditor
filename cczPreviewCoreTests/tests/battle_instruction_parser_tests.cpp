@@ -566,6 +566,29 @@ CCZ_TEST(battle_parser_matches_editor_logical_key_scope_prefix) {
     CCZ_REQUIRE_EQ(result.state.map.map_id, 13);
 }
 
+CCZ_TEST(battle_parser_filters_map_nodes_by_reachable_source_key) {
+    const std::wstring scope = L"battle:condition-map-scope";
+    const std::wstring reachable_map_key =
+        scope + L"|node:1|instruction:39";
+    const std::wstring unreachable_map_key =
+        scope + L"|node:2|instruction:39";
+
+    ccz::preview::BattleParseOptions options = scoped_options(scope.c_str());
+    options.filter_map_nodes = true;
+    options.reachable_map_keys = {reachable_map_key};
+    const auto result = ccz::preview::parse_battle_instructions(
+        L"S_12.eex",
+        {container(scope, {
+             instruction(0x27, battle_map_payload(12), reachable_map_key),
+             instruction(0x27, battle_map_payload(99), unreachable_map_key),
+         })},
+        options);
+
+    CCZ_REQUIRE(result.ok);
+    CCZ_REQUIRE(result.state.map.valid);
+    CCZ_REQUIRE_EQ(result.state.map.map_id, 12);
+}
+
 CCZ_TEST(battle_parser_requires_explicit_scope) {
     const auto result = ccz::preview::parse_battle_instructions(
         L"S_15.eex",

@@ -258,6 +258,7 @@ public:
     bool Undo(BattleWritebackNativeHost& host, std::wstring& diagnostic);
     void Clear() noexcept;
     bool undo_available() const noexcept { return !undo_stack_.empty(); }
+    std::size_t undo_depth() const noexcept { return undo_stack_.size(); }
 
 private:
     struct AppliedOperation {

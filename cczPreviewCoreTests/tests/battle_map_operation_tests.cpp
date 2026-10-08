@@ -1,10 +1,12 @@
-#include "test_framework.h"
+﻿#include "test_framework.h"
 
 #include <ccz/preview/battle_preview.h>
 #include "../../cczEditor2/PreviewIntegration/BattleMapOperations.h"
+#include "../../cczEditor2/PreviewIntegration/BattleEditorOps.h"
 #include "../../cczEditor2/PreviewIntegration/BattleWritebackAdapter.h"
 
 #include <cstdint>
+#include <algorithm>
 #include <vector>
 
 namespace {
@@ -254,10 +256,12 @@ CCZ_TEST(battle_map_operation_builders_reject_invalid_ids_coordinates_and_types)
         1, BattleCoord{-1, 0}, 19, 18, instruction, diagnostic));
 }
 
-CCZ_TEST(battle_obstacle_drafts_keep_click_order_and_allow_occupied_targets) {
+CCZ_TEST(battle_obstacle_drafts_keep_order_and_reject_same_cell_across_types) {
     BattleObstacleDraftQueue drafts;
     CCZ_REQUIRE(drafts.Add(2, BattleCoord{3, 4}, 19, 18));
-    CCZ_REQUIRE(drafts.Add(0, BattleCoord{3, 4}, 19, 18));
+    CCZ_REQUIRE(!drafts.Add(0, BattleCoord{3, 4}, 19, 18));
+    CCZ_REQUIRE(!drafts.Add(2, BattleCoord{3, 4}, 19, 18));
+    CCZ_REQUIRE(drafts.Add(0, BattleCoord{4, 4}, 19, 18));
     CCZ_REQUIRE_EQ(drafts.items().size(), std::size_t(2));
     CCZ_REQUIRE_EQ(drafts.items()[0].type, 2);
     CCZ_REQUIRE_EQ(drafts.items()[1].type, 0);
@@ -267,19 +271,18 @@ CCZ_TEST(battle_obstacle_drafts_keep_click_order_and_allow_occupied_targets) {
     CCZ_REQUIRE(drafts.empty());
 }
 
-CCZ_TEST(battle_obstacle_draft_remove_at_removes_only_latest_matching_item) {
+CCZ_TEST(battle_obstacle_draft_remove_releases_cell_for_another_type) {
     BattleObstacleDraftQueue drafts;
     CCZ_REQUIRE(drafts.Add(2, BattleCoord{3, 4}, 19, 18));
-    CCZ_REQUIRE(drafts.Add(0, BattleCoord{3, 4}, 19, 18));
+    CCZ_REQUIRE(!drafts.Add(0, BattleCoord{3, 4}, 19, 18));
     CCZ_REQUIRE(drafts.Add(1, BattleCoord{8, 9}, 19, 18));
 
     CCZ_REQUIRE(drafts.RemoveAt(BattleCoord{3, 4}));
-    CCZ_REQUIRE_EQ(drafts.items().size(), std::size_t(2));
-    CCZ_REQUIRE_EQ(drafts.items()[0].type, 2);
-    CCZ_REQUIRE_EQ(drafts.items()[1].type, 1);
-    CCZ_REQUIRE(drafts.RemoveAt(BattleCoord{3, 4}));
     CCZ_REQUIRE_EQ(drafts.items().size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(drafts.items()[0].type, 1);
     CCZ_REQUIRE(!drafts.RemoveAt(BattleCoord{3, 4}));
+    CCZ_REQUIRE(drafts.Add(0, BattleCoord{3, 4}, 19, 18));
+    CCZ_REQUIRE(drafts.RemoveAt(BattleCoord{3, 4}));
     CCZ_REQUIRE(drafts.RemoveAt(BattleCoord{8, 9}));
     CCZ_REQUIRE(drafts.empty());
 }
@@ -418,9 +421,80 @@ CCZ_TEST(battle_map_native_batch_rechecks_dimensions_and_field_semantics) {
     BattleMapOperationInstruction obstacle;
     CCZ_REQUIRE(ccz::editor_preview::BuildBattleObstacleInstruction(
         1, BattleCoord{2, 3}, 19, 18, obstacle, diagnostic));
-    obstacle.int_data[2] = 26;
+    obstacle.int_data[2] = 30;
     const auto batch =
         ccz::editor_preview::BuildBattleWritebackInsertBatchAfterSelection(
             capture, {obstacle});
     CCZ_REQUIRE(!batch.ok);
+}
+
+CCZ_TEST(battle_obstacle_defaults_are_snapshotted_and_draft_moves_reject_collisions) {
+    using namespace ccz::editor_preview;
+    BattleObstacleDraftQueue drafts;
+    BattleObstacleDefaults defaults{0,16,1,1};
+    CCZ_REQUIRE(drafts.Add(2,{2,3},20,20,defaults));
+    defaults.terrain=5;
+    CCZ_REQUIRE_EQ(drafts.items()[0].parameters.terrain,16);
+    CCZ_REQUIRE(drafts.Add(1,{4,3},20,20));
+    auto updated=drafts.items()[0];updated.coordinate={4,3};
+    CCZ_REQUIRE(!drafts.UpdateAt({2,3},updated,20,20));
+    CCZ_REQUIRE(drafts.items()[0].coordinate==BattleCoord({2,3}));
+    updated.coordinate={6,7};updated.type=1;updated.parameters={1,-1,0,1};
+    CCZ_REQUIRE(drafts.UpdateAt({2,3},updated,20,20));
+    BattleMapOperationInstruction instruction;std::wstring diagnostic;
+    CCZ_REQUIRE(BuildBattleObstacleInstruction(updated.type,updated.coordinate,20,20,instruction,diagnostic,updated.parameters));
+    CCZ_REQUIRE(instruction.int_data==std::vector<std::int32_t>({1,1,27,6,7,0,1}));
+    CCZ_REQUIRE(ValidateBattleMapOperationInstruction(instruction,diagnostic));
+    updated.coordinate={-1,7};
+    CCZ_REQUIRE(!drafts.UpdateAt({6,7},updated,20,20));
+    CCZ_REQUIRE(drafts.items()[0].coordinate==BattleCoord({6,7}));
+}
+
+CCZ_TEST(battle_obstacle_brush_path_fills_crossed_cells_without_duplicate_stamps) {
+    using namespace ccz::editor_preview;
+    BattleObstacleDraftQueue drafts;
+    for(const auto& cell:BattleSelectionPathCells({1,2},{9,2}))drafts.Add(0,cell,20,20);
+    for(const auto& cell:BattleSelectionPathCells({9,2},{1,2}))drafts.Add(2,cell,20,20);
+    CCZ_REQUIRE_EQ(drafts.items().size(),std::size_t(9));
+    for(int x=1;x<=9;++x) {
+        CCZ_REQUIRE(std::any_of(drafts.items().begin(),drafts.items().end(),[x](const auto& draft){return draft.coordinate==BattleCoord({x,2});}));
+    }
+}
+
+CCZ_TEST(battle_obstacle_disappearance_builds_new_insert_after_selection) {
+    using namespace ccz::editor_preview;
+    auto capture=selected_capture();
+    BattleMapOperationInstruction hide;std::wstring diagnostic;
+    CCZ_REQUIRE(BuildBattleObstacleInstruction(2,{3,4},19,18,hide,diagnostic,{1,16,1,1}));
+    const auto batch=BuildBattleWritebackInsertBatchAfterSelection(capture,{hide});
+    CCZ_REQUIRE(batch.ok);CCZ_REQUIRE_EQ(batch.changes.size(),std::size_t(1));
+    CCZ_REQUIRE(batch.changes[0].kind==BattleWritebackChangeKind::InsertInstruction);
+    CCZ_REQUIRE_EQ(batch.changes[0].item_handle,std::uintptr_t(0));
+    CCZ_REQUIRE_EQ(batch.changes[0].insert_after_handle,std::uintptr_t(40));
+    CCZ_REQUIRE(batch.changes[0].int_data==std::vector<std::int32_t>({2,1,16,3,4,1,1}));
+}
+CCZ_TEST(battle_turn_action_native_batch_preserves_pair_order_and_undo_contract) {
+ auto capture=selected_capture();std::wstring diagnostic;
+ BattleMapOperationInstruction a,b,c;
+ CCZ_REQUIRE(ccz::editor_preview::BuildBattleCommandInstruction({0x4f,{7,9,-1,0,1,0}},19,18,a,diagnostic));
+ CCZ_REQUIRE(ccz::editor_preview::BuildBattleCommandInstruction({0x4f,{9,7,-1,0,0,1}},19,18,b,diagnostic));
+ CCZ_REQUIRE(ccz::editor_preview::BuildBattleCommandInstruction({0x50,{7,6,1,1}},19,18,c,diagnostic));
+ auto batch=ccz::editor_preview::BuildBattleWritebackInsertBatchAfterSelection(capture,{a,b,c});
+ CCZ_REQUIRE(batch.ok);CCZ_REQUIRE_EQ(batch.changes.size(),std::size_t(3));
+ CCZ_REQUIRE_EQ(batch.changes[0].int_data,a.int_data);CCZ_REQUIRE_EQ(batch.changes[1].int_data,b.int_data);CCZ_REQUIRE_EQ(batch.changes[2].int_data,c.int_data);
+ for(const auto& change:batch.changes){
+  ccz::editor_preview::BattleWritebackNativeNodeSnapshot n;n.handle=7;n.instruction_id=change.instruction_id;n.int_data=change.int_data;
+  CCZ_REQUIRE(ccz::editor_preview::CanDeleteBattleWritebackNativeNode(n));
+ }
+}
+
+CCZ_TEST(battle_entry_tests_use_existing_writeback_and_undo) {
+ using namespace ccz::editor_preview;
+ auto capture=selected_capture();std::wstring diagnostic;BattleMapOperationInstruction a,b;
+ CCZ_REQUIRE(BuildBattleCommandInstruction({0x25,{1023,3,4}},19,18,a,diagnostic));
+ CCZ_REQUIRE(BuildBattleCommandInstruction({0x26,{999,1,2,7,8}},19,18,b,diagnostic));
+ auto batch=BuildBattleWritebackInsertBatchAfterSelection(capture,{a,b});
+ CCZ_REQUIRE(batch.ok);CCZ_REQUIRE_EQ(batch.changes.size(),std::size_t(2));
+ CCZ_REQUIRE_EQ(batch.changes[0].int_data,a.int_data);CCZ_REQUIRE_EQ(batch.changes[1].int_data,b.int_data);
+ for(const auto& change:batch.changes){BattleWritebackNativeNodeSnapshot n;n.handle=7;n.instruction_id=change.instruction_id;n.int_data=change.int_data;CCZ_REQUIRE(CanDeleteBattleWritebackNativeNode(n));}
 }

@@ -32,6 +32,7 @@ Assert-Contains $pageHeader 'CButton\s+m_variableControlButton' 'S page owns the
 Assert-Contains $pageHeader 'CVariableControlPane\s+m_variableControlPane' 'S page owns the shared variable pane'
 Assert-Contains $sessionHeader 'ScriptVariableIndex\s+condition_variable_index' 'variable index is stored per S document session'
 Assert-Contains $sessionHeader 'condition_activation_target' 'activation target is stored per S document session'
+Assert-Contains $sessionHeader 'activation_button_visible' 'activation shortcut visibility follows whether the current selected event can be activated'
 
 $load = Get-FunctionBlock $pageSource 'void CSBattlePreviewPage::LoadCapturedBattle('
 Assert-Contains $load 'scan_script_variables\(' 'loading a document indexes variables from its captured nodes'
@@ -41,7 +42,9 @@ Assert-Contains $load 'UpdateConditionActivationTarget\(' 'loading resolves the 
 
 $refresh = Get-FunctionBlock $pageSource 'void CSBattlePreviewPage::RefreshConditionTree('
 Assert-Contains $refresh 'UpdateRows\(' 'the variable pane receives the current session variable snapshot'
-Assert-Contains $refresh 'condition_tree_model_can_activate_target\(' 'activation visibility uses canonical reachability'
+Assert-Contains $refresh 'condition_tree_model_can_activate_target\(' 'activation visibility uses the same canonical reachability check as R preview'
+Assert-Contains $refresh 'activation_button_visible\s*=\s*activationButtonVisible' 'activation shortcut visibility follows whether the selected event is actionable'
+Assert-Contains $refresh 'm_activationButton\.ShowWindow\(DynamicActivationButtonVisible\(\)' 'the S toolbar shows the shortcut only for an actionable target'
 
 $activate = Get-FunctionBlock $pageSource 'void CSBattlePreviewPage::OnActivationButtonClicked()'
 Assert-Contains $activate 'activate_condition_tree_target\(' 'S activation reuses the canonical condition-tree activation plan'
@@ -52,20 +55,21 @@ Assert-Contains $variable 'apply_variable_control_action\(' 'S variable changes 
 Assert-Contains $variable 'PostMessage\(kConditionActionMessage' 'variable changes rebuild S reachability and the active branch'
 
 $normalRefresh = Get-FunctionBlock $pageSource 'bool CSBattlePreviewPage::RequestPreviewRefresh('
-Assert-Contains $normalRefresh 'UpdateConditionActivationTarget\(\s*capture\.snapshot\.selected_handle\)' 'normal mode updates activation when selecting another node in the same section'
+Assert-Contains $normalRefresh 'UpdateConditionActivationTarget\(\s*capture\.selected_target_key\)' 'normal mode passes the selected logical key to activation refresh'
+Assert-Contains $normalRefresh 'BuildBattleConditionTree\(\s*capture,[\s\S]*?condition_model\s*=\s*selectedCondition\.model;[\s\S]*?RefreshConditionTree\(\)' 'same-Section selection rebuilds and refreshes the condition model before checking activation'
 $quickRefresh = Get-FunctionBlock $pageSource 'bool CSBattlePreviewPage::RequestQuickModeRefresh('
-Assert-Contains $quickRefresh 'tree\.GetSelectedItem\(\)' 'quick mode updates activation from the live tree selection without recapturing Scene1'
+Assert-Contains $quickRefresh 'find_battle_node_key_by_runtime_handle\([\s\S]*ActiveSession\(\)\.baseline_capture\.input\.nodes[\s\S]*tree\.GetSelectedItem\(\)' 'quick mode resolves the live selection against the captured source tree without searching the execution model'
+$activationTarget = Get-FunctionBlock $pageSource 'void CSBattlePreviewPage::UpdateConditionActivationTarget('
+Assert-Contains $activationTarget 'const ccz::preview::LogicalNodeKey& target_key' 'activation refresh receives an R-style logical node key'
+Assert-Contains $activationTarget 'condition_tree_model_can_activate_target\(' 'activation refresh evaluates the selected key against the current model'
 
 $preserveDraft = Get-FunctionBlock $pageSource 'bool CSBattlePreviewPage::LoadQuickModeBaselinePreservingDraft('
 Assert-Contains $preserveDraft 'oldConditionVariableIndex' 'failed quick-mode rebase snapshots the old variable index'
 Assert-Contains $preserveDraft 'condition_variable_index\s*=\s*std::move\(oldConditionVariableIndex\)' 'failed quick-mode rebase restores the document-owned variable index'
 Assert-Contains $preserveDraft 'condition_activation_target\s*=\s*\s*std::move\(oldConditionActivationTarget\)' 'failed quick-mode rebase restores the prior activation target'
 
-$layout = Get-FunctionBlock $pageSource 'void CSBattlePreviewPage::LayoutEditorControls()'
-Assert-Contains $layout 'm_activationButton\.MoveWindow|m_activationButton\.ShowWindow' 'expanded S sidebar lays out activation control'
-Assert-Contains $layout 'm_variableControlButton\.MoveWindow|m_variableControlButton\.ShowWindow' 'expanded S sidebar lays out variable control'
-$collapsed = Get-FunctionBlock $pageSource 'void CSBattlePreviewPage::LayoutCollapsedControlToolbar('
-Assert-Contains $collapsed 'm_activationButton' 'collapsed sidebar toolbar includes activation when available'
-Assert-Contains $collapsed 'm_variableControlButton' 'collapsed sidebar toolbar includes variable control when available'
+$toolbar = Get-FunctionBlock $pageSource 'void CSBattlePreviewPage::LayoutPreviewControlToolbar('
+Assert-Contains $toolbar 'DynamicActivationButtonVisible\(\)[\s\S]*m_activationButton' 'preview toolbar exposes activation only when the selected target is actionable'
+Assert-Contains $toolbar 'DynamicVariableButtonVisible\(\)[\s\S]*m_variableControlButton' 'preview toolbar exposes variable control when available'
 
 Write-Output 'BATTLE_CONDITION_COMPANIONS_PASS'

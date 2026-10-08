@@ -150,6 +150,20 @@ const ccz::preview::RawReplayNode* FindNodeByHandle(
     return nullptr;
 }
 
+const ccz::preview::RawReplayNode* FindNodeAtPath(
+    const std::vector<ccz::preview::RawReplayNode>& roots,
+    const std::vector<std::uint32_t>& path) {
+    if (roots.empty() || path.empty() || path.front() >= roots.size())
+        return nullptr;
+    const ccz::preview::RawReplayNode* current = &roots[path.front()];
+    for (std::size_t index = 1; index < path.size(); ++index) {
+        const std::uint32_t child_index = path[index];
+        if (child_index >= current->children.size()) return nullptr;
+        current = &current->children[child_index];
+    }
+    return current;
+}
+
 ccz::preview::LogicalNodeKey ScopePrefix(
     const ccz::preview::RawReplayNode& node) {
     constexpr wchar_t marker[] = L"|instruction:";
@@ -223,6 +237,31 @@ BattlePreviewCapture BuildBattlePreviewInput(
 
     result.input.section_revision = ComputeBattleSectionRevision(
         document_path, snapshot.section_root);
+
+    if (snapshot.selected_handle != 0) {
+        std::vector<std::uint32_t> selected_document_path;
+        selected_document_path.reserve(1 + snapshot.section_path.size() +
+                                       snapshot.selected_path.size());
+        // CapturedEditorTree keeps the native document root as its first
+        // converted root. section_path and selected_path are relative to that
+        // root, just like R's selected path is relative to its Section.
+        selected_document_path.push_back(0);
+        selected_document_path.insert(selected_document_path.end(),
+            snapshot.section_path.begin(), snapshot.section_path.end());
+        selected_document_path.insert(selected_document_path.end(),
+            snapshot.selected_path.begin(), snapshot.selected_path.end());
+        const ccz::preview::RawReplayNode* selected = FindNodeAtPath(
+            result.input.nodes, selected_document_path);
+        // Selecting the Section itself is normalized to its first event
+        // boundary by CaptureEditorTreeSnapshot. In that one case the path
+        // intentionally points at the boundary, not at selected_handle.
+        if (selected != nullptr &&
+            (selected->runtime_handle == snapshot.selected_handle ||
+             snapshot.section_root.runtime_handle ==
+                 snapshot.selected_handle)) {
+            result.selected_target_key = selected->logical_key;
+        }
+    }
 
     result.mode = ccz::preview::classify_preview_mode(
         result.input.document_path, result.input.nodes);

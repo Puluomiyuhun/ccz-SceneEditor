@@ -216,6 +216,7 @@ BattleConditionTreeBuild BuildBattleConditionTree(
 
     ccz::preview::SectionInput input;
     input.section_key = capture.input.scope_key;
+    input.selected_target_key = capture.selected_target_key;
     input.nodes = raw_section->children;
     ccz::preview::SectionExecutionModel model =
         ccz::preview::build_section_execution_model(input, catalog, options);

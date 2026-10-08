@@ -23,6 +23,7 @@ struct NativeReplayPlan {
     bool target_reached{};
     bool complete{};
     std::wstring diagnostic;
+    std::vector<LogicalNodeKey> unresolved_status_predicates;
 };
 
 NativeReplayPlan build_native_replay_plan(
@@ -39,5 +40,23 @@ NativeReplayPlan build_native_replay_plan_to_end(
     const DialogueProfile& profile,
     const ReplayOptions& options);
 
-}  // namespace ccz::preview
+// Build the reachable Section path for S battlefield projection. In addition
+// to the standard scene effects, this retains 0x55/0x58, while sharing the
+// same condition and Choice evaluation.
+NativeReplayPlan build_native_battle_map_plan_to_end(
+    const SectionExecutionModel& model,
+    const DialogueProfile& profile,
+    const ReplayOptions& options,
+    SimulationEnvironment* output_environment = nullptr);
 
+// Build the reachable S battlefield command prefix through and including a
+// selected instruction. This preserves condition/Choice traversal while
+// retaining commands supported by the static S map projection.
+NativeReplayPlan build_native_battle_map_plan_through_target(
+    const SectionExecutionModel& model,
+    const LogicalNodeKey& target_node,
+    const DialogueProfile& profile,
+    const ReplayOptions& options,
+    SimulationEnvironment* output_environment = nullptr);
+
+}  // namespace ccz::preview

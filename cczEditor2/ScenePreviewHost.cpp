@@ -33,6 +33,7 @@ CScenePreviewWnd::Page CScenePreviewWnd::PageForPath(
 
 void CScenePreviewWnd::ShowPage(Page page)
 {
+	if (m_documentOpenDepth != 0) return;
 	const bool pageChanged = m_activePage != page;
 	m_activePage = page;
 	if (m_rPage.GetSafeHwnd() != nullptr) {
@@ -97,6 +98,7 @@ void CScenePreviewWnd::OnSize(UINT type, int cx, int cy)
 bool CScenePreviewWnd::RequestPreviewRefresh(
 	CTreeCtrl& tree, HTREEITEM selectedItem, CcczEditor2Doc& document)
 {
+	if (m_documentOpenDepth != 0) return true;
 	const wchar_t* documentPath = document.pathName;
 	const Page page = PageForPath(documentPath);
 	if (page == Page::RScene) {
@@ -135,6 +137,7 @@ bool CScenePreviewWnd::RequestPreviewRefresh(
 bool CScenePreviewWnd::ActivateScriptPreview(
 	CTreeCtrl& tree, HTREEITEM selectedItem, CcczEditor2Doc& document)
 {
+	if (m_documentOpenDepth != 0) return true;
 	const Page page = PageForPath(document.pathName);
 	if (page == Page::RScene) {
 		ParkActiveSBattleDocument();
@@ -191,7 +194,8 @@ bool CScenePreviewWnd::ActivateSBattleDocument(
 	reusedUnchangedSession = switchingDocument &&
 		sameDocumentPath &&
 		activationCheck ==
-			ccz::editor_preview::BattlePreviewActivationCheck::ReuseSession;
+			ccz::editor_preview::BattlePreviewActivationCheck::ReuseSession &&
+		!session.ui.dynamic_preview_enabled;
 	m_activeSBattleDocumentId = documentId;
 	m_sPage.BindSession(session, document, tree);
 	return true;
@@ -307,8 +311,22 @@ void CScenePreviewWnd::InvalidatePendingPreviewRefresh(
 	// or mark it stale instead of silently clearing it here.
 }
 
+void CScenePreviewWnd::EndDocumentOpen()
+{
+	if (m_documentOpenDepth == 0 || --m_documentOpenDepth != 0) return;
+	CMainFrame* frame = DYNAMIC_DOWNCAST(CMainFrame, AfxGetMainWnd());
+	CMDIChildWnd* child = frame != nullptr ? frame->MDIGetActive() : nullptr;
+	CcczEditor2View* view = child != nullptr
+		? DYNAMIC_DOWNCAST(CcczEditor2View, child->GetActiveView()) : nullptr;
+	// Never replay pointers captured by an intermediate activation: the MDI
+	// owner and its tree are stable only after OpenDocumentFile returns.
+	if (view != nullptr && view->m_previewTreeInitialized)
+		view->RefreshScenePreview();
+}
+
 void CScenePreviewWnd::InitCharList(wchar_t(*pPer2)[30])
 {
+	if (m_documentOpenDepth != 0) return;
 	// This compatibility entrypoint belongs exclusively to the R page.
 	if (m_activePage == Page::RScene)
 		m_rPage.InitCharList(pPer2);

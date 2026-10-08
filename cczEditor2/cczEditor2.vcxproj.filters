@@ -27,6 +27,9 @@
     <ClInclude Include="targetver.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="TemplateLibraryPane.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="TemplateLibrary\TemplateModel.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="TemplateLibrary\TemplateStore.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="MainFrm.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -57,6 +60,8 @@
     <ClInclude Include="PropertiesWnd.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleObstacleParametersPane.h" />
+    <ClInclude Include="PreviewPrimaryActionButton.h" />
     <ClInclude Include="ScenePreviewWnd.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -213,6 +218,9 @@
     <ClInclude Include="PreviewIntegration\DynamicPlaybackSession.h">
       <Filter>PreviewIntegration</Filter>
     </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleDynamicMapReplay.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
     <ClInclude Include="PreviewIntegration\PlaybackInterpolation.h">
       <Filter>PreviewIntegration</Filter>
     </ClInclude>
@@ -221,6 +229,7 @@
     <ClCompile Include="cczEditor2.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="TemplateLibraryPane.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="MainFrm.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -360,6 +369,9 @@
       <Filter>PreviewIntegration</Filter>
     </ClCompile>
     <ClCompile Include="PreviewIntegration\DynamicPlaybackSession.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleDynamicMapReplay.cpp">
       <Filter>PreviewIntegration</Filter>
     </ClCompile>
   </ItemGroup>

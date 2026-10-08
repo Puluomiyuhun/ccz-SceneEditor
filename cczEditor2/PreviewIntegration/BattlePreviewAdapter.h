@@ -29,6 +29,11 @@ struct BattlePreviewCapture {
     bool ok{};
     BattlePreviewInput input;
     CapturedEditorTree snapshot;
+    // Logical key of the selected node in the full-document input. R preview
+    // carries this identity directly into its active frame; S uses it for the
+    // activation shortcut without searching the transformed execution model
+    // by native TreeView handle.
+    ccz::preview::LogicalNodeKey selected_target_key;
     ccz::preview::BattleModeDecision mode;
     std::wstring diagnostic;
 };

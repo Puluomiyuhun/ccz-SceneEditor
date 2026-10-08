@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "CMyComboBox.h"
 
 namespace {
@@ -37,6 +37,15 @@ BEGIN_MESSAGE_MAP(CMyComboBox, CComboBox)
     ON_CONTROL(EN_SETFOCUS, kIndexedSearchEditId, OnSearchEditSetFocus)
     ON_CONTROL(EN_KILLFOCUS, kIndexedSearchEditId, OnSearchEditKillFocus)
 END_MESSAGE_MAP()
+
+LRESULT CMyComboBox::WindowProc(UINT message, WPARAM wparam, LPARAM lparam)
+{
+    const auto result=CComboBox::WindowProc(message,wparam,lparam);
+    // Indexed search uses an overlay edit; it must follow late font assignments.
+    if(message==WM_SETFONT && search_edit_.GetSafeHwnd())
+        search_edit_.SendMessage(WM_SETFONT,wparam,lparam);
+    return result;
+}
 
 int CMyComboBox::AddString(LPCTSTR lpszString)
 {
@@ -138,6 +147,11 @@ void CMyComboBox::EnablePersonSearch()
     ConfigureIndexedMode(IndexedMode::Person);
 }
 
+void CMyComboBox::EnableInstructionSearch()
+{
+    ConfigureIndexedMode(IndexedMode::Instruction);
+}
+
 void CMyComboBox::EnableItemSearch()
 {
     ConfigureIndexedMode(IndexedMode::Item);
@@ -176,9 +190,12 @@ void CMyComboBox::ConfigureIndexedMode(IndexedMode mode, int first_global_code)
         option.numeric_code = -1;
         option.numeric_searchable = true;
         option.numeric_resolvable = true;
+        option.hexadecimal = mode == IndexedMode::Instruction;
 
         int code = -1;
-        if (mode == IndexedMode::Person) {
+        if (mode == IndexedMode::Instruction) {
+            option.numeric_code = option.selection_value;
+        } else if (mode == IndexedMode::Person) {
             if (ccz::editor::ExtractLeadingDecimalCode(option.label, code) && code >= 0 && code <= 1023) {
                 option.numeric_code = code;
             }
@@ -356,7 +373,7 @@ void CMyComboBox::BringSearchMatchIntoView(const CString& query)
     filter_candidate_indexes_ = matches;
     int selection = -1;
     const bool numeric_match =
-        ccz::editor::ResolveDecimalCode(indexed_options_, query_text, selection);
+        ccz::editor::ResolveIndexedCode(indexed_options_, query_text, selection);
     if (!numeric_match) {
         if (matches.empty()) return;
         if (indexed_selection_valid_) {
@@ -473,6 +490,10 @@ bool CMyComboBox::CommitIndexedInput()
     text.Trim();
     const std::wstring query = CStringToWString(text);
     if (query.empty()) {
+        if (indexed_mode_ == IndexedMode::Instruction) {
+            indexed_selection_valid_ = false;
+            return false;
+        }
         if (indexed_selection_valid_) {
             SetCanonicalSelection(indexed_selection_);
             notify_if_needed();
@@ -483,7 +504,7 @@ bool CMyComboBox::CommitIndexedInput()
     }
 
     int selection = -1;
-    if (ccz::editor::ResolveDecimalCode(indexed_options_, query, selection)) {
+    if (ccz::editor::ResolveIndexedCode(indexed_options_, query, selection)) {
         SetCanonicalSelection(selection);
         notify_if_needed();
         return true;
@@ -508,6 +529,12 @@ bool CMyComboBox::CommitIndexedInput()
         return indexed_selection_valid_;
     }
 
+    if (indexed_mode_ == IndexedMode::Instruction) {
+        // Keep a bad draft visible. Restoring an old value during focus loss
+        // would let the dialog's subsequent OK silently accept that value.
+        indexed_selection_valid_ = false;
+        return false;
+    }
     RestoreFullOptionList();
     RestoreLastSelectionText();
     return false;
@@ -574,6 +601,7 @@ BOOL CMyComboBox::OnSelectionEndCancelReflect()
 
     const bool had_selection = dropdown_open_selection_valid_;
     const int selection = dropdown_open_selection_;
+    const bool keep_instruction_draft = indexed_mode_ == IndexedMode::Instruction && auto_filter_dropdown_;
     dropdown_open_ = false;
     dropdown_selection_accepted_ = false;
     dropdown_cancelled_ = true;
@@ -587,6 +615,7 @@ BOOL CMyComboBox::OnSelectionEndCancelReflect()
     // Esc must restore the logical value that was active before the list was
     // opened.  This also restores the overlay text after CBN_SELCHANGE has
     // moved the native highlight.
+    if (keep_instruction_draft) return TRUE;
     if (had_selection) SetCanonicalSelection(selection);
     else RestoreLastSelectionText();
     return TRUE;
@@ -655,6 +684,8 @@ bool CMyComboBox::CommitNativeDropDownSelection()
     dropdown_highlight_selection_ = -1;
     auto_filter_dropdown_ = false;
     if (!accepted || row < 0 || row >= static_cast<int>(visible_option_indexes_.size())) {
+        if (indexed_mode_ == IndexedMode::Instruction && was_auto_filter_popup)
+            return false;
         if (had_selection) SetCanonicalSelection(selection);
         else RestoreLastSelectionText();
         return true;

@@ -19,6 +19,8 @@ CCZ_TEST(battle_preview_document_session_distinguishes_same_path_documents)
 	second.editor_state.mouse_direction = 3;
 	first.ui.quick_mode_enabled = true;
 	second.ui.quick_mode_enabled = false;
+	first.ui.dynamic_preview_enabled = true;
+	second.ui.dynamic_preview_enabled = false;
 	first.ui.parameter_preview_mode = BattleParameterPreviewMode::AiPolicy;
 	second.ui.parameter_preview_mode = BattleParameterPreviewMode::None;
 	first.ui.copy_person_mode = true;
@@ -43,6 +45,8 @@ CCZ_TEST(battle_preview_document_session_distinguishes_same_path_documents)
 	CCZ_REQUIRE_EQ(second.editor_state.mouse_direction, 3);
 	CCZ_REQUIRE(first.ui.quick_mode_enabled);
 	CCZ_REQUIRE(!second.ui.quick_mode_enabled);
+	CCZ_REQUIRE(first.ui.dynamic_preview_enabled);
+	CCZ_REQUIRE(!second.ui.dynamic_preview_enabled);
 	CCZ_REQUIRE_EQ(first.ui.parameter_preview_mode,
 		BattleParameterPreviewMode::AiPolicy);
 	CCZ_REQUIRE_EQ(second.ui.parameter_preview_mode,

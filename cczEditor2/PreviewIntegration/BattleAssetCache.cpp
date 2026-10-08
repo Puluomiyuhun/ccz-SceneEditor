@@ -53,9 +53,9 @@ std::uint64_t file_revision(const std::wstring& path) {
 }
 
 std::uint64_t root_resource_revision(const std::wstring& root) {
-    const std::array<std::wstring, 4> paths = {
+    const std::array<std::wstring, 6> paths = {
         root + L"Data.e5", root + L"Hexzmap.e5",
-        root + L"Unit_mov.e5", root + L"Ekd5.exe"};
+        root + L"Unit_mov.e5", root + L"Ekd5.exe", root + L"Unit_atk.e5", root + L"Unit_spc.e5"};
     std::uint64_t revision = 0x9E3779B97F4A7C15ull;
     for (const auto& path : paths) {
         const std::uint64_t value = file_revision(path);
@@ -321,7 +321,7 @@ bool BattleAssetCache::LoadUnitSpriteAssets(const std::wstring& root,
 
 bool BattleAssetCache::ResolveUnitSprite(int data_id, int arm_kind,
                                          int direction,
-                                         UnitSpriteRef* result) const noexcept {
+                                         UnitSpriteRef* result, int action) const noexcept {
     if (result == nullptr) return false;
     *result = {};
     if (!unit_sprite_ready_ || data_id < 0 ||
@@ -377,6 +377,22 @@ bool BattleAssetCache::ResolveUnitSprite(int data_id, int arm_kind,
         return false;
     }
     result->resource_index = resource_index;
+    if(action>=1 && action<=12) {
+        const int raw=direction>=0&&direction<=3?direction:0;
+        if(action==1 || action==2 || action==3 || action==10) {
+            result->archive=2;result->frame=action==1?4:(action==3||action==10)?3:raw==0?1:raw==2?0:2;
+            result->flip_x=action==2 && raw==1;
+        } else if(action>=5 && action<=7) {
+            // Native 403B96: three direction groups, four 64x64 attack frames.
+            result->archive=1;result->frame_pixels=64;
+            result->frame=(raw==0?4:raw==2?0:8)+(action==5?0:2);
+            result->flip_x=raw==1;
+        } else if(action==4 || action==9) {
+            result->frame=9;result->flip_x=false;
+        } else { // Static representative of turning animation, not playback.
+            result->frame=6;result->flip_x=false;
+        }
+    }
     return true;
 }
 

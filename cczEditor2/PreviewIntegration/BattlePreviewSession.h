@@ -1,9 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "BattleConditionTreeAdapter.h"
 #include "BattleBitmapCachePolicy.h"
 #include "BattleEditorOps.h"
 #include "BattleMapOperations.h"
+#include "BattleObstacleSelection.h"
+#include "BattleOwnUnitBindings.h"
 #include "BattlePreviewAdapter.h"
 #include "BattleWritebackAdapter.h"
 
@@ -57,6 +59,7 @@ struct BattlePreviewUiState {
 	bool sidebar_visible{true};
 	bool brush_tab_active{};
 	bool quick_mode_enabled{true};
+	bool dynamic_preview_enabled{};
 	bool copy_person_mode{};
 	bool unrestricted_terrain_mode{};
 	BattleParameterPreviewMode parameter_preview_mode{
@@ -74,6 +77,15 @@ struct BattleMapOperationUiState {
     bool obstacle_page_active{};
 	int selected_obstacle_type{};
 	BattleObstacleDraftQueue obstacle_drafts;
+	BattleObstacleDefaults obstacle_defaults;
+	BattleObstacleSelection obstacle_selection;
+	struct ObstacleUndo {
+		BattleObstacleDraftQueue before;
+		BattleObstacleSelection selection;
+		std::size_t native_depth_before{}, native_depth_after{};
+	};
+	std::vector<ObstacleUndo> obstacle_undo;
+	std::vector<BattleSelection> dynamic_selection;
 	std::vector<ccz::preview::BattleUnit> role_operation_units;
 	std::size_t role_operation_anchor_index{};
 	bool role_operation_direction_adjusted{};
@@ -105,11 +117,14 @@ struct BattlePreviewDocumentSession {
 		std::unique_ptr<BattlePreviewConditionWorkspace>> condition_workspaces;
 	ccz::preview::LogicalNodeKey active_workspace_key;
 	BattleConditionScope active_condition_scope;
+    // Manual choices remain separate from derived chain variables.
+    std::map<ccz::preview::LogicalNodeKey,std::pair<std::uint64_t,ccz::preview::ReplayOptions>> dynamic_condition_choices;
 	ccz::preview::ReplayOptions condition_options;
 	ccz::preview::InstructionCatalog condition_catalog;
 	std::shared_ptr<const ccz::preview::SectionExecutionModel> condition_model;
 	ccz::preview::ScriptVariableIndex condition_variable_index;
 	ccz::preview::LogicalNodeKey condition_activation_target;
+	BattleOwnUnitBindings own_unit_bindings;
 	BattlePreviewUiState ui;
 	BattleMapOperationUiState map_operations;
 	std::wstring diagnostic;

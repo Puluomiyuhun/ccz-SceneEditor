@@ -30,6 +30,7 @@ InstructionCatalog catalog() {
     for (const std::uint16_t id : {std::uint16_t(0), std::uint16_t(2),
              std::uint16_t(0x05),
              std::uint16_t(3), std::uint16_t(0x12), std::uint16_t(0x13),
+             std::uint16_t(0x4b),
              std::uint16_t(0x36), std::uint16_t(0x46), std::uint16_t(0x47),
              std::uint16_t(75)}) {
         result.names.emplace(id, L"test instruction");
@@ -192,6 +193,76 @@ CCZ_TEST(battle_condition_tree_resolves_sample_style_0x05_deployments) {
     CCZ_REQUIRE(false_scope.scope.writeback_scope_resolved);
     CCZ_REQUIRE_EQ(false_scope.scope.reachable_deployment_keys,
                    std::vector<LogicalNodeKey>{false_deployment});
+}
+
+CCZ_TEST(battle_condition_tree_keeps_selected_target_for_activation) {
+    const std::wstring predicate_key =
+        kRootEvent + L"|node:0|instruction:5";
+    const std::wstring target_key =
+        predicate_key + L"|node:0|instruction:71";
+    std::vector<std::int32_t> boolean_fields(50, -1);
+    boolean_fields[0] = 700;
+    auto value = capture({node(0, kRootEvent, {
+        node(0x05, predicate_key, {
+            node(0x47, target_key, {}, std::vector<std::int32_t>(12, 0)),
+            node(0, predicate_key + L"|node:1|instruction:0"),
+        }, std::move(boolean_fields)),
+        node(3, kElse, {
+            node(0x46, kFalseDeployment, {}, std::vector<std::int32_t>(11, 0)),
+            node(0, kElse + L"|node:1|instruction:0"),
+        }),
+        node(0, kRootEvent + L"|node:2|instruction:0"),
+    })});
+    value.selected_target_key = target_key;
+
+    ReplayOptions options;
+    options.simulated_variables.boolean_variables[700] = false;
+    const auto built = BuildBattleConditionTree(value, catalog(), options);
+
+    CCZ_REQUIRE(built.ok);
+    CCZ_REQUIRE(built.model != nullptr);
+    CCZ_REQUIRE_EQ(built.model->selected_target_key, target_key);
+    CCZ_REQUIRE(!execution_nodes_reach_target(
+        built.model->body, target_key, options));
+    CCZ_REQUIRE(condition_tree_model_can_activate_target(
+        *built.model, target_key, options));
+}
+
+CCZ_TEST(battle_condition_tree_can_activate_nested_0x4b_subevent_target) {
+    const std::wstring predicate_key =
+        kRootEvent + L"|node:0|instruction:5";
+    const std::wstring container_key =
+        predicate_key + L"|node:1|instruction:2";
+    const std::wstring target_key =
+        container_key + L"|node:0|instruction:75";
+    std::vector<std::int32_t> boolean_fields(50, -1);
+    boolean_fields[0] = 700;
+    auto value = capture({node(0, kRootEvent, {
+        node(0x05, predicate_key, {
+            node(0x01, predicate_key + L"|node:0|instruction:1"),
+            node(0x02, container_key, {
+                node(0x4b, target_key, {}, std::vector<std::int32_t>(20, 0)),
+                node(0, container_key + L"|node:1|instruction:0"),
+            }),
+            node(0, predicate_key + L"|node:2|instruction:0"),
+        }, std::move(boolean_fields)),
+        node(3, kElse, {
+            node(0x46, kFalseDeployment, {}, std::vector<std::int32_t>(11, 0)),
+            node(0, kElse + L"|node:1|instruction:0"),
+        }),
+        node(0, kRootEvent + L"|node:2|instruction:0"),
+    })});
+    value.selected_target_key = target_key;
+
+    ReplayOptions options;
+    options.simulated_variables.boolean_variables[700] = false;
+    const auto built = BuildBattleConditionTree(value, catalog(), options);
+
+    CCZ_REQUIRE(built.ok);
+    CCZ_REQUIRE(built.model != nullptr);
+    CCZ_REQUIRE_EQ(built.model->selected_target_key, target_key);
+    CCZ_REQUIRE(condition_tree_model_can_activate_target(
+        *built.model, target_key, options));
 }
 
 CCZ_TEST(battle_condition_tree_does_not_merge_distinct_deployment_kind_anchors) {

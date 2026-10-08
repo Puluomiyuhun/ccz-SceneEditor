@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <afxwin.h>
 #include "PreviewIntegration/BattleAssetCache.h"
@@ -8,6 +8,14 @@
 #include "PreviewIntegration/BattlePreviewAdapter.h"
 #include "PreviewIntegration/BattleWritebackAdapter.h"
 #include "PreviewIntegration/BattlePreviewSession.h"
+#include "PreviewIntegration/BattleDynamicMapReplay.h"
+#include "PreviewIntegration/BattleObstacleParametersPane.h"
+#include "PreviewIntegration/BattleObstacleSelection.h"
+#include "PreviewIntegration/BattleObstacleBatchPane.h"
+#include "PreviewIntegration/BattleSectionRelations.h"
+#include "PreviewIntegration/BattleCommandParametersPane.h"
+#include "PreviewIntegration/BattleOwnUnitBindingDialog.h"
+#include "PreviewIntegration/BattleSpellAnimation.h"
 #include "PreviewIntegration/EditorTreeSnapshot.h"
 #include "PreviewIntegration/ConditionTreePane.h"
 #include "PreviewIntegration/VariableControlPane.h"
@@ -20,6 +28,7 @@
 #include <ccz/preview/portrait_resolver.h>
 
 #include <GdiPlus.h>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -36,11 +45,7 @@
 class CcczEditor2View;
 class CcczEditor2Doc;
 
-class CBattlePrimaryActionButton : public CButton
-{
-protected:
-	void DrawItem(LPDRAWITEMSTRUCT draw_item) override;
-};
+#include "PreviewPrimaryActionButton.h"
 
 class CBattlePreviewModeButton : public CButton
 {
@@ -66,11 +71,16 @@ class CBattleObstacleButton : public CButton
 public:
 	void SetObstacleType(int type) noexcept { m_obstacleType = type; }
 	void SetSelected(bool selected);
+	void SetSprite(std::shared_ptr<Gdiplus::Bitmap> sprite) {
+		m_sprite = std::move(sprite);
+		if (GetSafeHwnd()) Invalidate(FALSE);
+	}
 
 protected:
 	void DrawItem(LPDRAWITEMSTRUCT draw_item) override;
 
 private:
+	std::shared_ptr<Gdiplus::Bitmap> m_sprite;
 	int m_obstacleType{};
 	bool m_selected{};
 };
@@ -106,6 +116,7 @@ public:
 protected:
 	afx_msg int OnCreate(LPCREATESTRUCT create);
 	afx_msg void OnDestroy();
+	afx_msg void OnTimer(UINT_PTR);
 	afx_msg void OnSize(UINT type, int cx, int cy);
 	afx_msg void OnPaint();
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);
@@ -139,11 +150,45 @@ protected:
 	afx_msg void OnVariableControlClicked();
 	afx_msg void OnUnitParametersClicked();
 	afx_msg void OnPreviewModeClicked();
+	afx_msg void OnDynamicPreviewClicked();
 	afx_msg LRESULT OnConditionActionMessage(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnWriteback();
 	afx_msg void OnObstaclePageClicked();
 	afx_msg void OnObstacleTypeClicked(UINT control_id);
 	afx_msg void OnClearObstacleDrafts();
+	afx_msg void OnObstacleDefaults();
+	afx_msg void OnObstacleMultiSelect();
+	afx_msg void OnMapCommands();
+	afx_msg void OnRegionTool(UINT);
+	afx_msg void OnClearRoleDrafts();
+	void OpenOwnUnitBindings(int initialSlot = -1);
+	bool ToggleObstacleSelectionAt(const ccz::preview::BattleCoord&, bool);
+	bool HandleObstacleGroupContext(CPoint);
+    bool IsObstacleGroupTargetValid(const ccz::preview::BattleCoord&) const;
+	void ShowObstacleGroupParameters();
+	bool ApplyObstacleGroup(const std::vector<ccz::editor_preview::BattleObstacleDraft>&, bool);
+	bool RequireImmediateInstructionSelection();
+	void ApplyHiddenBattleAppear(std::uint64_t, bool);
+	void ApplyBatchBattleDirection(std::uint64_t, int, bool group = true);
+	void OpenFacingDelaySettings(std::vector<ccz::editor_preview::BattleMapOperationInstruction>);
+	void BeginMapCommandSelection(std::uint16_t);
+	void OpenBattleCommand(std::uint16_t, bool, std::uint64_t = 0, bool = false, std::optional<ccz::preview::BattleCoord> = {}, std::optional<ccz::preview::BattleCoord> = {});
+	void BeginBattleFacing(std::uint64_t, bool, bool);
+	bool ApplyBattleFacing(const ccz::preview::BattleUnit*);
+	int PreviewBattleFacing(const ccz::preview::BattleUnit&) const;
+	void BeginDynamicRoleAdjustment(std::uint64_t, bool);
+	bool ConfirmDynamicRoleAdjustment(const ccz::preview::BattleCoord&);
+	bool ApplyDynamicUpdateBatch(ccz::editor_preview::BattleWritebackNativeBatch&, std::wstring&);
+	void DrawEnhancedBattleOverlays(Gdiplus::Graphics&, const ccz::preview::BattlePreviewState&, int, int, float);
+	void SyncBattleSpellAnimations();
+	void FinishObstacleStampUndo();
+	void ShowDynamicPreviewMenu();
+	void AddDynamicPredecessor();
+	void ManageDynamicPredecessors();
+	void UpdateObstacleDraftControls();
+	bool StampObstacleAt(const ccz::preview::BattleCoord& coordinate);
+	bool EditObstacle(const ccz::editor_preview::BattleObstacleDraft& replacement);
+	void ShowObstacleParameters();
 	afx_msg void OnHideSidebar();
 	afx_msg void OnShowSidebar();
 	DECLARE_MESSAGE_MAP()
@@ -195,6 +240,15 @@ private:
 	void ShowPreviewModeMenu();
 	void SetParameterPreviewMode(
 		ccz::editor_preview::BattleParameterPreviewMode mode);
+	bool RefreshDynamicPreview(CTreeCtrl& tree, HTREEITEM selected_item,
+		const wchar_t* document_path);
+	bool RebuildDynamicProjection();
+	void ApplyDynamicProjection();
+	void RefreshDynamicToggle();
+	void EnsureDynamicObstacleSprites();
+	bool DynamicConditionButtonVisible() const noexcept;
+	bool DynamicActivationButtonVisible() const noexcept;
+	bool DynamicVariableButtonVisible() const noexcept;
 	void EnsurePortraitAssets();
 	Gdiplus::Bitmap* GetUnitPortrait(int data_id);
 	Gdiplus::Bitmap* GetOwnFactionPlaceholderPortrait();
@@ -211,7 +265,7 @@ private:
 	void MarkSessionStale(const std::wstring& diagnostic);
 	void LayoutEditorControls();
 	void LayoutObstacleSidebar(const CRect& client);
-	void LayoutCollapsedControlToolbar();
+	void LayoutPreviewControlToolbar();
 	void RefreshEditorControls();
 	void RefreshCharacterList();
 	void RefreshCharacterListIfDeploymentChanged();
@@ -237,12 +291,17 @@ private:
 		HWND source_tree_window = nullptr);
 	bool ActivateConditionScope(
 		const ccz::editor_preview::BattleConditionScope& scope);
+	const ccz::preview::BattlePreviewState& EditingBattle() const;
+	void SelectBoardCell(const ccz::preview::BattleCoord& coordinate, bool toggle);
+	void ClearBoardSelection();
+	std::vector<ccz::editor_preview::BattleSelection> m_dynamicSelection;
 	bool CaptureRoleOperationUnits(std::uint64_t anchor_cache_id,
 		bool include_selection_group,
 		std::vector<ccz::preview::BattleUnit>& units,
 		std::size_t& anchor_index, std::wstring& diagnostic);
 	void RefreshConditionTree();
-	void UpdateConditionActivationTarget(std::uintptr_t runtime_handle);
+	void UpdateConditionActivationTarget(
+		const ccz::preview::LogicalNodeKey& target_key);
 	LRESULT ApplyConditionActionAndRefresh(
 		const ccz::preview::LogicalNodeKey& node_key,
 		ccz::preview::ConditionTreeAction action,
@@ -294,6 +353,7 @@ private:
 	void ApplyMagentaTransparency(Gdiplus::Bitmap* bitmap);
 
 	ccz::editor_preview::BattleAssetCache m_assets;
+	ccz::editor_preview::BattleAssetCache m_dynamicAssets;
 	ccz::editor_preview::PreviewAssetCache m_portraitAssets;
 	ccz::editor_preview::BattlePreviewDocumentSession m_unboundSession;
 	ccz::editor_preview::BattlePreviewDocumentSession* m_activeSession{};
@@ -305,17 +365,49 @@ private:
 	CButton m_showSidebarButton;
 	CButton m_previousPageButton;
 	CButton m_nextPageButton;
-	CButton m_undoButton;
+	CBattlePrimaryActionButton m_undoButton;
 	CButton m_quickModeButton;
 	CButton m_copyPersonModeButton;
 	CButton m_unrestrictedTerrainModeButton;
 	CButton m_conditionTreeButton;
-	CButton m_activationButton;
+	CBattlePrimaryActionButton m_activationButton;
 	CButton m_variableControlButton;
 	CButton m_unitParametersButton;
+	CBattlePreviewModeButton m_dynamicPreviewButton;
+	CButton m_mapCommandsButton;
+	CButton m_regionToolButtons[9];
+	CButton m_clearRoleDraftsButton;
+	bool m_regionToolsExpanded{};
+	CButton m_obstacleMultiSelectButton;
+	ccz::editor_preview::BattleObstacleSelection m_obstacleSelection;
+	CBattleObstacleBatchPane m_obstacleBatchPane;
+	CBattleCommandParametersPane m_commandParametersPane;
+	ccz::editor_preview::BattleSectionRelations m_dynamicSectionRelations;
+	std::wstring m_dynamicPredecessorBanner;
+	ccz::preview::ReplayOptions m_dynamicReplayOptions;
+	std::map<std::uint64_t,ccz::editor_preview::BattleDynamicPositionOrigin> m_dynamicAdjustOrigins;
+	std::uint64_t m_dynamicAdjustEpoch{}, m_dynamicAdjustGeneration{};
+	std::optional<ccz::editor_preview::BattleMapOperationUiState::ObstacleUndo> m_obstacleStampUndo;
+	struct SpellPreview { ccz::preview::BattleCoord coordinate; ccz::editor_preview::BattleSpellAnimationAsset asset; };
+	std::vector<SpellPreview> m_spellPreviews;
+	std::wstring m_spellSignature;
+	std::size_t m_spellFrame{};
 	CButton m_obstaclePageButton;
 	CBattleObstacleButton m_obstacleTypeButtons[3];
+	CStatic m_obstaclePageTitle;
 	CButton m_clearObstacleDraftsButton;
+	CButton m_obstacleDefaultsButton;
+	CBattleObstacleParametersPane m_obstacleParametersPane;
+	ccz::editor_preview::BattleObstacleDefaults m_obstacleDefaults;
+	struct ObstacleEditTarget {
+		bool draft{};
+		ccz::editor_preview::BattleObstacleDraft value;
+		ccz::editor_preview::BattleDynamicObstacle source;
+		std::uint64_t document_id{}, tree_generation{}, content_epoch{};
+	};
+	std::optional<ObstacleEditTarget> m_obstacleEditTarget;
+	bool m_obstacleStampActive{};
+	std::optional<ccz::preview::BattleCoord> m_obstacleLastStamp;
 	CStatic m_mapOperationStatus;
 	CBattlePreviewModeButton m_previewModeButton;
 	CConditionTreePane m_conditionTreePane;
@@ -340,6 +432,40 @@ private:
 	bool m_controlsCreated = false;
 	bool m_restoringSessionUi{};
 	Gdiplus::Bitmap* m_mapBitmap = nullptr;
+	std::unique_ptr<Gdiplus::Bitmap> m_dynamicMapBitmap;
+	std::wstring m_dynamicMapImagePath;
+	std::uint64_t m_dynamicMapImageRevision{};
+	std::array<std::shared_ptr<Gdiplus::Bitmap>, 3> m_dynamicObstacleSprites;
+	bool m_obstacleAssetsAttempted{};
+	std::wstring m_dynamicObstacleAssetPath;
+	std::uint64_t m_dynamicObstacleAssetRevision{};
+	std::wstring m_dynamicDiagnostic;
+	ccz::editor_preview::BattlePreviewCapture m_dynamicTargetCapture;
+	std::shared_ptr<const ccz::preview::SectionExecutionModel>
+		m_dynamicConditionModel;
+	ccz::preview::ReplayOptions m_dynamicConditionOptions;
+	ccz::preview::ScriptVariableIndex m_dynamicVariableIndex;
+	ccz::preview::LogicalNodeKey m_dynamicActivationTarget;
+	ccz::preview::LogicalNodeKey m_dynamicTargetNode;
+	std::set<ccz::preview::LogicalNodeKey> m_dynamicUnknownStatusConditions;
+	bool m_dynamicTargetIsScene1{};
+	bool m_dynamicTargetIsSectionRoot{};
+	ccz::preview::BattlePreviewState m_dynamicScene1Baseline;
+	std::vector<ccz::editor_preview::BattleDynamicObstacle>
+		m_dynamicScene1Obstacles;
+	ccz::editor_preview::BattleDynamicMapPlan m_dynamicScene1Plan;
+	bool m_dynamicScene1BaselineComplete{};
+	std::wstring m_dynamicBaselineDiagnostic;
+	ccz::editor_preview::BattleDynamicMapPlan m_dynamicPlan;
+	ccz::editor_preview::BattleDynamicMapProjection m_dynamicProjection;
+	CTreeCtrl* m_sourceTreeControl{};
+	std::uint64_t m_dynamicContentEpoch{};
+	std::uint64_t m_dynamicTreeGeneration{};
+	bool m_dynamicPreviewEnabled{};
+	bool m_dynamicPreviewReady{};
+	bool m_dynamicConditionButtonVisible{};
+	bool m_dynamicActivationButtonVisible{};
+	bool m_dynamicVariableButtonVisible{};
 	ccz::editor_preview::BattleBitmapCacheKey m_activeMapKey;
 	std::map<int, Gdiplus::Bitmap*> m_unitSprites;
 	std::map<int, std::unique_ptr<Gdiplus::Bitmap>> m_unitPortraits;
@@ -362,6 +488,7 @@ private:
 	bool m_viewportUpdating = false;
 	bool m_panActive = false;
 	bool m_trackingMouseLeave = false;
+	bool m_brushRefreshPending{};
 	bool m_leftStampActive = false;
 	bool m_selectionGestureActive = false;
 	bool m_selectionDragStarted = false;
@@ -377,10 +504,14 @@ private:
 	std::optional<std::size_t> m_selectedUnit;
 	std::optional<ccz::preview::BattleCoord> m_hoverCell;
 	BattleMapToolMode m_battleMapToolMode{BattleMapToolMode::None};
+	std::uint16_t m_mapCommandId{};
+	std::optional<ccz::preview::BattleCoord> m_mapCommandStart, m_mapCommandEnd;
+	bool m_mapCommandDragging{};
 	bool m_obstaclePageActive{};
 	std::vector<ccz::preview::BattleUnit> m_roleOperationUnits;
 	std::size_t m_roleOperationAnchorIndex{};
 	bool m_roleOperationDirectionAdjusted{};
+	bool m_roleSelectorBattlefield{};
 	int m_roleOperationDirection{-1};
 	int m_selectedObstacleType{};
 	ccz::editor_preview::BattleObstacleDraftQueue m_obstacleDrafts;

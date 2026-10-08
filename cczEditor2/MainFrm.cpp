@@ -138,6 +138,9 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	DockPane(&m_wndProperties);
 	m_wndScenePreview.EnableDocking(CBRS_ALIGN_ANY);
 	DockPane(&m_wndScenePreview);
+	m_wndTemplateLibrary.EnableDocking(CBRS_ALIGN_ANY);
+	DockPane(&m_wndTemplateLibrary);
+	m_wndTemplateLibrary.ShowPane(FALSE, FALSE, FALSE);
 
 	// 基于持久值设置视觉管理器和样式
 	OnApplicationLook(theApp.m_nAppLook);
@@ -265,6 +268,9 @@ BOOL CMainFrame::CreateDockingWindows()
 		return FALSE;
 	}
 	SetDockingWindowIcons(theApp.m_bHiColorIcons);
+	if (!m_wndTemplateLibrary.Create(L"模板库", this, CRect(0, 0, 440, 540), TRUE,
+		ID_VIEW_TEMPLATELIBRARY, WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | CBRS_RIGHT | CBRS_FLOAT_MULTI))
+		return FALSE;
 	return TRUE;
 }
 
@@ -420,6 +426,13 @@ BOOL CMainFrame::LoadFrame(UINT nIDResource, DWORD dwDefaultStyle, CWnd* pParent
 	if (!CMDIFrameWndEx::LoadFrame(nIDResource, dwDefaultStyle, pParentWnd, pContext))
 	{
 		return FALSE;
+	}
+	// Apply the first library layout after MFC restores existing pane state.
+	// Attaching earlier leaves an empty tab container when old layouts load.
+	if (!theApp.GetInt(L"TemplateLibraryDockInitialized", 0)) {
+		m_wndTemplateLibrary.AttachToTabWnd(&m_wndScenePreview, DM_SHOW, FALSE);
+		m_wndTemplateLibrary.ShowPane(FALSE, FALSE, FALSE);
+		theApp.WriteInt(L"TemplateLibraryDockInitialized", 1);
 	}
 
 

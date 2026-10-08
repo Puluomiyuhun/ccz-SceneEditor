@@ -1,0 +1,146 @@
+[
+  {
+    "file": "cczEditor2/BattlePreviewPage.cpp",
+    "last_write": "2026-10-07T19:04:36.887301"
+  },
+  {
+    "file": "cczEditor2/BattlePreviewPage.h",
+    "last_write": "2026-10-07T12:24:37.820148"
+  },
+  {
+    "file": "cczEditor2/cczEditor2.rc",
+    "last_write": "2026-10-07T11:01:34.909832"
+  },
+  {
+    "file": "cczEditor2/cczEditor2.vcxproj",
+    "last_write": "2026-10-07T12:37:10.593187"
+  },
+  {
+    "file": "cczEditor2/cczEditor2View.cpp",
+    "last_write": "2026-10-07T10:57:06.247202"
+  },
+  {
+    "file": "cczEditor2/cczEditor2View.h",
+    "last_write": "2026-10-07T10:56:08.046701"
+  },
+  {
+    "file": "cczEditor2/CMyComboBox.cpp",
+    "last_write": "2026-10-07T11:30:05.942249"
+  },
+  {
+    "file": "cczEditor2/CMyComboBox.h",
+    "last_write": "2026-10-07T10:56:43.777860"
+  },
+  {
+    "file": "cczEditor2/IndexedComboSearch.h",
+    "last_write": "2026-10-07T10:56:43.776851"
+  },
+  {
+    "file": "cczEditor2/MainFrm.cpp",
+    "last_write": "2026-10-07T11:19:20.126593"
+  },
+  {
+    "file": "cczEditor2/MainFrm.h",
+    "last_write": "2026-10-07T10:56:43.779358"
+  },
+  {
+    "file": "cczEditor2/resource.h",
+    "last_write": "2026-10-07T11:19:20.127597"
+  },
+  {
+    "file": "cczEditor2/ScenePreviewWnd.cpp",
+    "last_write": "2026-10-07T12:25:37.790580"
+  },
+  {
+    "file": "cczEditor2/TemplateLibraryPane.cpp",
+    "last_write": "2026-10-07T11:34:45.573984"
+  },
+  {
+    "file": "cczEditor2/TemplateLibraryPane.h",
+    "last_write": "2026-10-07T11:34:45.082654"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleAssetCache.cpp",
+    "last_write": "2026-10-07T12:25:37.775853"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleAssetCache.h",
+    "last_write": "2026-10-07T12:25:37.770041"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleCommandParametersPane.h",
+    "last_write": "2026-10-07T13:47:28.253119"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleDynamicMapReplay.cpp",
+    "last_write": "2026-10-07T19:04:36.881648"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleDynamicMapReplay.h",
+    "last_write": "2026-10-07T19:00:31.480261"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleEnhancedEditing.inl",
+    "last_write": "2026-10-07T13:45:54.650320"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleFacing.h",
+    "last_write": "2026-10-07T12:23:41.978492"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleMapOperations.cpp",
+    "last_write": "2026-10-07T13:45:54.649174"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleMapOperations.h",
+    "last_write": "2026-10-07T13:45:54.646055"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleOwnUnitBindingDialog.h",
+    "last_write": "2026-10-07T10:03:21.517033"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattleOwnUnitBindings.h",
+    "last_write": "2026-10-07T10:00:41.875399"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/BattlePreviewSession.h",
+    "last_write": "2026-10-07T09:53:54.229444"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/ConditionTreePane.cpp",
+    "last_write": "2026-10-07T09:58:57.222822"
+  },
+  {
+    "file": "cczEditor2/PreviewIntegration/E5ImageLoader.h",
+    "last_write": "2026-10-07T12:25:37.778970"
+  },
+  {
+    "file": "cczEditor2/TemplateLibrary/TemplateModel.h",
+    "last_write": "2026-10-07T11:17:17.198407"
+  },
+  {
+    "file": "cczEditor2/TemplateLibrary/TemplateNativeEditing.inl",
+    "last_write": "2026-10-07T18:57:16.113910"
+  },
+  {
+    "file": "cczEditor2/TemplateLibrary/TemplateStore.h",
+    "last_write": "2026-10-07T11:21:02.820381"
+  },
+  {
+    "file": "cczPreviewCore/src/condition_tree_state.cpp",
+    "last_write": "2026-10-07T10:01:24.419088"
+  },
+  {
+    "file": "cczPreviewCore/src/native_replay_plan.cpp",
+    "last_write": "2026-10-07T12:23:41.977474"
+  },
+  {
+    "file": "cczPreviewCore/include/ccz/preview/execution_model.h",
+    "last_write": "2026-10-07T09:58:57.218659"
+  },
+  {
+    "file": "cczPreviewCore/include/ccz/preview/native_replay_plan.h",
+    "last_write": "2026-10-07T09:54:44.164256"
+  }
+]

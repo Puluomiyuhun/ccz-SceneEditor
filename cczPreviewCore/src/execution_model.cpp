@@ -128,7 +128,8 @@ ExecutionNodeList classify_sequence(
 
 ExecutionNode make_execution_node(const RawReplayNode& raw,
                                   const InstructionCatalog& catalog,
-                                  const ReplayOptions& options) {
+                                  const ReplayOptions& options,
+                                  bool classify_children = true) {
     ExecutionNode result{};
     result.logical_key = raw.logical_key;
     result.runtime_handle = raw.runtime_handle;
@@ -238,6 +239,10 @@ ExecutionNode make_execution_node(const RawReplayNode& raw,
                           L"未注册的指令，按诊断节点保留");
     }
 
+    if (!classify_children) {
+        return result;
+    }
+
     if (result.category == ExecutionCategory::Predicate) {
         const auto state = options.predicate_states.find(result.logical_key);
         result.predicate_state = state == options.predicate_states.end()
@@ -331,15 +336,37 @@ ExecutionNodeList classify_sequence(
     const std::vector<RawReplayNode>& raw_nodes,
     const InstructionCatalog& catalog,
     const ReplayOptions& options) {
+    struct SequenceEntry {
+        const RawReplayNode* node{};
+        bool marker_wrapper{};
+    };
+
+    std::vector<SequenceEntry> sequence;
+    const auto append_transparent_markers =
+        [&](const auto& self, const RawReplayNode& raw) -> void {
+            const bool marker_wrapper =
+                raw.instruction_id == 0x01 && !raw.children.empty();
+            sequence.push_back({&raw, marker_wrapper});
+            if (marker_wrapper) {
+                for (const RawReplayNode& child : raw.children) {
+                    self(self, child);
+                }
+            }
+        };
+    for (const RawReplayNode& raw : raw_nodes) {
+        append_transparent_markers(append_transparent_markers, raw);
+    }
+
     ExecutionNodeList classified;
-    classified.reserve(raw_nodes.size());
+    classified.reserve(sequence.size());
 
     std::size_t pending_predicate = kNoIndex;
     bool can_bind_else = false;
 
     std::size_t index = 0;
-    while (index < raw_nodes.size()) {
-        const RawReplayNode& raw = raw_nodes[index];
+    while (index < sequence.size()) {
+        const SequenceEntry& entry = sequence[index];
+        const RawReplayNode& raw = *entry.node;
         if (raw.instruction_id == 0x12) {
             ExecutionNode choice = make_execution_node(raw, catalog, options);
             choice.cases.clear();
@@ -365,10 +392,10 @@ ExecutionNodeList classify_sequence(
                 classify_sequence(ordinary_children, catalog, options);
 
             std::size_t next = index + 1;
-            while (next < raw_nodes.size() &&
-                   raw_nodes[next].instruction_id == 0x13) {
+            while (next < sequence.size() &&
+                   sequence[next].node->instruction_id == 0x13) {
                 choice.cases.push_back(
-                    make_case_node(raw_nodes[next], catalog, options));
+                    make_case_node(*sequence[next].node, catalog, options));
                 ++next;
             }
 
@@ -386,7 +413,8 @@ ExecutionNodeList classify_sequence(
             continue;
         }
 
-        ExecutionNode node = make_execution_node(raw, catalog, options);
+        ExecutionNode node = make_execution_node(
+            raw, catalog, options, !entry.marker_wrapper);
         if (raw.instruction_id == 0x13) {
             node.category = ExecutionCategory::Case;
             node.predicate_kind = PredicateKind::None;
@@ -1138,6 +1166,14 @@ bool evaluate_boolean_variable_expression(
         return false;
     }
 
+    if (environment.boolean_values_invalidated) {
+        for (const auto* variables : {&expression.true_variables, &expression.false_variables})
+            for (auto variable : *variables) if (!environment.known_boolean_assignments.count(variable)) {
+                if (diagnostic) *diagnostic=L"局部变量初始化后的布尔值未确定";
+                return false;
+            }
+    }
+
     for (const std::int32_t variable : expression.true_variables) {
         if (std::find(expression.false_variables.begin(),
                       expression.false_variables.end(), variable) !=
@@ -1536,6 +1572,10 @@ bool evaluate_integer_expression(const IntegerComparisonExpression& expression,
                 value = operand.raw_value;
                 return true;
             case IntegerOperandKind::IntegerVariable: {
+                if (environment.unknown_integer_variables.count(operand.raw_value)) {
+                    if (diagnostic) *diagnostic=L"前序指令写入的整型变量值未确定";
+                    return false;
+                }
                 const auto found =
                     environment.integer_variables.find(operand.raw_value);
                 value = found == environment.integer_variables.end()

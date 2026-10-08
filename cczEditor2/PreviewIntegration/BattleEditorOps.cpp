@@ -1,4 +1,4 @@
-#include "BattleEditorOps.h"
+﻿#include "BattleEditorOps.h"
 #include "BattlePreviewPredicates.h"
 
 #include <ccz/preview/battle_field_spec.h>
@@ -758,9 +758,19 @@ bool BattleEditorOps::CompleteTerrain(const BattleEditorState& state) {
     return complete_terrain(state.battle);
 }
 
+bool BattleEditorOps::TerrainAllowsUnit(const ccz::preview::BattleCoord& coordinate,
+ const ccz::preview::BattleUnit& unit,std::wstring& diagnostic) const {
+ if(state_ && unit.source_instruction==0x4b && !unit.editor_staged_new){
+  const auto binding=state_->own_unit_bindings.find(unit.deployment_index);
+  if(binding!=state_->own_unit_bindings.end())return TerrainAllows(coordinate,binding->second,diagnostic);
+  return TerrainAllows(coordinate,-1,diagnostic,0);
+ }
+ return TerrainAllows(coordinate,unit.data_id,diagnostic);
+}
+
 bool BattleEditorOps::TerrainAllows(
     const ccz::preview::BattleCoord& coordinate, int data_id,
-    std::wstring& diagnostic) const {
+    std::wstring& diagnostic, int movement_class_override) const {
     if (state_ == nullptr) {
         diagnostic = L"战场编辑器状态为空，无法校验地形";
         return false;
@@ -777,7 +787,7 @@ bool BattleEditorOps::TerrainAllows(
         [data_id](const BattleCharacterEntry& entry) {
             return entry.data_id == data_id;
         });
-    if (data_id < 0 || character == state_->characters.entries.end()) {
+    if (movement_class_override < 0 && (data_id < 0 || character == state_->characters.entries.end())) {
         diagnostic = L"无法确定该单位的 Data.e5 兵种，地形校验失败";
         return false;
     }
@@ -795,7 +805,7 @@ bool BattleEditorOps::TerrainAllows(
         return false;
     }
     const auto cost = ccz::preview::battle_movement_terrain_cost(
-        *state_->movement_terrain, character->movement_class_code, terrain_id);
+        *state_->movement_terrain, movement_class_override >= 0 ? movement_class_override : character->movement_class_code, terrain_id);
     if (!cost.has_value()) {
         diagnostic = L"Data.e5 兵种地形表、兵种码或地形编号无效，拒绝放置";
         return false;
@@ -1406,7 +1416,7 @@ BattlePlacementPreview BattleEditorOps::PreviewPositionAdjustment(
             return result;
         }
         if (destination.position != member->position &&
-            !TerrainAllows(destination.position, member->data_id,
+            !TerrainAllowsUnit(destination.position, *member,
                            result.diagnostic)) {
             if (result.diagnostic.empty())
                 result.diagnostic = L"战场目标格受兵种地形限制，拒绝位置预览";
@@ -1623,7 +1633,7 @@ BattleEditorResult BattleEditorOps::ModifyAt(
                 proposed.battle.map.height)) {
             return failure(L"修改后的战场坐标越界或地形未闭合");
         }
-        if (!TerrainAllows(*patch.position, unit.data_id, diagnostic)) {
+        if (!TerrainAllowsUnit(*patch.position, unit, diagnostic)) {
             return failure(diagnostic.c_str());
         }
         for (std::size_t index = 0; index < proposed.battle.units.size(); ++index) {

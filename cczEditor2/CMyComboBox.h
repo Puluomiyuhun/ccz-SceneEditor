@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <afxwin.h>
 #include <vector>
 #include "IndexedComboSearch.h"
@@ -28,6 +28,7 @@ public:
         Person,
         Item,
         ItemSegment,
+        Instruction,
     };
 
     CMyComboBox() = default;
@@ -36,6 +37,7 @@ public:
     // the combo.  Existing list indexes remain the values written by the
     // dialogs; filtering only changes the visible rows.
     void EnablePersonSearch();
+    void EnableInstructionSearch();
     void EnableItemSearch();
     void EnableItemSegmentSearch(int first_global_code);
     bool CommitIndexedInput();
@@ -47,6 +49,9 @@ public:
     int GetCurSel() const;
     int SetCurSel(int nSelect);
     virtual BOOL PreTranslateMessage(MSG* pMsg);
+
+protected:
+    LRESULT WindowProc(UINT message, WPARAM wparam, LPARAM lparam) override;
 
 private:
     void ConfigureIndexedMode(IndexedMode mode, int first_global_code = 0);

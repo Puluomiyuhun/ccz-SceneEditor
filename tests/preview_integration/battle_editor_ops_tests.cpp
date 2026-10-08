@@ -1,4 +1,4 @@
-#include "../../cczPreviewCoreTests/tests/test_framework.h"
+﻿#include "../../cczPreviewCoreTests/tests/test_framework.h"
 
 #include <ccz/preview/battle_hexzmap.h>
 #include <ccz/preview/battle_field_spec.h>
@@ -1408,7 +1408,7 @@ CCZ_TEST(battle_editor_unrestricted_terrain_bypasses_only_the_terrain_gate) {
     CCZ_REQUIRE(!ops.PreviewPlacement({100, 100}).valid);
 }
 
-CCZ_TEST(battle_editor_unknown_loaded_4b_class_fails_closed_for_move) {
+CCZ_TEST(battle_editor_unknown_loaded_4b_class_uses_zero_for_move) {
     auto state = fixture();
     state.battle.units.clear();
     BattleUnit imported = unit(0x4b, 0, 0, -1, 0, 0);
@@ -1418,13 +1418,13 @@ CCZ_TEST(battle_editor_unknown_loaded_4b_class_fails_closed_for_move) {
     BattleUnitPatch patch;
     patch.position = ccz::preview::BattleCoord{1, 1};
 
-    const auto blocked = ops.ModifyAt({0, 0}, patch);
-    CCZ_REQUIRE(!blocked.ok);
-    CCZ_REQUIRE(blocked.diagnostic.find(L"Data") != std::wstring::npos);
+    CCZ_REQUIRE(ops.ModifyAt({0,0},patch).ok);
+    CCZ_REQUIRE_EQ(state.battle.units[0].data_id,-1);
     CCZ_REQUIRE(ops.SetUnrestrictedTerrainMode(true).ok);
-    CCZ_REQUIRE(ops.ModifyAt({0, 0}, patch).ok);
-    patch.position = ccz::preview::BattleCoord{4, 0};
-    CCZ_REQUIRE(!ops.ModifyAt({1, 1}, patch).ok);
+    patch.position=ccz::preview::BattleCoord{2,2};
+    CCZ_REQUIRE(ops.ModifyAt({1,1},patch).ok);
+    patch.position=ccz::preview::BattleCoord{4,0};
+    CCZ_REQUIRE(!ops.ModifyAt({2,2},patch).ok);
 }
 
 CCZ_TEST(battle_editor_rebases_preview_draft_onto_changed_source_fields) {
@@ -1989,4 +1989,20 @@ CCZ_TEST(battle_editor_rebase_preserves_multi_selection_by_source_identity) {
                     !item.editor_pending_delete;
             }));
     }
+}
+
+CCZ_TEST(battle_own_adjustment_uses_class_zero_or_bound_data_without_source_mutation) {
+ for(bool bound:{false,true}){
+  auto state=fixture();state.battle.units.clear();
+  auto own=unit(0x4b,0,0,-1,1,1);own.deployment_index=0;own.editor_origin_fields=own.raw_fields;state.battle.units.push_back(own);
+  auto table=std::make_shared<ccz::preview::BattleMovementTerrainTable>();table->valid=true;table->values.fill(1);
+  table->values[30]=0xff;state.movement_terrain=table;set_movement_class(state,100,3);
+  if(bound)state.own_unit_bindings[0]=100;
+  BattleEditorOps ops(state);CCZ_REQUIRE(ops.SelectAt({1,1}).ok);CCZ_REQUIRE(ops.BeginPositionAdjustment(state.selection->cache_id).ok);
+  const auto preview=ops.PreviewPositionAdjustment({2,2});
+  CCZ_REQUIRE_EQ(preview.valid,!bound);
+  CCZ_REQUIRE_EQ(state.battle.units[0].data_id,-1);CCZ_REQUIRE_EQ(state.battle.units[0].raw_fields,own.raw_fields);
+  table->values[0]=0xff;table->values[30]=1;
+  CCZ_REQUIRE_EQ(ops.PreviewPositionAdjustment({2,2}).valid,bound);
+ }
 }

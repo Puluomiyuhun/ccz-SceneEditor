@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <utility>
+#include <limits>
 
 namespace ccz::preview {
 namespace {
@@ -26,7 +27,8 @@ void append_diagnostic(std::wstring& destination,
     destination += message;
 }
 
-bool is_native_scene_instruction(std::uint16_t instruction_id) {
+bool is_native_scene_instruction(std::uint16_t instruction_id,
+                                 bool include_battle_map_commands) {
     switch (instruction_id) {
         case 0x27:
         case 0x29:
@@ -38,6 +40,23 @@ bool is_native_scene_instruction(std::uint16_t instruction_id) {
         case 0x32:
         case 0x33:
         case 0x34:
+            return true;
+        default:
+            break;
+    }
+    if (!include_battle_map_commands) return false;
+    switch (instruction_id) {
+        case 0x4f:
+        case 0x50:
+        case 0x4d:
+        case 0x4e:
+        case 0x5b:
+        case 0x5c:
+        case 0x6b:
+        case 0x53:
+        case 0x4c:  // Hidden unit appears in the S battle-map projection.
+        case 0x55:  // Battlefield revival.
+        case 0x58:  // Battlefield obstacle.
             return true;
         default:
             return false;
@@ -102,8 +121,10 @@ const ExecutionNode* find_model_node(const SectionExecutionModel& model,
     return find_node(model.body, key);
 }
 
-void append_native_item(NativeReplayPlan& plan, const ExecutionNode& node) {
-    if (!is_native_scene_instruction(node.command.instruction_id)) {
+void append_native_item(NativeReplayPlan& plan, const ExecutionNode& node,
+                        bool include_battle_map_commands) {
+    if (!is_native_scene_instruction(node.command.instruction_id,
+                                     include_battle_map_commands)) {
         return;
     }
 
@@ -124,11 +145,12 @@ PredicateState effective_predicate_state(const ExecutionNode& predicate,
 }
 
 bool evaluate_predicate(const ExecutionNode& predicate,
-                        const ReplayOptions& options, bool& result,
+                        const ReplayOptions& options, SimulationEnvironment* environment, bool& result,
                         std::wstring& diagnostic) {
     const PredicateState state =
         effective_predicate_state(predicate, options);
-    if (state == PredicateState::Unsupported ||
+    if ((state == PredicateState::Unsupported && (!environment ||
+        (!predicate.boolean_expression.decoded && !predicate.integer_expression.decoded))) ||
         predicate.predicate_kind == PredicateKind::Unsupported) {
         diagnostic = L"条件节点的静态回放不支持";
         return false;
@@ -142,10 +164,18 @@ bool evaluate_predicate(const ExecutionNode& predicate,
         return true;
     }
 
+    if (environment && predicate.instruction_id == 0x36 &&
+        !predicate.command.int_data.empty() &&
+        environment->unresolved_battle_status_data_ids.count(predicate.command.int_data[0])) {
+        diagnostic = L"Data " + std::to_wstring(predicate.command.int_data[0]) +
+            L" 的状态变更尚未匹配；该状态条件未知，请在条件树指定结果";
+        return false;
+    }
+
     if (predicate.predicate_kind == PredicateKind::Boolean &&
         predicate.boolean_expression.decoded) {
         if (evaluate_boolean_variable_expression(
-                predicate.boolean_expression, options.simulated_variables,
+                predicate.boolean_expression, environment ? *environment : options.simulated_variables,
                 result, &diagnostic)) {
             return true;
         }
@@ -158,7 +188,7 @@ bool evaluate_predicate(const ExecutionNode& predicate,
     if (predicate.predicate_kind == PredicateKind::Integer &&
         predicate.integer_expression.decoded) {
         if (evaluate_integer_expression(
-                predicate.integer_expression, options.simulated_variables,
+                predicate.integer_expression, environment ? *environment : options.simulated_variables,
                 result, &diagnostic)) {
             return true;
         }
@@ -229,24 +259,90 @@ const ExecutionNode* find_unique_target_case(
     return selected_case;
 }
 
+bool apply_script_write(const ExecutionNode& node, SimulationEnvironment* environment,
+                        NativeReplayPlan& plan) {
+    (void)plan;
+    if (!environment) return true;
+    const auto& fields = node.command.int_data;
+    const auto id = node.command.instruction_id;
+    if (id == 0x4d && environment->battle_unit_identity_available && fields.size() >= 13) {
+        if (((fields[8] >= 0 && fields[9] >= 0) || fields[10] >= 0 || fields[11] != 0 || fields[12] != 0) &&
+            fields[0] == 0 && fields[1] >= 0 && fields[1] <= 1023 &&
+            !environment->known_battle_unit_data_ids.count(fields[1]))
+            environment->unresolved_battle_status_data_ids.insert(fields[1]);
+        return true;
+    }
+    if (id == 0x0b) {
+        if (fields.size() >= 2 && fields[0] >= 0 && (fields[1] == 0 || fields[1] == 1)) {
+            environment->boolean_variables[fields[0]] = fields[1] != 0;
+            environment->known_boolean_assignments.insert(fields[0]); return true;
+        }
+    } else if (id == 0x77) {
+        if (fields.size() >= 5 && fields[0] == 2 && fields[1] >= 0 &&
+            (fields[3] == 0 || fields[3] == 4)) {
+            if ((fields[2] != 2 && environment->unknown_integer_variables.count(fields[1])) ||
+                (fields[3] == 4 && environment->unknown_integer_variables.count(fields[4]))) goto unsupported;
+            auto& target = environment->integer_variables[fields[1]];
+            const std::int64_t operand = fields[3] == 0 ? fields[4] : environment->integer_variables[fields[4]];
+            std::int64_t value = target;
+            switch(fields[2]) {
+                case 0: value += operand; break;
+                case 1: value -= operand; break;
+                case 2: value = operand; break;
+                case 3: value *= operand; break;
+                case 4: if(!operand) goto unsupported; value /= operand; break;
+                case 5: if(!operand) goto unsupported; value %= operand; break;
+                default: goto unsupported;
+            }
+            if(value < std::numeric_limits<std::int32_t>::min() || value > std::numeric_limits<std::int32_t>::max()) goto unsupported;
+            target=static_cast<std::int32_t>(value);
+            environment->unknown_integer_variables.erase(fields[1]); return true;
+        }
+    } else if (id == 0x0a) {
+        environment->boolean_values_invalidated=true;
+        environment->known_boolean_assignments.clear();
+        return true;
+    } else if (id == 0x78) {
+        if(fields.size()>=2 && fields[0]>=0 && fields[1]==0)
+            environment->unknown_integer_variables.insert(fields[0]);
+        return true;
+    } else return true;
+unsupported:
+    if (id == 0x77 && fields.size() >= 2 && fields[0] == 2)
+        environment->unknown_integer_variables.insert(fields[1]);
+    if (id == 0x0b && !fields.empty()) {
+        environment->boolean_values_invalidated=true;
+        environment->known_boolean_assignments.erase(fields[0]);
+    }
+    return true;
+}
+
 WalkResult walk_nodes(const ExecutionNodeList& nodes,
                       const LogicalNodeKey& target_node,
-                      const ReplayOptions& options, NativeReplayPlan& plan);
+                      const ReplayOptions& options,
+                      bool include_battle_map_commands,
+                      SimulationEnvironment* environment, NativeReplayPlan& plan);
 
 WalkResult walk_case(const ExecutionNode& case_node,
                      const LogicalNodeKey& target_node,
-                     const ReplayOptions& options, NativeReplayPlan& plan) {
+                     const ReplayOptions& options,
+                     bool include_battle_map_commands,
+                     SimulationEnvironment* environment, NativeReplayPlan& plan) {
     if (case_node.logical_key == target_node) {
         return WalkResult::ReachedTarget;
     }
-    return walk_nodes(case_node.ordinary_children, target_node, options, plan);
+    return walk_nodes(case_node.ordinary_children, target_node, options,
+                      include_battle_map_commands, environment, plan);
 }
 
 WalkResult walk_choice(const ExecutionNode& choice,
                        const LogicalNodeKey& target_node,
-                       const ReplayOptions& options, NativeReplayPlan& plan) {
+                       const ReplayOptions& options,
+                       bool include_battle_map_commands,
+                       SimulationEnvironment* environment, NativeReplayPlan& plan) {
     const WalkResult ordinary_result =
-        walk_nodes(choice.ordinary_children, target_node, options, plan);
+        walk_nodes(choice.ordinary_children, target_node, options,
+                   include_battle_map_commands, environment, plan);
     if (ordinary_result != WalkResult::Continue) {
         return ordinary_result;
     }
@@ -267,7 +363,8 @@ WalkResult walk_choice(const ExecutionNode& choice,
     }
 
     if (selection_was_requested && selected_case != nullptr) {
-        return walk_case(*selected_case, target_node, options, plan);
+        return walk_case(*selected_case, target_node, options,
+                         include_battle_map_commands, environment, plan);
     }
 
     const bool target_in_case = contains_target(choice.cases, target_node);
@@ -283,13 +380,18 @@ WalkResult walk_choice(const ExecutionNode& choice,
 
 WalkResult walk_node(const ExecutionNode& node,
                      const LogicalNodeKey& target_node,
-                     const ReplayOptions& options, NativeReplayPlan& plan) {
+                     const ReplayOptions& options,
+                     bool include_battle_map_commands,
+                     SimulationEnvironment* environment, NativeReplayPlan& plan) {
     switch (node.category) {
         case ExecutionCategory::Predicate: {
             bool predicate_value = false;
             std::wstring diagnostic;
-            if (!evaluate_predicate(node, options, predicate_value,
+            if (!evaluate_predicate(node, options, environment, predicate_value,
                                     diagnostic)) {
+                if (environment && node.instruction_id == 0x36 && !node.command.int_data.empty() &&
+                    environment->unresolved_battle_status_data_ids.count(node.command.int_data[0]))
+                    plan.unresolved_status_predicates.push_back(node.logical_key);
                 append_diagnostic(plan.diagnostic,
                                   diagnostic.empty()
                                       ? L"条件节点的静态回放不支持"
@@ -298,14 +400,17 @@ WalkResult walk_node(const ExecutionNode& node,
             }
             const ExecutionNodeList& branch =
                 predicate_value ? node.true_children : node.false_children;
-            return walk_nodes(branch, target_node, options, plan);
+            return walk_nodes(branch, target_node, options,
+                              include_battle_map_commands, environment, plan);
         }
         case ExecutionCategory::Choice:
-            return walk_choice(node, target_node, options, plan);
+            return walk_choice(node, target_node, options,
+                               include_battle_map_commands, environment, plan);
         case ExecutionCategory::IntegerDispatchGroup:
             // This is only a visual grouping.  Preserve source order and let
             // each original 0x79 node apply its own condition semantics.
-            return walk_nodes(node.cases, target_node, options, plan);
+            return walk_nodes(node.cases, target_node, options,
+                              include_battle_map_commands, environment, plan);
         case ExecutionCategory::Case:
             // A Case is executable only when reached through its Choice.
             return WalkResult::Continue;
@@ -319,26 +424,30 @@ WalkResult walk_node(const ExecutionNode& node,
         case ExecutionCategory::ElseBranch:
         case ExecutionCategory::Trigger:
         default:
-            append_native_item(plan, node);
+            if (!apply_script_write(node, environment, plan)) return WalkResult::UnsupportedCondition;
+            append_native_item(plan, node, include_battle_map_commands);
             return walk_nodes(node.ordinary_children, target_node, options,
-                              plan);
+                              include_battle_map_commands, environment, plan);
     }
 }
 
 WalkResult walk_nodes(const ExecutionNodeList& nodes,
                       const LogicalNodeKey& target_node,
-                      const ReplayOptions& options, NativeReplayPlan& plan) {
+                      const ReplayOptions& options,
+                      bool include_battle_map_commands,
+                      SimulationEnvironment* environment, NativeReplayPlan& plan) {
     for (const ExecutionNode& node : nodes) {
         // Native scene commands on the selected path are part of the plan.
         // Dialogue/condition nodes remain non-native and therefore contribute
         // no editor instruction, but a selected native command must not be
         // silently dropped at the boundary.
         if (node.logical_key == target_node) {
-            append_native_item(plan, node);
+            if (!apply_script_write(node, environment, plan)) return WalkResult::UnsupportedCondition;
+            append_native_item(plan, node, include_battle_map_commands);
             return WalkResult::ReachedTarget;
         }
-        const WalkResult result =
-            walk_node(node, target_node, options, plan);
+        const WalkResult result = walk_node(
+            node, target_node, options, include_battle_map_commands, environment, plan);
         if (result != WalkResult::Continue) {
             return result;
         }
@@ -348,13 +457,16 @@ WalkResult walk_nodes(const ExecutionNodeList& nodes,
 
 WalkResult walk_nodes_to_end(const ExecutionNodeList& nodes,
                              const ReplayOptions& options,
-                             NativeReplayPlan& plan);
+                             bool include_battle_map_commands,
+                             SimulationEnvironment* environment, NativeReplayPlan& plan);
 
 WalkResult walk_choice_to_end(const ExecutionNode& choice,
                               const ReplayOptions& options,
-                              NativeReplayPlan& plan) {
+                              bool include_battle_map_commands,
+                              SimulationEnvironment* environment, NativeReplayPlan& plan) {
     const WalkResult ordinary_result =
-        walk_nodes_to_end(choice.ordinary_children, options, plan);
+        walk_nodes_to_end(choice.ordinary_children, options,
+                          include_battle_map_commands, environment, plan);
     if (ordinary_result != WalkResult::Continue) {
         return ordinary_result;
     }
@@ -371,18 +483,23 @@ WalkResult walk_choice_to_end(const ExecutionNode& choice,
         append_diagnostic(plan.diagnostic, L"包含未决选择支事件");
         return WalkResult::WaitingForChoice;
     }
-    return walk_nodes_to_end(selected_case->ordinary_children, options, plan);
+    return walk_nodes_to_end(selected_case->ordinary_children, options,
+                              include_battle_map_commands, environment, plan);
 }
 
 WalkResult walk_node_to_end(const ExecutionNode& node,
                             const ReplayOptions& options,
-                            NativeReplayPlan& plan) {
+                            bool include_battle_map_commands,
+                            SimulationEnvironment* environment, NativeReplayPlan& plan) {
     switch (node.category) {
         case ExecutionCategory::Predicate: {
             bool predicate_value = false;
             std::wstring diagnostic;
-            if (!evaluate_predicate(node, options, predicate_value,
+            if (!evaluate_predicate(node, options, environment, predicate_value,
                                     diagnostic)) {
+                if (environment && node.instruction_id == 0x36 && !node.command.int_data.empty() &&
+                    environment->unresolved_battle_status_data_ids.count(node.command.int_data[0]))
+                    plan.unresolved_status_predicates.push_back(node.logical_key);
                 append_diagnostic(plan.diagnostic,
                                   diagnostic.empty()
                                       ? L"条件节点的静态回放不支持"
@@ -391,12 +508,15 @@ WalkResult walk_node_to_end(const ExecutionNode& node,
             }
             const ExecutionNodeList& branch =
                 predicate_value ? node.true_children : node.false_children;
-            return walk_nodes_to_end(branch, options, plan);
+            return walk_nodes_to_end(branch, options,
+                                     include_battle_map_commands, environment, plan);
         }
         case ExecutionCategory::Choice:
-            return walk_choice_to_end(node, options, plan);
+            return walk_choice_to_end(node, options,
+                                      include_battle_map_commands, environment, plan);
         case ExecutionCategory::IntegerDispatchGroup:
-            return walk_nodes_to_end(node.cases, options, plan);
+            return walk_nodes_to_end(node.cases, options,
+                                     include_battle_map_commands, environment, plan);
         case ExecutionCategory::Case:
         case ExecutionCategory::Diagnostic:
             if (node.category == ExecutionCategory::Diagnostic) {
@@ -410,16 +530,20 @@ WalkResult walk_node_to_end(const ExecutionNode& node,
         case ExecutionCategory::ElseBranch:
         case ExecutionCategory::Trigger:
         default:
-            append_native_item(plan, node);
-            return walk_nodes_to_end(node.ordinary_children, options, plan);
+            if (!apply_script_write(node, environment, plan)) return WalkResult::UnsupportedCondition;
+            append_native_item(plan, node, include_battle_map_commands);
+            return walk_nodes_to_end(node.ordinary_children, options,
+                                     include_battle_map_commands, environment, plan);
     }
 }
 
 WalkResult walk_nodes_to_end(const ExecutionNodeList& nodes,
                              const ReplayOptions& options,
-                             NativeReplayPlan& plan) {
+                             bool include_battle_map_commands,
+                             SimulationEnvironment* environment, NativeReplayPlan& plan) {
     for (const ExecutionNode& node : nodes) {
-        const WalkResult result = walk_node_to_end(node, options, plan);
+        const WalkResult result = walk_node_to_end(
+            node, options, include_battle_map_commands, environment, plan);
         if (result != WalkResult::Continue) {
             return result;
         }
@@ -427,16 +551,40 @@ WalkResult walk_nodes_to_end(const ExecutionNodeList& nodes,
     return WalkResult::Continue;
 }
 
-}  // namespace
+NativeReplayPlan build_native_replay_plan_to_end_with_scope(
+    const SectionExecutionModel& model, const ReplayOptions& options,
+    bool include_battle_map_commands, SimulationEnvironment* environment = nullptr) {
+    NativeReplayPlan plan;
+    if (!model.boundary_complete) {
+        append_diagnostic(plan.diagnostic,
+                          L"Section 边界不完整，静态回放不可执行");
+        return plan;
+    }
 
-NativeReplayPlan build_native_replay_plan(
+    WalkResult result = walk_nodes_to_end(
+        model.entry_gates, options, include_battle_map_commands, environment, plan);
+    if (result == WalkResult::Continue) {
+        result = walk_nodes_to_end(
+            model.body, options, include_battle_map_commands, environment, plan);
+    }
+    if (result == WalkResult::Continue) {
+        plan.stop_reason = ReplayStopReason::ReachedEnd;
+        plan.target_reached = true;
+        plan.complete = true;
+    } else if (result == WalkResult::WaitingForChoice) {
+        plan.stop_reason = ReplayStopReason::WaitingForChoice;
+    } else if (result == WalkResult::UnsupportedCondition) {
+        plan.stop_reason = ReplayStopReason::UnsupportedCondition;
+    }
+    return plan;
+}
+
+NativeReplayPlan build_native_replay_plan_to_target_with_scope(
     const SectionExecutionModel& model,
     const LogicalNodeKey& target_node,
-    const DialogueProfile& profile,
-    const ReplayOptions& options) {
-    (void)profile;
+    const ReplayOptions& options,
+    bool include_battle_map_commands, SimulationEnvironment* environment = nullptr) {
     NativeReplayPlan plan;
-
     if (!model.boundary_complete) {
         append_diagnostic(plan.diagnostic,
                           L"Section 边界不完整，静态回放不可执行");
@@ -448,10 +596,11 @@ NativeReplayPlan build_native_replay_plan(
         return plan;
     }
 
-    WalkResult result =
-        walk_nodes(model.entry_gates, target_node, options, plan);
+    WalkResult result = walk_nodes(model.entry_gates, target_node, options,
+                                   include_battle_map_commands, environment, plan);
     if (result == WalkResult::Continue) {
-        result = walk_nodes(model.body, target_node, options, plan);
+        result = walk_nodes(model.body, target_node, options,
+                            include_battle_map_commands, environment, plan);
     }
 
     switch (result) {
@@ -482,32 +631,46 @@ NativeReplayPlan build_native_replay_plan(
     return plan;
 }
 
+}  // namespace
+
+NativeReplayPlan build_native_replay_plan(
+    const SectionExecutionModel& model,
+    const LogicalNodeKey& target_node,
+    const DialogueProfile& profile,
+    const ReplayOptions& options) {
+    (void)profile;
+    return build_native_replay_plan_to_target_with_scope(
+        model, target_node, options, false);
+}
+
 NativeReplayPlan build_native_replay_plan_to_end(
     const SectionExecutionModel& model,
     const DialogueProfile& profile,
     const ReplayOptions& options) {
     (void)profile;
-    NativeReplayPlan plan;
-    if (!model.boundary_complete) {
-        append_diagnostic(plan.diagnostic,
-                          L"Section 边界不完整，静态回放不可执行");
-        return plan;
-    }
+    return build_native_replay_plan_to_end_with_scope(
+        model, options, false);
+}
 
-    WalkResult result = walk_nodes_to_end(model.entry_gates, options, plan);
-    if (result == WalkResult::Continue) {
-        result = walk_nodes_to_end(model.body, options, plan);
-    }
-    if (result == WalkResult::Continue) {
-        plan.stop_reason = ReplayStopReason::ReachedEnd;
-        plan.target_reached = true;
-        plan.complete = true;
-    } else if (result == WalkResult::WaitingForChoice) {
-        plan.stop_reason = ReplayStopReason::WaitingForChoice;
-    } else if (result == WalkResult::UnsupportedCondition) {
-        plan.stop_reason = ReplayStopReason::UnsupportedCondition;
-    }
-    return plan;
+NativeReplayPlan build_native_battle_map_plan_to_end(
+    const SectionExecutionModel& model,
+    const DialogueProfile& profile,
+    const ReplayOptions& options, SimulationEnvironment* output_environment) {
+    (void)profile;
+    if (output_environment) *output_environment = options.simulated_variables;
+    return build_native_replay_plan_to_end_with_scope(
+        model, options, true, output_environment);
+}
+
+NativeReplayPlan build_native_battle_map_plan_through_target(
+    const SectionExecutionModel& model,
+    const LogicalNodeKey& target_node,
+    const DialogueProfile& profile,
+    const ReplayOptions& options, SimulationEnvironment* output_environment) {
+    (void)profile;
+    if (output_environment) *output_environment = options.simulated_variables;
+    return build_native_replay_plan_to_target_with_scope(
+        model, target_node, options, true, output_environment);
 }
 
 }  // namespace ccz::preview
