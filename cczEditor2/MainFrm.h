@@ -7,7 +7,8 @@
 #include "ClassView.h"
 #include "OutputWnd.h"
 #include "PropertiesWnd.h"
-#include "ScenePreviewWnd.h"
+#include "ScenePreviewHost.h"
+#include "TemplateLibraryPane.h"
 
 class CMainFrame : public CMDIFrameWndEx
 {
@@ -44,6 +45,7 @@ public:  // 控件条嵌入成员
 	COutputWnd        m_wndOutput;
 	CPropertiesWnd    m_wndProperties;
 	CScenePreviewWnd  m_wndScenePreview;
+	CTemplateLibraryPane m_wndTemplateLibrary;
 	HICON             m_icon;
 
 // 生成的消息映射函数

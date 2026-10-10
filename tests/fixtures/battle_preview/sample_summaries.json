@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "description": "Read-only structural summaries generated from the pinned S-script bytes. 0x46/0x47/0x4B fields remain raw until their complete semantic table is verified.",
+  "scope": {
+    "rule": "Only the current Scene/Section scope is allowed to feed BattlePreviewState.",
+    "sample_scope": "All Battle records in these three samples are in Scene 0, Section 0; this is evidence for the samples, not a global scanning rule."
+  },
+  "samples": [
+    {
+      "path": "main engine/RS/S_00.eex",
+      "sha256": "C6D80E87ABDED261E3254795C7D925C5F2271ED54255F144FBC1A0B8FC06904E",
+      "scene_count": 3,
+      "section_counts": [1, 17, 1],
+      "battle_scope": {"scene": 0, "section": 0},
+      "records": {
+        "0x27": {"count": 1, "mode": 3, "map_id_field": -1},
+        "0x44": {"count": 1},
+        "0x46": {"count": 1, "rows": 20, "field0_nonnegative_rows": 4},
+        "0x47": {"count": 1, "rows": 80, "field0_nonnegative_rows": 14},
+        "0x4B": {"count": 1, "rows": 1}
+      },
+      "mapping_status": "raw-only; unit fields not decoded"
+    },
+    {
+      "path": "main engine/RS/S_13.eex",
+      "sha256": "BCFF62C018F20066B339EB861E65FBB187E5D7126DCE05E6E517E667F5758272",
+      "scene_count": 3,
+      "section_counts": [1, 37, 1],
+      "battle_scope": {"scene": 0, "section": 0},
+      "records": {
+        "0x27": {"count": 1, "mode": 3, "map_id_field": 13},
+        "0x44": {"count": 1},
+        "0x46": {"count": 1, "rows": 20, "field0_nonnegative_rows": 17},
+        "0x47": {"count": 2, "rows": 160, "field0_nonnegative_rows": 86},
+        "0x4B": {"count": 5, "rows": 5}
+      },
+      "mapping_status": "raw-only; unit fields not decoded"
+    },
+    {
+      "path": "main engine/RS/S_15.eex",
+      "sha256": "DBDA60E1EABFF6658064C6229F91E703916DE4FC8910DE79C4C6A1D2FFA78123",
+      "scene_count": 3,
+      "section_counts": [1, 38, 1],
+      "battle_scope": {"scene": 0, "section": 0},
+      "records": {
+        "0x27": {"count": 1, "mode": 3, "map_id_field": 15},
+        "0x44": {"count": 1},
+        "0x46": {"count": 1, "rows": 20, "field0_nonnegative_rows": 10},
+        "0x47": {"count": 1, "rows": 80, "field0_nonnegative_rows": 76},
+        "0x4B": {"count": 12, "rows": 12}
+      },
+      "mapping_status": "raw-only; unit fields not decoded"
+    }
+  ]
+}

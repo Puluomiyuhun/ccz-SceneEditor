@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -32,7 +32,7 @@
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
-    <UseOfMfc>Dynamic</UseOfMfc>
+    <UseOfMfc>Static</UseOfMfc>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -47,7 +47,7 @@
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
-    <UseOfMfc>Dynamic</UseOfMfc>
+    <UseOfMfc>Static</UseOfMfc>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -90,10 +90,13 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -110,13 +113,21 @@
       <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32' And '$(CCZSBattlePreviewPerf)'=='true'">
+    <ClCompile>
+      <PreprocessorDefinitions>CCZ_S_BATTLE_PREVIEW_PERF;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_WINDOWS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -136,6 +147,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -143,6 +155,7 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -165,12 +178,14 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_WINDOWS;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -196,18 +211,64 @@
     <ClInclude Include="ChildFrm.h" />
     <ClInclude Include="ClassView.h" />
     <ClInclude Include="CMyComboBox.h" />
+    <ClInclude Include="IndexedComboSearch.h" />
     <ClInclude Include="CMyTreeCtrl.h" />
+    <ClInclude Include="SceneBackgroundResolver.h" />
+    <ClInclude Include="SceneCoordinate.h" />
+    <ClInclude Include="MapPortraitState.h" />
+    <ClInclude Include="SceneMultiSelectOps.h" />
+    <ClInclude Include="ScenePositionSource.h" />
     <ClInclude Include="FileView.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="MainFrm.h" />
+    <ClInclude Include="TemplateLibraryPane.h" />
+    <ClInclude Include="TemplateLibrary\TemplateModel.h" />
+    <ClInclude Include="TemplateLibrary\TemplateStore.h" />
     <ClInclude Include="myTool.h" />
     <ClInclude Include="OutputWnd.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PropertiesWnd.h" />
+    <ClInclude Include="PreviewIntegration\BattleObstacleParametersPane.h" />
+    <ClInclude Include="PreviewPrimaryActionButton.h" />
     <ClInclude Include="ScenePreviewWnd.h" />
-    <ClInclude Include="Resource.h" />
+    <ClInclude Include="ScenePreviewHost.h" />
+    <ClInclude Include="BattlePreviewPage.h" />
+    <ClInclude Include="TextWrapAssist.h" />
+    <ClInclude Include="TextWrapEditSession.h" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="ViewTree.h" />
+    <ClInclude Include="PreviewIntegration\EditorTreeSnapshot.h" />
+    <ClInclude Include="PreviewIntegration\EditorPreviewAdapter.h" />
+    <ClInclude Include="PreviewIntegration\BattlePreviewAdapter.h" />
+    <ClInclude Include="PreviewIntegration\BattleQuickModeResolver.h" />
+    <ClInclude Include="PreviewIntegration\BattleConditionTreeAdapter.h" />
+    <ClInclude Include="PreviewIntegration\EditorPreviewCatalog.h" />
+    <ClInclude Include="PreviewIntegration\BattlePreviewPredicates.h" />
+      <ClInclude Include="PreviewIntegration\BattleWritebackAdapter.h" />
+      <ClInclude Include="PreviewIntegration\PreviewWritebackGate.h" />
+    <ClInclude Include="PreviewIntegration\BattleEditorOps.h" />
+    <ClInclude Include="PreviewIntegration\BattleCharacterCatalog.h" />
+    <ClInclude Include="PreviewIntegration\BattleMovementTerrainResourceCache.h" />
+    <ClInclude Include="PreviewIntegration\BattleAssetCache.h" />
+    <ClInclude Include="PreviewIntegration\BattleBitmapCachePolicy.h" />
+    <ClInclude Include="PreviewIntegration\BattlePreviewSession.h" />
+    <ClInclude Include="PreviewIntegration\E5ImageLoader.h" />
+    <ClInclude Include="PreviewIntegration\FreeRPreviewResolver.h" />
+    <ClInclude Include="PreviewIntegration\FreeRReplayComposer.h" />
+    <ClInclude Include="PreviewIntegration\PreviewRefreshStateMachine.h" />
+    <ClInclude Include="PreviewIntegration\CurrentTreeItemIndex.h" />
+    <ClInclude Include="PreviewIntegration\PreviewRefreshDecision.h" />
+    <ClInclude Include="PreviewIntegration\PreviewSession.h" />
+    <ClInclude Include="PreviewIntegration\PreviewAssetCache.h" />
+    <ClInclude Include="PreviewIntegration\DialogueOverlayRenderer.h" />
+    <ClInclude Include="PreviewIntegration\ConditionTreePane.h" />
+    <ClInclude Include="PreviewIntegration\VariableControlPane.h" />
+    <ClInclude Include="PreviewIntegration\BattleUnitParametersPane.h" />
+    <ClInclude Include="PreviewIntegration\DynamicPlaybackSession.h" />
+    <ClInclude Include="PreviewIntegration\BattleDynamicMapReplay.h" />
+    <ClInclude Include="PreviewIntegration\BattleFacing.h" />
+    <ClInclude Include="PreviewIntegration\PlaybackInterpolation.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="cczEditor2.cpp" />
@@ -219,6 +280,7 @@
     <ClCompile Include="CMyTreeCtrl.cpp" />
     <ClCompile Include="FileView.cpp" />
     <ClCompile Include="MainFrm.cpp" />
+    <ClCompile Include="TemplateLibraryPane.cpp" />
     <ClCompile Include="OutputWnd.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
@@ -228,14 +290,86 @@
     </ClCompile>
     <ClCompile Include="PropertiesWnd.cpp" />
     <ClCompile Include="ScenePreviewWnd.cpp" />
+    <ClCompile Include="ScenePreviewHost.cpp" />
+    <ClCompile Include="BattlePreviewPage.cpp" />
+    <ClCompile Include="TextWrapAssist.cpp" />
+    <ClCompile Include="TextWrapEditSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="ViewTree.cpp" />
+    <ClCompile Include="PreviewIntegration\EditorTreeSnapshot.cpp" />
+    <ClCompile Include="PreviewIntegration\EditorPreviewAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattlePreviewAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleQuickModeResolver.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleConditionTreeAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\EditorPreviewCatalog.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleWritebackAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleMapOperations.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleEditorOps.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleCharacterCatalog.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleAssetCache.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleBitmapCachePolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattlePreviewSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\FreeRPreviewResolver.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\FreeRReplayComposer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\PreviewSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\PreviewAssetCache.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\DialogueOverlayRenderer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\ConditionTreePane.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\VariableControlPane.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleUnitParametersPane.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\DynamicPlaybackSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleDynamicMapReplay.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="cczEditor2.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="D:\bird.ico" />
-    <Image Include="res\bird.ico" />
+        <Image Include="res\bird.ico" />
     <Image Include="res\cczEditor2.ico" />
     <Image Include="res\cczEditor2Doc.ico" />
     <Image Include="res\classview.bmp" />
@@ -262,10 +396,17 @@
     <Image Include="res\Toolbar.bmp" />
     <Image Include="res\Toolbar256.bmp" />
     <Image Include="res\userimages.bmp" />
+    <Image Include="res\battle_own_portrait.png" />
   </ItemGroup>
   <ItemGroup>
     <None Include="res\cczEditor2.rc2" />
     <None Include="Instructions.json" />
+    <None Include="TemplateLibrary\TemplateNativeEditing.inl" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\cczPreviewCore\cczPreviewCore.vcxproj">
+      <Project>{3EF31258-CF86-4C0D-9AA6-93F4C2B6EBD5}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

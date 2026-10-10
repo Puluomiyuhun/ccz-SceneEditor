@@ -1,0 +1,10 @@
+{
+  "schema": "battle-writeback-preflight-v1",
+  "field_table_verified": true,
+  "sample_manifest_verified": true,
+  "group_order_verified": true,
+  "native_reload_verified": false,
+  "kind300_external_acceptance_verified": false,
+  "product_writeback_enabled": false,
+  "note": "This fixture records the real preflight boundary. The adapter may build value-only diagnostic bytes only; it must reject product writeback until the two runtime facts are verified."
+}

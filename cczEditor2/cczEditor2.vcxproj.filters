@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="PreviewIntegration">
+      <UniqueIdentifier>{8D8B7B2D-6AFB-4A4F-8B04-6B74372F9F2A}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cczEditor2.h">
@@ -24,6 +27,9 @@
     <ClInclude Include="targetver.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="TemplateLibraryPane.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="TemplateLibrary\TemplateModel.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="TemplateLibrary\TemplateStore.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="MainFrm.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -36,7 +42,7 @@
     <ClInclude Include="cczEditor2View.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="Resource.h">
+    <ClInclude Include="resource.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="FileView.h">
@@ -54,16 +60,48 @@
     <ClInclude Include="PropertiesWnd.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleObstacleParametersPane.h" />
+    <ClInclude Include="PreviewPrimaryActionButton.h" />
     <ClInclude Include="ScenePreviewWnd.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ScenePreviewHost.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="BattlePreviewPage.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+      <ClInclude Include="TextWrapAssist.h">
+        <Filter>头文件</Filter>
+      </ClInclude>
+      <ClInclude Include="TextWrapEditSession.h">
+        <Filter>头文件</Filter>
+      </ClInclude>
     <ClInclude Include="pch.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="CMyTreeCtrl.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="SceneBackgroundResolver.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="SceneCoordinate.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="MapPortraitState.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="SceneMultiSelectOps.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ScenePositionSource.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="CMyComboBox.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="IndexedComboSearch.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="myTool.h">
@@ -102,11 +140,96 @@
     <ClInclude Include="Dialogs\DialogFactory.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="PreviewIntegration\EditorTreeSnapshot.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\EditorPreviewAdapter.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattlePreviewAdapter.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleQuickModeResolver.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleConditionTreeAdapter.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\EditorPreviewCatalog.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattlePreviewPredicates.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleWritebackAdapter.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\PreviewWritebackGate.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleEditorOps.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleCharacterCatalog.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleMovementTerrainResourceCache.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleAssetCache.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleBitmapCachePolicy.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattlePreviewSession.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\E5ImageLoader.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\FreeRPreviewResolver.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\FreeRReplayComposer.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\PreviewSession.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\PreviewRefreshDecision.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\PreviewAssetCache.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\DialogueOverlayRenderer.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\ConditionTreePane.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\VariableControlPane.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleUnitParametersPane.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\DynamicPlaybackSession.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\BattleDynamicMapReplay.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
+    <ClInclude Include="PreviewIntegration\PlaybackInterpolation.h">
+      <Filter>PreviewIntegration</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="cczEditor2.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="TemplateLibraryPane.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="MainFrm.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -137,6 +260,18 @@
     <ClCompile Include="ScenePreviewWnd.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ScenePreviewHost.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="BattlePreviewPage.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+      <ClCompile Include="TextWrapAssist.cpp">
+        <Filter>源文件</Filter>
+      </ClCompile>
+      <ClCompile Include="TextWrapEditSession.cpp">
+        <Filter>源文件</Filter>
+      </ClCompile>
     <ClCompile Include="pch.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -172,6 +307,72 @@
     </ClCompile>
     <ClCompile Include="Dialogs\DialogFactory.cpp">
       <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\EditorTreeSnapshot.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\EditorPreviewAdapter.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattlePreviewAdapter.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleQuickModeResolver.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleConditionTreeAdapter.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\EditorPreviewCatalog.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleWritebackAdapter.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleEditorOps.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleCharacterCatalog.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleAssetCache.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleBitmapCachePolicy.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattlePreviewSession.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\FreeRPreviewResolver.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\FreeRReplayComposer.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\PreviewSession.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\PreviewAssetCache.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\DialogueOverlayRenderer.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\ConditionTreePane.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\VariableControlPane.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleUnitParametersPane.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\DynamicPlaybackSession.cpp">
+      <Filter>PreviewIntegration</Filter>
+    </ClCompile>
+    <ClCompile Include="PreviewIntegration\BattleDynamicMapReplay.cpp">
+      <Filter>PreviewIntegration</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -243,6 +444,9 @@
     <Image Include="res\userimages.bmp">
       <Filter>资源文件</Filter>
     </Image>
+    <Image Include="res\battle_own_portrait.png">
+      <Filter>资源文件</Filter>
+    </Image>
     <Image Include="res\cczEditor2Doc.ico">
       <Filter>资源文件</Filter>
     </Image>
@@ -258,9 +462,7 @@
     <Image Include="res\icon1.ico">
       <Filter>资源文件</Filter>
     </Image>
-    <Image Include="D:\bird.ico">
-      <Filter>资源文件</Filter>
-    </Image>
+
     <Image Include="res\bird.ico">
       <Filter>资源文件</Filter>
     </Image>

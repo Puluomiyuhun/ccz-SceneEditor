@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "description": "Battle preview read-only corpus. Original eex files are never modified by these tests.",
+  "samples": [
+    {
+      "path": "main engine/RS/S_00.eex",
+      "kind": "battle_candidate",
+      "size": 11428,
+      "sha256": "C6D80E87ABDED261E3254795C7D925C5F2271ED54255F144FBC1A0B8FC06904E"
+    },
+    {
+      "path": "main engine/RS/S_13.eex",
+      "kind": "battle_candidate",
+      "size": 76142,
+      "sha256": "BCFF62C018F20066B339EB861E65FBB187E5D7126DCE05E6E517E667F5758272"
+    },
+    {
+      "path": "main engine/RS/S_15.eex",
+      "kind": "battle_candidate",
+      "size": 115542,
+      "sha256": "DBDA60E1EABFF6658064C6229F91E703916DE4FC8910DE79C4C6A1D2FFA78123"
+    },
+    {
+      "path": "reference engine/RS/S_00.eex",
+      "kind": "battle_candidate",
+      "size": 32727,
+      "sha256": "3EBA900AF8F2C5B74386E6AEF57E3FEB9A4C43FF466B33D28A56DA17684C1E5C"
+    },
+    {
+      "path": "reference engine/RS/S_13.eex",
+      "kind": "battle_candidate",
+      "size": 36090,
+      "sha256": "ED027406FB0F578609B6ECE0687659728C4F7A854E87F071D9BA8BCCBD009052"
+    },
+    {
+      "path": "reference engine/RS/S_15.eex",
+      "kind": "battle_candidate",
+      "size": 40521,
+      "sha256": "F86EDE53BA3EAB131A847A527808CDFA8A4CDA2836D13B43406A0427088B2E23"
+    },
+    {
+      "path": "main engine/RS/R_00.eex",
+      "kind": "r_regression",
+      "size": 33728,
+      "sha256": "B9BF03041467CAD9EBAF80F874CD14315DB9854D7D8C5C7C995CA263467DDCBF"
+    },
+    {
+      "path": "main engine/RS/R_13.eex",
+      "kind": "r_regression",
+      "size": 130269,
+      "sha256": "2B10EE99C0FB8A2BABF65C790F41131855DF3EA525646D11C21CB6E60FFAC464"
+    },
+    {
+      "path": "main engine/RS/R_15.eex",
+      "kind": "r_regression",
+      "size": 18917,
+      "sha256": "69F46033264731CF53935D2BCB5AB8117F0700DA38DDAAF5BFEF72490744AD93"
+    },
+    {
+      "path": "reference engine/RS/R_00.eex",
+      "kind": "r_regression",
+      "size": 81196,
+      "sha256": "6C3E9937229FB1F7D0003FC4295046D9B4CE07BDE41076E9FC6C6E48C19E34F7"
+    },
+    {
+      "path": "reference engine/RS/R_13.eex",
+      "kind": "r_regression",
+      "size": 8127,
+      "sha256": "2B71B1892D50E33111D01E20DA28EF19F642D4F0CDE2A105C153CE7A31E40F6F"
+    },
+    {
+      "path": "reference engine/RS/R_15.eex",
+      "kind": "r_regression",
+      "size": 39073,
+      "sha256": "034440168D76BEE90B736168AFFBC77D5D3378B3FD493E99D0644F6CE4D53C96"
+    }
+  ],
+  "editor_release": {
+    "path": "workspace/references/ccz-SceneEditor/cczEditor2/.tmp-r-status-20261001/bin/s.exe",
+    "size": 5740032,
+    "sha256": "55E8DB514236CCD012881EAB25F85E15EADB220DED6B0AF573DC5DB26D027F1C"
+  }
+}

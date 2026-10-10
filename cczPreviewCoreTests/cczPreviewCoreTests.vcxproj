@@ -1,0 +1,219 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <ProjectGuid>{AEFAA323-41DD-47F6-A3F7-1D893F5970A3}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>cczPreviewCoreTests</RootNamespace>
+    <ProjectName>cczPreviewCoreTests</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_CONSOLE;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_CONSOLE;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_CONSOLE;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\cczPreviewCore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_CONSOLE;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="tests\test_framework.h" />
+    <ClInclude Include="..\cczPreviewCore\include\ccz\preview\e5_archive.h" />
+    <ClInclude Include="..\cczPreviewCore\include\ccz\preview\battle_movement_terrain.h" />
+    <ClInclude Include="..\cczEditor2\PreviewIntegration\BattleMovementTerrainResourceCache.h" />
+    <ClInclude Include="..\cczEditor2\TextWrapEditSession.h" />
+    <ClCompile Include="tests\test_main.cpp" />
+    <ClCompile Include="tests\template_library_tests.cpp" />
+    <ClCompile Include="tests\dialogue_profile_tests.cpp" />
+    <ClCompile Include="tests\dialogue_model_tests.cpp" />
+    <ClCompile Include="tests\face_archive_tests.cpp" />
+    <ClCompile Include="tests\portrait_resolver_tests.cpp" />
+    <ClCompile Include="tests\portrait_overlay_tests.cpp" />
+    <ClCompile Include="tests\dialogue_replay_tests.cpp" />
+    <ClCompile Include="tests\condition_tree_tests.cpp" />
+    <ClCompile Include="tests\choice_default_tests.cpp" />
+    <ClCompile Include="tests\native_replay_plan_tests.cpp" />
+    <ClCompile Include="tests\execution_model_tests.cpp" />
+    <ClCompile Include="tests\instruction_catalog_tests.cpp" />
+    <ClCompile Include="tests\script_variable_index_tests.cpp" />
+    <ClCompile Include="tests\variable_control_state_tests.cpp" />
+    <ClCompile Include="tests\text_wrap_edit_session_tests.cpp" />
+    <ClCompile Include="tests\free_r_preview_tests.cpp" />
+    <ClCompile Include="tests\free_r_replay_composer_tests.cpp" />
+    <ClCompile Include="tests\battle_mode_classifier_tests.cpp" />
+    <ClCompile Include="tests\battle_quick_mode_tests.cpp" />
+    <ClCompile Include="tests\battle_preview_session_tests.cpp" />
+    <ClCompile Include="tests\battle_bitmap_cache_policy_tests.cpp" />
+    <ClCompile Include="tests\r_document_session_tests.cpp" />
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleBitmapCachePolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="tests\battle_condition_tree_tests.cpp" />
+    <ClCompile Include="tests\battle_preview_adapter_tests.cpp" />
+    <ClCompile Include="tests\battle_coordinate_tests.cpp" />
+    <ClCompile Include="tests\battle_instruction_parser_tests.cpp" />
+    <ClCompile Include="tests\battle_field_spec_tests.cpp" />
+    <ClCompile Include="tests\battle_preview_state_tests.cpp" />
+    <ClCompile Include="tests\battle_movement_terrain_tests.cpp" />
+    <ClCompile Include="tests\battle_movement_terrain_resource_cache_tests.cpp" />
+    <ClCompile Include="tests\battle_interaction_tests.cpp" />
+    <ClCompile Include="tests\battle_writeback_tests.cpp" />
+    <ClCompile Include="tests\battle_map_operation_tests.cpp" />
+    <ClCompile Include="tests\battle_dynamic_map_replay_tests.cpp" />
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleDynamicMapReplay.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleMapOperations.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="tests\battle_command_operations_tests.cpp" />
+    <ClCompile Include="..\tests\preview_integration\battle_section_relations_tests.cpp" />
+    <ClCompile Include="..\tests\preview_integration\battle_section_environment_tests.cpp" />
+    <ClCompile Include="..\tests\preview_integration\battle_editor_ops_tests.cpp" />
+    <ClCompile Include="..\tests\preview_integration\battle_character_catalog_tests.cpp" />
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\EditorPreviewAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattlePreviewAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleQuickModeResolver.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleConditionTreeAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleWritebackAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleEditorOps.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\BattleCharacterCatalog.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\FreeRPreviewResolver.cpp" />
+    <ClCompile Include="..\cczEditor2\PreviewIntegration\FreeRReplayComposer.cpp" />
+    <ClCompile Include="..\cczEditor2\TextWrapEditSession.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\cczPreviewCore\cczPreviewCore.vcxproj">
+      <Project>{3EF31258-CF86-4C0D-9AA6-93F4C2B6EBD5}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

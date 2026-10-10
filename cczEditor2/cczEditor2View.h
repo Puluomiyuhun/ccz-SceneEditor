@@ -4,6 +4,9 @@
 
 #pragma once
 #include "CMyComboBox.h"
+#include "TextWrapEditSession.h"
+#include "TemplateLibrary/TemplateModel.h"
+#include <vector>
 
 class CcczEditor2View : public CTreeView
 {
@@ -18,6 +21,19 @@ public:
 // 操作
 public:
 	HTREEITEM cur_item;
+	bool CaptureTemplateSelection(ccz::templates::Entry& entry, CString& error);
+	bool InsertTemplate(const ccz::templates::Entry& entry, CString& error);
+	bool CanUndoTemplateInsertion() const;
+	bool UndoTemplateInsertion(CString& error);
+	afx_msg void OnSaveTemplate();
+	struct TemplateInsertionUndo {
+		std::vector<HTREEITEM> roots;
+		HTREEITEM anchor = nullptr;
+		std::uint64_t epoch = 0, generation = 0;
+		int ordinal_before = 0;
+		bool modified_before = false;
+	};
+	std::vector<TemplateInsertionUndo> m_templateUndo;
 	int cur_code;
 	int cur_code_ord = 0;
 
@@ -240,6 +256,8 @@ public:
 public:
 	virtual void OnDraw(CDC* pDC);  // 重写以绘制该视图
 	virtual BOOL PreCreateWindow(CREATESTRUCT& cs);
+	virtual void OnActivateView(BOOL activate, CView* activate_view,
+		CView* deactivate_view) override;
 protected:
 	virtual void OnInitialUpdate(); // 构造后第一次调用
 	virtual BOOL OnPreparePrinting(CPrintInfo* pInfo);
@@ -260,6 +278,7 @@ public:
 	void ReadDataFromFile();
 	void ReadDataFromLocal();
 	void ReadDataDefault();
+	void NormalizeItemSegmentCounts();
 	void InitBaseData();
 	void CreateRoot(LPWSTR root_name);
 	void CreateNewTree();
@@ -270,6 +289,8 @@ public:
 	void UpdateShow(HTREEITEM me);
 	HTREEITEM CreateItem(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
 	HTREEITEM InsertInstructionAt(int id, HTREEITEM hAfter, const int* intData, int dataCount);
+	HTREEITEM InsertBattleInstructionAt(int instructionId, HTREEITEM parent,
+		HTREEITEM hInsertAfter, std::vector<int> intData);
 	HTREEITEM CreateZsj(int id, HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateScene(HTREEITEM parent, HTREEITEM hInsertAfter);
 	void CreateSection(HTREEITEM parent, HTREEITEM hInsertAfter);
@@ -308,9 +329,18 @@ public:
 	afx_msg void OnMoveUp();
 	afx_msg void OnMoveDown();
 	afx_msg void OnTvnSelchanged(NMHDR* pNMHDR, LRESULT* pResult);
+	bool RefreshScenePreview();
+	void SelectPlaybackItem(HTREEITEM item, bool suppress_preview_refresh);
 	afx_msg void OnEditDuplicate();
 	afx_msg void OnEditBatch();
 	afx_msg BOOL OnEraseBkgnd(CDC* pDC);
+	afx_msg void OnDestroy();
+	bool m_suppressPreviewRefreshOnce = false;
+	// MFC may activate a view before OnInitialUpdate builds its script tree.
+	bool m_previewTreeInitialized = false;
+	// S battle native writeback suppresses selection-triggered preview reloads
+	// until its complete transaction (or rollback) has restored a stable state.
+	bool m_suppressBattleWritebackPreview = false;
 };
 
 #ifndef _DEBUG  // cczEditor2View.cpp 中的调试版本
@@ -358,6 +388,9 @@ protected:
 	virtual void DoDataExchange(CDataExchange* pDX) {
 		CDialogEx::DoDataExchange(pDX);
 		DDX_Control(pDX, IDC_EDIT1, edit1);
+		DDX_Control(pDX, IDC_WRAP_ENABLE, wrap_enable);
+		DDX_Control(pDX, IDC_WRAP_BYTES, wrap_bytes);
+		DDX_Control(pDX, IDC_WRAP_MODE, wrap_mode);
 	}
 	virtual BOOL PreTranslateMessage(MSG* pMsg) /// 热键
 	{
@@ -386,9 +419,21 @@ protected:
 	}
 public:
 	CMyEdit edit1;
+	CButton wrap_enable;
+	CEdit wrap_bytes;
+	CButton wrap_mode;
+	CButton color_assist;
+	afx_msg void OnColorAssist();
+	bool wrap_history_mode = false;
+	bool wrap_supported = false;
+	bool wrap_updating = false;
+	ccz::text_wrap::EditTextState wrap_state;
 	bool ctrl_on;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
+	afx_msg void OnBnClickedWrapMode();
+	afx_msg void OnBnClickedWrapEnable();
+	afx_msg void OnEnChangeWrapText();
 };
 
 class Dialog_4 :
@@ -585,6 +630,8 @@ class Dialog_21 :
 	public myDialog
 {
 public:
+ CButton color_assist;
+ afx_msg void OnColorAssist();
 	Dialog_21() noexcept : myDialog(IDD_DIALOG21) {}
 	virtual BOOL OnInitDialog();
 
@@ -597,13 +644,21 @@ protected:
 		DDX_Control(pDX, IDC_EDIT1, edit1);
 		DDX_Control(pDX, IDC_COMBO1, combo1);
 		DDX_Control(pDX, IDC_COMBO2, combo2);
+		DDX_Control(pDX, IDC_WRAP_ENABLE, wrap_enable);
+		DDX_Control(pDX, IDC_WRAP_BYTES, wrap_bytes);
 	}
 public:
 	CMyEdit edit1;
 	CMyComboBox combo1;
 	CMyComboBox combo2;
+	CButton wrap_enable;
+	CEdit wrap_bytes;
+	bool wrap_updating = false;
+	ccz::text_wrap::EditTextState wrap_state;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
+	afx_msg void OnBnClickedWrapEnable();
+	afx_msg void OnEnChangeWrapText();
 };
 
 
@@ -882,6 +937,8 @@ class Dialog_44 :
 	public myDialog
 {
 public:
+ CButton color_assist;
+ afx_msg void OnColorAssist();
 	Dialog_44() noexcept : myDialog(IDD_DIALOG44) {}
 	virtual BOOL OnInitDialog();
 
@@ -895,14 +952,22 @@ protected:
 		DDX_Control(pDX, IDC_CHECK1, check1);
 		DDX_Control(pDX, IDC_CHECK2, check2);
 		DDX_Control(pDX, IDC_CHECK3, check3);
+		DDX_Control(pDX, IDC_WRAP_ENABLE, wrap_enable);
+		DDX_Control(pDX, IDC_WRAP_BYTES, wrap_bytes);
 	}
 public:
 	CMyEdit edit1;
 	CButton check1;
 	CButton check2;
 	CButton check3;
+	CButton wrap_enable;
+	CEdit wrap_bytes;
+	bool wrap_updating = false;
+	ccz::text_wrap::EditTextState wrap_state;
 	DECLARE_MESSAGE_MAP()
 	afx_msg void OnBnClickedOk();
+	afx_msg void OnBnClickedWrapEnable();
+	afx_msg void OnEnChangeWrapText();
 };
 
 

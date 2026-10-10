@@ -138,6 +138,9 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	DockPane(&m_wndProperties);
 	m_wndScenePreview.EnableDocking(CBRS_ALIGN_ANY);
 	DockPane(&m_wndScenePreview);
+	m_wndTemplateLibrary.EnableDocking(CBRS_ALIGN_ANY);
+	DockPane(&m_wndTemplateLibrary);
+	m_wndTemplateLibrary.ShowPane(FALSE, FALSE, FALSE);
 
 	// 基于持久值设置视觉管理器和样式
 	OnApplicationLook(theApp.m_nAppLook);
@@ -257,13 +260,17 @@ BOOL CMainFrame::CreateDockingWindows()
 	CString strScenePreview;
 	bNameValid = strScenePreview.LoadString(IDS_SCENE_PREVIEW);
 	ASSERT(bNameValid);
+	// The dock pane hosts independent R and S child pages.  Battle scrollbars
+	// are owned by the S page rather than by this shared docking host.
 	if (!m_wndScenePreview.Create(strScenePreview, this, CRect(0, 0, 660, 420), TRUE, ID_VIEW_SCENEPREVIEW, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | CBRS_BOTTOM | CBRS_FLOAT_MULTI))
 	{
 		TRACE0("Failed to create Scene Preview window\n");
 		return FALSE;
 	}
-
 	SetDockingWindowIcons(theApp.m_bHiColorIcons);
+	if (!m_wndTemplateLibrary.Create(L"模板库", this, CRect(0, 0, 440, 540), TRUE,
+		ID_VIEW_TEMPLATELIBRARY, WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | CBRS_RIGHT | CBRS_FLOAT_MULTI))
+		return FALSE;
 	return TRUE;
 }
 
@@ -420,6 +427,13 @@ BOOL CMainFrame::LoadFrame(UINT nIDResource, DWORD dwDefaultStyle, CWnd* pParent
 	{
 		return FALSE;
 	}
+	// Apply the first library layout after MFC restores existing pane state.
+	// Attaching earlier leaves an empty tab container when old layouts load.
+	if (!theApp.GetInt(L"TemplateLibraryDockInitialized", 0)) {
+		m_wndTemplateLibrary.AttachToTabWnd(&m_wndScenePreview, DM_SHOW, FALSE);
+		m_wndTemplateLibrary.ShowPane(FALSE, FALSE, FALSE);
+		theApp.WriteInt(L"TemplateLibraryDockInitialized", 1);
+	}
 
 
 	// 为所有用户工具栏启用自定义按钮
@@ -449,6 +463,14 @@ void CMainFrame::OnSettingChange(UINT uFlags, LPCTSTR lpszSection)
 
 void CMainFrame::OnContextMenu(CWnd* pWnd, CPoint point)
 {
+    if (pWnd && point != CPoint(-1,-1)) {
+        for (CWnd* pane : {static_cast<CWnd*>(&m_wndScenePreview), static_cast<CWnd*>(&m_wndTemplateLibrary)}) {
+            if (!pane->GetSafeHwnd()) continue;
+            CPoint local=point;pane->ScreenToClient(&local);CRect client;pane->GetClientRect(client);
+            if (client.PtInRect(local) && (pWnd==pane || pane->IsChild(pWnd))) return;
+        }
+    }
+
 	if (pWnd->GetSafeHwnd() == m_wndClientArea.GetSafeHwnd())
 	{
 		CWnd* pWndCur = WindowFromPoint(point);
@@ -494,9 +516,11 @@ void CMainFrame::OnAllFileClose()
 			CDocument* pDoc = p->GetNextDoc(posdoc);
 			if (pDoc != NULL)
 			{
-				((CcczEditor2Doc*)pDoc)->SaveModified();
-				if (((CcczEditor2Doc*)pDoc)->can_close || !((CcczEditor2Doc*)pDoc)->modified)
-					((CcczEditor2Doc*)pDoc)->OnCloseDocument();
+				CcczEditor2Doc* document = DYNAMIC_DOWNCAST(CcczEditor2Doc, pDoc);
+				if (document != nullptr) {
+					const BOOL canClose = document->SaveModified();
+					if (canClose) document->OnCloseDocument();
+				}
 			}
 		}
 	}

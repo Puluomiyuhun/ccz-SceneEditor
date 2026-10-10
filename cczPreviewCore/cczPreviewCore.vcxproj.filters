@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="include"><UniqueIdentifier>{B4A5D5D8-6FA2-4BAA-9514-EC6D74C22C4A}</UniqueIdentifier></Filter>
+    <Filter Include="include\ccz"><UniqueIdentifier>{6B39B9D5-6A78-4A9E-93A6-778A3AC1B2E1}</UniqueIdentifier></Filter>
+    <Filter Include="include\ccz\preview"><UniqueIdentifier>{E34F6E7C-3B62-4B82-9ACB-6B0B19F4B5D7}</UniqueIdentifier></Filter>
+    <Filter Include="src"><UniqueIdentifier>{CE5C4FB1-72F4-47D4-880C-8CB9C4D17DF8}</UniqueIdentifier></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ccz\preview\dialogue_profile.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\dialogue_model.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\face_archive.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\portrait_resolver.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\dialogue_overlay_model.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\portrait_overlay.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\dialogue_replay.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\condition_tree.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\native_replay_plan.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\execution_model.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\script_variable_index.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\instruction_catalog.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\condition_tree_state.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\variable_control_state.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\playback_timeline.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\battle_mode_classifier.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\battle_preview.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\e5_archive.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\battle_movement_terrain.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\battle_hexzmap.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\battle_instruction_parser.h"><Filter>include\ccz\preview</Filter></ClInclude>
+    <ClInclude Include="include\ccz\preview\battle_field_spec.h"><Filter>include\ccz\preview</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\dialogue_profile.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\dialogue_model.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\face_archive.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\portrait_resolver.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\dialogue_overlay_model.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\portrait_overlay.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\dialogue_replay.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\condition_tree.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\native_replay_plan.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\execution_model.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\script_variable_index.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\instruction_catalog.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\condition_tree_state.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\variable_control_state.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\playback_timeline.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\battle_mode_classifier.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\battle_preview.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\e5_archive.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\battle_movement_terrain.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\battle_hexzmap.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\battle_instruction_parser.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\battle_field_spec.cpp"><Filter>src</Filter></ClCompile>
+  </ItemGroup>
+</Project>
