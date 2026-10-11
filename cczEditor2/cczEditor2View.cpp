@@ -225,6 +225,9 @@ void CcczEditor2View::ReadString()
 		all_condition_sum = sum[12]; xxcs_sum = sum[13];
 		f.Close();
 	}
+	// Keep the current weather labels accurate even when an older CczString.ini overrides the code list.
+	wcscpy_s(code[86], L"56:天气序号设定");
+	wcscpy_s(code[87], L"57:当前天气组设定");
 }
 
 void CcczEditor2View::ReadDataFromIni()
@@ -1482,7 +1485,7 @@ void CcczEditor2View::UpdateShow(HTREEITEM me)
 		name = per2[Per2Code2List(data->int_data[7])];
 		wcscat_s(show, name);
 		wcscat_s(show, L" ");
-		wcscat_s(show, weather[data->int_data[8]]);
+		wcscat_s(show, std::to_wstring(data->int_data[8]).c_str());
 		wcscat_s(show, L" ");
 		wcscat_s(show, weather2[data->int_data[9]]);
 	}
@@ -1508,7 +1511,7 @@ void CcczEditor2View::UpdateShow(HTREEITEM me)
 	}
 	if (id == 77)
 	{
-		wcscat_s(show, data->int_data[0] == 0 ? L"data角色" : data->int_data[0] == 0 ? L"战场编号" : L"区域");
+		wcscat_s(show, data->int_data[0] == 0 ? L"data角色 " : data->int_data[0] == 1 ? L"战场编号 " : L"区域 ");
 		if (data->int_data[0] == 0) {
 			wchar_t* name = per2[Per2Code2List(data->int_data[1])];
 			wcscat_s(show, name);
@@ -1641,7 +1644,7 @@ void CcczEditor2View::UpdateShow(HTREEITEM me)
 		}
 		wcscat_s(show, data->int_data[7] == 0 ? L"撤退" : L"死亡");
 	}
-	if (id == 86) wcscat_s(show, weather[data->int_data[0]]);
+	if (id == 86) wcscat_s(show, std::to_wstring(data->int_data[0]).c_str());
 	if (id == 87) wcscat_s(show, weather2[data->int_data[0]]);
 	if (id == 88) {
 		wcscat_s(show, object[data->int_data[0]]);
@@ -5190,7 +5193,7 @@ BOOL Dialog_69::OnInitDialog()
 
 	combo3.SetCurSel(Per2Code2List(pView->cur_data.int_data[7]));
 
-	for (int i = 0; i < 5; i++)combo4.AddString(pView->weather[i]);
+	for (int i = 0; i < 5; i++)combo4.AddString(std::to_wstring(i).c_str());
 	combo4.SetCurSel(data->int_data[8]);
 
 	for (int i = 0; i < 6; i++)combo5.AddString(pView->weather2[i]);
@@ -6057,7 +6060,7 @@ BOOL Dialog_86::OnInitDialog()
 	ItemData* data = (ItemData*)m_TreeCtrl.GetItemData(pView->cur_item);
 
 	if (data->id == 86)
-		for (int i = 0; i < 5; i++) combo1.AddString(pView->weather[i]);
+		for (int i = 0; i < 5; i++) combo1.AddString(std::to_wstring(i).c_str());
 	else
 		for (int i = 0; i < 6; i++) combo1.AddString(pView->weather2[i]);
 	combo1.SetCurSel(data->int_data[0]);

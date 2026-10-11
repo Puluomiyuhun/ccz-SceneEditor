@@ -66,6 +66,7 @@ void CSBattlePreviewPage::OpenBattleCommand(std::uint16_t id,bool area,std::uint
   const auto& unit=units[anchor];
   if(id==0x5c||id==0x4f||id==0x50)config.fields[0]=BattlePersonForUnit(unit);
   else if(id==0x6b){config.fields[0]=unit.position.x;config.fields[1]=unit.position.y;}
+  else if(id==0x4d && unit.data_id<0){config.fields[0]=1;config.fields[2]=unit.battlefield_index;}
   else config.fields[1]=BattlePersonForUnit(unit);
  }
  std::vector<std::wstring> names(1024);
@@ -90,7 +91,12 @@ void CSBattlePreviewPage::OpenBattleCommand(std::uint16_t id,bool area,std::uint
     for(const auto& unit:units){
      auto config=ccz::editor_preview::BattleCommandConfiguration{id,edited.int_data};
      if(id==0x6b){if(!spellCells.insert({unit.position.x,unit.position.y}).second)continue;config.fields[0]=unit.position.x;config.fields[1]=unit.position.y;}
-     else if(id==0x4d&&config.fields[0]==1){if(unit.battlefield_index<0){AfxMessageBox(L"所选角色缺少战场编号");return false;}config.fields[2]=unit.battlefield_index;}
+     else if(id==0x4d){
+      if(config.fields[0]==1||unit.data_id<0){
+       if(unit.battlefield_index<0){AfxMessageBox(L"所选角色缺少战场编号");return false;}
+       config.fields[0]=1;config.fields[1]=0;config.fields[2]=unit.battlefield_index;
+      }else config.fields[1]=unit.data_id;
+     }
      else {
       const int source=(id==0x5c||id==0x4f||id==0x50)?edited.int_data[0]:edited.int_data[1];const bool battlefield=source>=1028;
       if(battlefield&&unit.battlefield_index<0){AfxMessageBox(L"所选角色缺少战场编号");return false;}
