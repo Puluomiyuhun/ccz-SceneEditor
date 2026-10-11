@@ -6926,8 +6926,16 @@ BOOL Dialog_114::OnInitDialog()
 			i++;
 		}
 	}
-	for (int i = 0; i < pView->xxcs_sum; i++) combo1.AddString(pView->xxcs[i]);
-	if (data->int_data[0] < pView->xxcs_sum)
+	if (pView->cur_code == 123) {
+		static const wchar_t* kMsgTestItems[] = {
+			L"0:暂无功能", L"1:指定道具数量测试", L"2:指定武将是否入队",
+			L"3:武将所在地形测试", L"4:当前天气测试", L"5:武将异常状态测试"
+		};
+		for (const auto* item : kMsgTestItems) combo1.AddString(item);
+	} else {
+		for (int i = 0; i < pView->xxcs_sum; i++) combo1.AddString(pView->xxcs[i]);
+	}
+	if (data->int_data[0] >= 0 && data->int_data[0] < combo1.GetCount())
 		combo1.SetCurSel(data->int_data[0]);
 	list1.SetItemHeight(0, 18);
 
@@ -6962,6 +6970,19 @@ void Dialog_114::OnCbnSelchangeCombo2()
 void Dialog_114::OnBnClickedButton1()
 {
 	int p = combo1.GetCurSel();
+	CcczEditor2View* pView = (CcczEditor2View*)(((CMainFrame*)AfxGetMainWnd())->MDIGetActive()->GetActiveView());
+	if (pView->cur_code == 123) {
+		static const wchar_t* kMsgTestTemplates[] = {
+			nullptr,
+			L"0,1\r\n【6.6X 引擎格式】\r\n第一个数字是道具编号。\r\n第二个数字是最低数量：测试该道具的数量是否大于或等于此数。\r\n11,3,1\r\n【禹夏引擎格式】\r\n第一个数字是道具编号。\r\n第二个数字是最低数量；本例测试是否至少有 3 个。\r\n第三个数字是类别：0 表示装备，统计背包和已装备件数；1 表示道具。",
+			L"0,1\r\n第一个数字是武将的 data 号。\r\n第二个数字是期望的入队状态：1 表示在队，0 表示不在队。",
+			L"0,10,0\r\n第一个数字是武将编号的解析模式：0 表示按 data 号解析，1 表示按战场编号解析。\r\n第二个数字是对应解析模式下的武将编号；本例为 data 号 10。\r\n第三个数字是地形编号；本例测试该武将是否处于 0 号地形。",
+			L"0\r\n填写要测试的天气编号：0 晴明，1 阴天，2 小雨，3 大雨，4 下雨。",
+			L"1,5,2,1\r\n第一个数字是武将编号的解析模式：0 表示按 data 号解析，1 表示按战场编号解析。\r\n第二个数字是对应解析模式下的武将编号；本例为战场编号 5。\r\n第三个数字是异常状态编号：1 为麻痹，2 为禁咒，3 为混乱，4 为中毒。\r\n第四个数字是期望状态：1 表示具有该异常状态，0 表示没有该异常状态。\r\n本例测试战场编号 5 的武将是否处于禁咒状态。"
+		};
+		if (p > 0 && p < _countof(kMsgTestTemplates)) edit2.SetWindowTextW(kMsgTestTemplates[p]);
+		return;
+	}
 	if (p == 0)
 		edit2.SetWindowTextW(L"张飞\r\n需要提前用4054指定要修改的角色的data编号");
 	else if (p == 1)
