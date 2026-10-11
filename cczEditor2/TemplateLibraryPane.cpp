@@ -1,4 +1,6 @@
 #include "pch.h"
+#include <functional>
+#include "PreviewPageFont.h"
 #include "resource.h"
 #include "TemplateLibraryPane.h"
 #include "MainFrm.h"
@@ -114,12 +116,18 @@ void CTemplateLibraryPane::OnContextMenu(CWnd* source, CPoint point) {
   }
   if (point.x == -1) { CRect rect; source->GetWindowRect(rect); point = rect.TopLeft(); }
   CMenu menu; menu.CreatePopupMenu();
+  CMenu fonts;AppendPageFontMenu(menu,fonts,L"Templates",0xec00);
   const UINT flags = MF_STRING | (Selected() ? 0 : MF_GRAYED);
   menu.AppendMenu(flags, 1, L"插入");
   menu.AppendMenu(flags | (diagnostic_.empty() ? 0 : MF_GRAYED), 2, L"修改");
   auto* view = ActiveView();
   menu.AppendMenu(MF_STRING | (view && view->CanUndoTemplateInsertion() ? 0 : MF_GRAYED), 3, L"撤回");
   const UINT action = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, this);
+  if(action==0xec00 || (action>=0xec08 && action<=0xec0e)) {
+    AfxGetApp()->WriteProfileInt(L"PreviewPageFont",L"Templates",action==0xec00?0:action-0xec00);
+    ApplyPageFont(*this,L"Templates",page_font_);CRect r;GetClientRect(r);OnSize(SIZE_RESTORED,r.Width(),r.Height());return;
+  }
+
   if (action == 1) OnInsert(); else if (action == 2) OnEdit(); else if (action == 3) OnUndo();
 }
 int CTemplateLibraryPane::OnCreate(LPCREATESTRUCT cs) {
@@ -157,6 +165,7 @@ int CTemplateLibraryPane::OnCreate(LPCREATESTRUCT cs) {
     w->SetFont(&font_);
   Reload(false);
   Fill();
+  ApplyPageFont(*this,L"Templates",page_font_);
   SetTimer(1, 1500, nullptr);
   return 0;
 }

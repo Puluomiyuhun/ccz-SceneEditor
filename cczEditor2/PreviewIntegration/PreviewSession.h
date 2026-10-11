@@ -30,6 +30,9 @@ struct PreviewAssetsView {
     // Optional document-level asset diagnostic.  Existing three-field
     // aggregate callers remain valid; the cache owns the pointed-to string.
     const std::wstring* diagnostic{};
+    const std::vector<std::uint8_t>* fb_e5{};
+    const ccz::preview::FaceArchive* fb_archive{};
+    const std::vector<std::uint32_t>* text_palette{};
 };
 
 struct PreviewFrame {
@@ -39,6 +42,8 @@ struct PreviewFrame {
     ccz::preview::ScriptVariableIndex variable_index;
     ccz::preview::LogicalNodeKey active_node;
     std::vector<std::wstring> diagnostics;
+    std::map<int,int> avatar_codes;
+    ccz::preview::SimulationEnvironment displayed_variables;
 };
 
 enum class RefreshStatus {
@@ -63,7 +68,8 @@ bool ApplyConditionTreeActionToOptions(
     const ccz::preview::LogicalNodeKey& node_key,
     ccz::preview::ConditionTreeAction action,
     std::int32_t integer_value,
-    std::wstring* diagnostic);
+    std::wstring* diagnostic,
+    const ccz::preview::SimulationEnvironment* displayed_variables = nullptr);
 
 class PreviewSession {
 public:

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <ccz/preview/execution_model.h>
 
@@ -55,6 +55,9 @@ struct PlaybackTimeline {
     bool complete{};
     std::wstring diagnostic;
 };
+
+// Coalesce adjacent movement commands inside the active range. Repeated targets start a new group.
+PlaybackTimeline group_consecutive_character_moves(const PlaybackTimeline& timeline);
 
 PlaybackTimeline build_playback_timeline(
     const SectionExecutionModel& model,

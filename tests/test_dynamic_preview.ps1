@@ -14,6 +14,16 @@ $dynamicSessionSource = Join-Path $root 'cczEditor2\PreviewIntegration\DynamicPl
 $outDir = Join-Path $root 'tests\.tmp-dynamic-preview'
 $exe = Join-Path $outDir 'dynamic_preview_tests.exe'
 
+# Compile the actual timeline construction statements used by the play button.
+$production = Get-Content (Join-Path $root 'cczEditor2/ScenePreviewWnd.cpp') -Raw -Encoding utf8
+$playStart = $production.IndexOf('bool CRScenePreviewPage::StartDynamicPlayback(')
+$buildStart = $production.IndexOf('m_dynamicTimeline = ccz::preview::build_playback_timeline(', $playStart)
+$buildEnd = $production.IndexOf('if (!m_dynamicTimeline.complete)', $buildStart)
+$liveBuild = $production.Substring($buildStart, $buildEnd-$buildStart)
+$timelineFixture = Get-Content $timelineSource -Raw -Encoding utf8
+$generatedTimeline = Join-Path $outDir 'live_playback_timeline_tests.cpp'
+$timelineFixture = $timelineFixture.Replace('// PRODUCTION_START_TIMELINE', $liveBuild)
+
 foreach ($path in @($mainSource, $timelineSource, $sessionSource,
         $interpolationSource, $dynamicSessionSource)) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -23,6 +33,7 @@ foreach ($path in @($mainSource, $timelineSource, $sessionSource,
 if (-not (Test-Path -LiteralPath $outDir)) {
     New-Item -ItemType Directory -Path $outDir | Out-Null
 }
+Set-Content $generatedTimeline $timelineFixture -Encoding utf8
 
 $msbuild = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe'
 $vsDevCmd = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'
@@ -42,7 +53,7 @@ $args = @(
     "/I$($root)\cczPreviewCore\include",
     "/I$($root)\cczPreviewCoreTests\tests",
     "/I$($root)\cczEditor2",
-    $timelineSource, $sessionSource, $interpolationSource,
+    $generatedTimeline, $sessionSource, $interpolationSource,
     $dynamicSessionSource, $mainSource, $coreLib, "/Fe:$exe"
 )
 $command = '"' + $vsDevCmd + '" -arch=x86 -host_arch=x86 && cl.exe ' + ($args -join ' ')

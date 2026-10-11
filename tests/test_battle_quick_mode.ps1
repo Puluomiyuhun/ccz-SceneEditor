@@ -64,6 +64,7 @@ Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::RequestQuickModeR
 Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::RequestQuickModeRefresh(' 'CaptureEditorDocumentSnapshot' 'a changed pinned Section triggers a fresh source resolution'
 Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::RequestQuickModeRefresh(' 'ResolveScene1BattleSection' 'changed source content is reclassified against all current Sections'
 Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::RequestQuickModeRefresh(' 'LoadQuickModeBaselinePreservingDraft\(\s*std::move\(resolution\.capture\), requestedTree' 'the resolved Scene1 capture refreshes the baseline while rebasing actual preview drafts'
+Assert-FunctionContains $pageSource 'bool CSBattlePreviewPage::RequestQuickModeRefresh(' 'can_rebase_obstacle_drafts\(ActiveSession\(\)\.baseline_capture,' 'staged obstacles receive a map-cell conflict check before Scene1 refresh instead of freezing every source edit'
 $freshDraftState = Get-FunctionBlock $pageSource 'bool build_fresh_editor_state_for_scope('
 Assert-Contains $freshDraftState 'in_scope\(key, capture\.input\.scope_key\)' 'draft source rows must still belong to the pinned Scene1 section'
 Assert-Contains $freshDraftState 'is_current_terminal_anchor' 'draft insertion anchors must still be the same terminal child of the same parent'

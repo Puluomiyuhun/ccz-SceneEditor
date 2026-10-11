@@ -1817,26 +1817,38 @@ BattleWritebackNativeBatch BuildBattleWritebackInsertBatchAfterSelection(
     }
     if (anchor.matches != 1 || anchor.parent == nullptr ||
         anchor.selected == nullptr || anchor.selected->ordinal < 0 ||
-        anchor.selected->instruction_id <= 0 ||
+        anchor.selected->instruction_id < 0 ||
+        anchor.selected->instruction_id == 0 ||
         anchor.selected->instruction_id == 1 ||
-        anchor.selected->instruction_id == 3 ||
-        !anchor.selected->children.empty() ||
-        anchor.parent->runtime_handle == 0 ||
-        anchor.child_index + 1 >= anchor.parent->children.size()) {
-        return fail_batch(L"地图操作预检失败：请在完整剧本树中选中一条普通叶子指令作为写入锚点");
+        anchor.selected->instruction_id == 3) {
+        return fail_batch(L"地图操作预检失败：请选中普通指令或有事件结束符的子事件作为写入锚点");
     }
-    if (anchor.parent->instruction_id == 2 &&
-        anchor.parent->long_text == L"我军出场") {
+    // Selection always denotes a sibling position, including when the selected
+    // instruction owns a nested event. Its children remain inside that event.
+    const auto* insertion_parent = anchor.parent;
+    if (insertion_parent->runtime_handle == 0 ||
+        anchor.child_index + 1 >= anchor.parent->children.size()) {
+        return fail_batch(L"地图操作预检失败：所选指令没有可用的子事件插入位置");
+    }
+    if (insertion_parent->instruction_id == 2 &&
+        insertion_parent->long_text == L"我军出场") {
         return fail_batch(L"地图操作预检失败：选中指令位于“我军出场”专用分组；请改选其他分组中的指令");
     }
-    const auto& siblings = anchor.parent->children;
+    const auto& siblings = insertion_parent->children;
+    if (siblings.empty())
+        return fail_batch(L"地图操作预检失败：所选子事件没有事件结束符");
     const auto& terminal = siblings.back();
-    const bool section_entry = anchor.parent->instruction_id == -2;
+    const bool section_entry = insertion_parent->instruction_id == -2;
     if (terminal.instruction_id != 0 || terminal.runtime_handle == 0 ||
-        (!section_entry && !terminal.children.empty()) ||
-        (section_entry && !terminal.children.empty() &&
-            terminal.instruction_id != 0)) {
+        (!section_entry && !terminal.children.empty())) {
         return fail_batch(L"地图操作预检失败：锚点所属节点缺少合法的末尾事件边界");
+    }
+    const auto* insertion_after = anchor.selected;
+    const auto& insertion_before = siblings[anchor.child_index + 1];
+    if (insertion_after != nullptr &&
+        IsPreviewInsertionImmediatelyAfterEventEndOrSubeventSetting(
+            insertion_after->instruction_id)) {
+        return fail_batch(L"地图操作预检失败：不能紧接事件结束或子事件设定插入指令");
     }
 
     try {
@@ -1852,10 +1864,10 @@ BattleWritebackNativeBatch BuildBattleWritebackInsertBatchAfterSelection(
             BattleWritebackNativeChange change;
             change.kind = BattleWritebackChangeKind::InsertInstruction;
             change.instruction_id = instruction.instruction_id;
-            change.parent_handle = anchor.parent->runtime_handle;
-            change.insert_after_handle = anchor.selected->runtime_handle;
-            change.insert_before_handle =
-                siblings[anchor.child_index + 1].runtime_handle;
+            change.parent_handle = insertion_parent->runtime_handle;
+            change.insert_after_handle = insertion_after != nullptr
+                ? insertion_after->runtime_handle : 0;
+            change.insert_before_handle = insertion_before.runtime_handle;
             change.insert_terminal_handle = terminal.runtime_handle;
             change.source_ordinal = -1;
             change.int_data = instruction.int_data;

@@ -13,6 +13,7 @@ namespace ccz::preview {
 
 struct PreviewState {
     DialogueState dialogue;
+    SimulationEnvironment simulated;
     std::uint16_t face_state{};
     bool face_state_known{};
     // Section-local rename state.  The editor engine encodes a rename as a

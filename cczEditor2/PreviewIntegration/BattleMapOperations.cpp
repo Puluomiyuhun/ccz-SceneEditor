@@ -198,13 +198,13 @@ bool BuildBattleObstacleInstruction(int type,
     int map_height, BattleMapOperationInstruction& output,
     std::wstring& diagnostic, const BattleObstacleDefaults& parameters) {
     diagnostic.clear();
-    if (type < 0 || type > 2)
-        return reject(output, diagnostic, L"障碍物拒绝：当前只支持火、船、火船三种类型");
+    if (!IsBattleObstacleTypeSupported(type))
+        return reject(output, diagnostic, L"障碍物拒绝：类型须为火、船、火船或 Gate-1～Gate-247");
     if (!valid_map_coordinate(coordinate, map_width, map_height))
         return reject(output, diagnostic, L"障碍物拒绝：目标坐标超出当前地图范围");
     if (parameters.visibility < 0 || parameters.visibility > 1 || parameters.terrain < -1 || parameters.terrain > 29 || parameters.viewpoint < 0 || parameters.viewpoint > 1 || parameters.sound < 0 || parameters.sound > 1)
         return reject(output, diagnostic, L"障碍物参数无效");
-    const int terrain = parameters.terrain < 0 ? (type == 1 ? 27 : 26) : parameters.terrain;
+    const int terrain = parameters.terrain < 0 ? (type >= 4 ? 17 : type == 1 ? 27 : 26) : parameters.terrain;
     output = {0x58, {type, parameters.visibility, terrain, coordinate.x, coordinate.y, parameters.viewpoint, parameters.sound},
         map_width, map_height};
     return true;
@@ -292,7 +292,7 @@ bool ValidateBattleMapOperationInstruction(
     if (instruction.instruction_id == 0x58) {
         if ((instruction.int_data.size() != 7U && instruction.int_data.size() != 20U) ||
             (instruction.int_data.size() == 20U && std::any_of(instruction.int_data.begin() + 7, instruction.int_data.end(), [](int value) { return value != 0; })) ||
-            instruction.int_data[0] < 0 || instruction.int_data[0] > 2 ||
+            !IsBattleObstacleTypeSupported(instruction.int_data[0]) ||
             instruction.int_data[1] < 0 || instruction.int_data[1] > 1 ||
             instruction.int_data[2] < 0 || instruction.int_data[2] > 29 ||
             instruction.int_data[5] < 0 || instruction.int_data[5] > 1 ||
@@ -318,8 +318,7 @@ bool BattleObstacleDraftQueue::Add(int type,
     int map_height, const BattleObstacleDefaults& parameters) {
     BattleMapOperationInstruction checked; std::wstring diagnostic;
     if (!BuildBattleObstacleInstruction(type, coordinate, map_width, map_height, checked, diagnostic, parameters)) return false;
-    if (type < 0 || type > 2 ||
-        !valid_map_coordinate(coordinate, map_width, map_height)) return false;
+    if (!valid_map_coordinate(coordinate, map_width, map_height)) return false;
     if (std::any_of(items_.begin(), items_.end(), [&coordinate](const auto& item) {
         return item.coordinate == coordinate;
     })) return false;

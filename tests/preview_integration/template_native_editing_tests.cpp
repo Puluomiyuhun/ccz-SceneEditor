@@ -132,6 +132,17 @@ struct CcczEditor2View {
   bool CanUndoTemplateInsertion() const;
   bool UndoTemplateInsertion(CString &);
 };
+static int externalMode = 0;
+static int externalValue = 0;
+static int externalPrompts = 0;
+bool ResolveTransferExternal(CcczEditor2View&, const std::set<int>& ids, bool isTemplate,
+                              std::map<int,int>& out) {
+  if (ids.empty()) return true;
+  ++externalPrompts;
+  if (externalMode == 2) return false;
+  for (int id : ids) out[id] = externalMode == 1 ? externalValue : (isTemplate ? 0 : id);
+  return true;
+}
 // PRODUCTION_TEMPLATE_EDITING
 
 #define REQUIRE(x)                                                             \
@@ -297,6 +308,25 @@ int main() {
       TemplateDeleteRoot(v.tree,compact);
     }
     std::cout << "[PASS] Preview compact parameters capture, normalize, insert and undo.\n";
+    auto external = Entry();
+    external.roots[1].id = 0x76;
+    external.roots[1].params[0] = 12345;
+    ccz::templates::Library library; library.entries.push_back(external);
+    auto encoded = ccz::templates::Encode(library);
+    auto decoded = ccz::templates::Decode(encoded);
+    REQUIRE(decoded.entries[0].roots[1].jump_target == -1);
+    v.tree.SelectItem(anchor); externalMode = 0;
+    REQUIRE(v.InsertTemplate(external,error));
+    REQUIRE(reinterpret_cast<ItemData*>(v.tree.GetItemData(v.tree.GetSelectedItem()))->int_data[0] == 0);
+    REQUIRE(v.UndoTemplateInsertion(error));
+    externalMode = 1; externalValue = reinterpret_cast<ItemData*>(v.tree.GetItemData(anchor))->ord;
+    REQUIRE(v.InsertTemplate(external,error));
+    REQUIRE(reinterpret_cast<ItemData*>(v.tree.GetItemData(v.tree.GetSelectedItem()))->int_data[0] == externalValue);
+    REQUIRE(v.UndoTemplateInsertion(error));
+    externalMode = 2; int beforeOrdinal = v.cur_code_ord;
+    REQUIRE(!v.InsertTemplate(external,error)); REQUIRE(v.cur_code_ord == beforeOrdinal);
+    externalMode = 0;
+    std::cout << "[PASS] External jump persistence, default zero, manual target and cancellation.\n";
     TemplateDeleteRoot(v.tree, scene);
     v.tree.DeleteItem(root);
     DestroyWindow(host);

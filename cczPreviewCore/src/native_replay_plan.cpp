@@ -1,4 +1,4 @@
-#include <ccz/preview/native_replay_plan.h>
+﻿#include <ccz/preview/native_replay_plan.h>
 
 #include <cstddef>
 #include <utility>
@@ -149,7 +149,7 @@ bool evaluate_predicate(const ExecutionNode& predicate,
                         std::wstring& diagnostic) {
     const PredicateState state =
         effective_predicate_state(predicate, options);
-    if ((state == PredicateState::Unsupported && (!environment ||
+    if ((state == PredicateState::Unsupported && (options.predicate_states.count(predicate.logical_key) || !environment ||
         (!predicate.boolean_expression.decoded && !predicate.integer_expression.decoded))) ||
         predicate.predicate_kind == PredicateKind::Unsupported) {
         diagnostic = L"条件节点的静态回放不支持";
@@ -277,37 +277,33 @@ bool apply_script_write(const ExecutionNode& node, SimulationEnvironment* enviro
             environment->boolean_variables[fields[0]] = fields[1] != 0;
             environment->known_boolean_assignments.insert(fields[0]); return true;
         }
+    } else if (id == 0x38) {
+        apply_simulated_avatar(*environment,fields);return true;
     } else if (id == 0x77) {
-        if (fields.size() >= 5 && fields[0] == 2 && fields[1] >= 0 &&
-            (fields[3] == 0 || fields[3] == 4)) {
-            if ((fields[2] != 2 && environment->unknown_integer_variables.count(fields[1])) ||
-                (fields[3] == 4 && environment->unknown_integer_variables.count(fields[4]))) goto unsupported;
-            auto& target = environment->integer_variables[fields[1]];
-            const std::int64_t operand = fields[3] == 0 ? fields[4] : environment->integer_variables[fields[4]];
-            std::int64_t value = target;
-            switch(fields[2]) {
-                case 0: value += operand; break;
-                case 1: value -= operand; break;
-                case 2: value = operand; break;
-                case 3: value *= operand; break;
-                case 4: if(!operand) goto unsupported; value /= operand; break;
-                case 5: if(!operand) goto unsupported; value %= operand; break;
-                default: goto unsupported;
-            }
-            if(value < std::numeric_limits<std::int32_t>::min() || value > std::numeric_limits<std::int32_t>::max()) goto unsupported;
-            target=static_cast<std::int32_t>(value);
-            environment->unknown_integer_variables.erase(fields[1]); return true;
-        }
+        if(apply_simulated_arithmetic(*environment,fields)) return true;
     } else if (id == 0x0a) {
-        environment->boolean_values_invalidated=true;
-        environment->known_boolean_assignments.clear();
+        // Standard script initialization is transparent to user-controlled offline values.
         return true;
     } else if (id == 0x78) {
+        if(apply_simulated_property(*environment,fields)) return true;
         if(fields.size()>=2 && fields[0]>=0 && fields[1]==0)
             environment->unknown_integer_variables.insert(fields[0]);
         return true;
     } else return true;
 unsupported:
+    if(id==0x77 && fields.size()>=2 && fields[0]==1)
+        environment->unknown_pointer_variables.insert(fields[1]);
+    if(id==0x77 && fields.size()>=2 && fields[0]==0) {
+        std::int32_t pointer;
+        if(read_simulated_operand(*environment,2,fields[1],pointer)) {
+            environment->unknown_memory.insert(static_cast<std::uint32_t>(pointer));
+            const auto addr=static_cast<std::uint32_t>(pointer);
+            if(addr>=0xF0000000u && addr<0xF0004000u && addr%4==0)
+                environment->unknown_integer_variables.insert((addr-0xF0000000u)/4);
+            if(addr>=0xE0000000u && addr<0xE0004000u && addr%4==0)
+                environment->unknown_pointer_variables.insert((addr-0xE0000000u)/4);
+        }
+    }
     if (id == 0x77 && fields.size() >= 2 && fields[0] == 2)
         environment->unknown_integer_variables.insert(fields[1]);
     if (id == 0x0b && !fields.empty()) {
@@ -554,6 +550,8 @@ WalkResult walk_nodes_to_end(const ExecutionNodeList& nodes,
 NativeReplayPlan build_native_replay_plan_to_end_with_scope(
     const SectionExecutionModel& model, const ReplayOptions& options,
     bool include_battle_map_commands, SimulationEnvironment* environment = nullptr) {
+    SimulationEnvironment local_environment = options.simulated_variables;
+    if (environment == nullptr) environment = &local_environment;
     NativeReplayPlan plan;
     if (!model.boundary_complete) {
         append_diagnostic(plan.diagnostic,
@@ -584,6 +582,8 @@ NativeReplayPlan build_native_replay_plan_to_target_with_scope(
     const LogicalNodeKey& target_node,
     const ReplayOptions& options,
     bool include_battle_map_commands, SimulationEnvironment* environment = nullptr) {
+    SimulationEnvironment local_environment = options.simulated_variables;
+    if (environment == nullptr) environment = &local_environment;
     NativeReplayPlan plan;
     if (!model.boundary_complete) {
         append_diagnostic(plan.diagnostic,

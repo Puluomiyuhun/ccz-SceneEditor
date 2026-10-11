@@ -1,6 +1,8 @@
-#include <ccz/preview/execution_model.h>
+﻿#include <ccz/preview/execution_model.h>
 #include <ccz/preview/instruction_catalog.h>
 #include "test_framework.h"
+#include <ccz/preview/text_color.h>
+#include <ccz/preview/variable_control_state.h>
 
 #include <cstdint>
 #include <initializer_list>
@@ -525,6 +527,37 @@ CCZ_TEST(integer_expression_evaluates_less_equal_and_not_equal) {
     CCZ_REQUIRE(!result);
 }
 
+CCZ_TEST(pointer_and_mixed_comparisons_use_nearest_writable_value) {
+    SimulationEnvironment environment;
+    environment.pointer_variables[0] = 0x42bd36;
+    environment.integer_variables[8] = 145;
+    DialogueCommandView command;
+    command.instruction_id = 0x79;
+    command.int_data = {1, 0, 1, 4, 8};
+    auto expression = decode_integer_expression(command);
+    std::wstring diagnostic;
+    CCZ_REQUIRE(apply_integer_variable_assignment(environment, expression, true, &diagnostic));
+    CCZ_REQUIRE_EQ(environment.simulated_memory.at(0x42bd36), 145);
+    CCZ_REQUIRE(apply_integer_variable_assignment(environment, expression, false, &diagnostic));
+    CCZ_REQUIRE_EQ(environment.simulated_memory.at(0x42bd36), 144);
+    command.int_data = {0, 10, 2, 2, 1};
+    expression = decode_integer_expression(command);
+    CCZ_REQUIRE(apply_integer_variable_assignment(environment, expression, true, &diagnostic));
+    CCZ_REQUIRE_EQ(environment.pointer_variables.at(1), 10);
+    // Aliased operands cannot be made unequal by modifying their shared cell.
+    environment.pointer_variables[0] = static_cast<int>(simulated_variable_address(false, 8));
+    command.int_data = {1, 0, 0, 4, 8};
+    expression = decode_integer_expression(command);
+    auto before = environment;
+    CCZ_REQUIRE(!apply_integer_variable_assignment(environment, expression, false, &diagnostic));
+    CCZ_REQUIRE(simulation_environments_equal(before, environment));
+    // Two ordinary integers retain the left-operand, nearest-boundary rule.
+    command.int_data = {4, 7, 1, 4, 8};
+    expression = decode_integer_expression(command);
+    CCZ_REQUIRE(apply_integer_variable_assignment(environment, expression, true, &diagnostic));
+    CCZ_REQUIRE_EQ(environment.integer_variables.at(7), 145);
+}
+
 CCZ_TEST(integer_assignment_supports_both_operand_directions_and_boundaries) {
     DialogueCommandView command;
     command.instruction_id = 0x79;
@@ -999,4 +1032,76 @@ CCZ_TEST(execution_model_exposes_canonical_replay_options_name) {
 
     CCZ_REQUIRE_EQ(model.body[1].predicate_state,
                    PredicateState::ExplicitFalse);
+}
+
+CCZ_TEST(pointer_simulation_aliases_and_unknown_memory) {
+    SimulationEnvironment e;
+    write_simulated_address(e,simulated_variable_address(false,1),145);
+    write_simulated_address(e,simulated_variable_address(true,0),static_cast<std::int32_t>(simulated_variable_address(false,1)));
+    std::int32_t value;
+    CCZ_REQUIRE(read_simulated_operand(e,1,0,value) && value==145);
+    write_simulated_address(e,simulated_variable_address(false,1),146);
+    CCZ_REQUIRE(read_simulated_operand(e,1,0,value) && value==146);
+    write_simulated_address(e,simulated_variable_address(true,2),0x42BD36);
+    CCZ_REQUIRE(read_simulated_operand(e,1,2,value) && value==0);
+    write_simulated_address(e,0x42BD36,532);
+    CCZ_REQUIRE(read_simulated_operand(e,1,2,value) && value==532);
+    e.unknown_memory.insert(0x42BD36);
+    CCZ_REQUIRE(!read_simulated_operand(e,1,2,value));
+    CCZ_REQUIRE(read_simulated_operand(e,3,0,value) && static_cast<std::uint32_t>(value)==simulated_variable_address(true,0));
+    CCZ_REQUIRE(read_simulated_operand(e,5,1,value) && static_cast<std::uint32_t>(value)==simulated_variable_address(false,1));
+}
+
+CCZ_TEST(pointer_arithmetic_and_avatar_attribute_share_simulated_values) {
+ SimulationEnvironment e;
+ CCZ_REQUIRE(apply_simulated_arithmetic(e,{1,0,2,5,1}));
+ CCZ_REQUIRE(apply_simulated_arithmetic(e,{2,1,2,0,532}));
+ std::int32_t value;
+ CCZ_REQUIRE(read_simulated_operand(e,1,0,value) && value==532);
+ CCZ_REQUIRE(apply_simulated_arithmetic(e,{0,0,0,0,1}));
+ CCZ_REQUIRE(read_simulated_operand(e,4,1,value) && value==533);
+ CCZ_REQUIRE(apply_simulated_property(e,{1,1,948,1}));
+ CCZ_REQUIRE(e.data_attributes.at({948,1})==533);
+ CCZ_REQUIRE(apply_simulated_property(e,{2,0,948,1}));
+ CCZ_REQUIRE(read_simulated_operand(e,4,2,value) && value==533);
+ CCZ_REQUIRE(!apply_simulated_arithmetic(e,{2,1,4,0,0}));
+}
+
+
+CCZ_TEST(text_color_parser_and_palette_follow_engine_boundaries) {
+ auto runs=parse_color_text(L"白[C28红]白[C3A蓝]");
+ CCZ_REQUIRE_EQ(runs.size(),std::size_t(4));CCZ_REQUIRE_EQ(runs[1].color,0x28);CCZ_REQUIRE_EQ(runs[3].color,0x3a);
+ auto invalid=parse_color_text(L"[C3a文字]");CCZ_REQUIRE_EQ(invalid[0].color,-1);CCZ_REQUIRE_EQ(invalid[0].text,std::wstring(L"[C3a文字]"));
+ std::vector<std::uint8_t> bytes(2048);const auto& palette=standard_text_palette();
+ auto write=[&](std::size_t at,std::uint32_t value){for(int n=0;n<4;++n)bytes[at+n]=(std::uint8_t)(value>>(n*8));};
+ write(0,0x5a4d);write(0x3c,0x80);write(0x80,0x4550);write(0x86,1);write(0x94,0xe0);write(0x98,0x10b);write(0xb4,0x400000);
+ write(0x178+12,0x1000);write(0x178+16,1536);write(0x178+20,512);
+ std::vector<std::uint8_t> pattern={0x8b,0x14,0x95,0,0x11,0x40,0,0x89,0x10,0x83,0xc0,3,0xeb,0xe1};std::copy(pattern.begin(),pattern.end(),bytes.begin()+512);
+ for(std::size_t i=0;i<256;++i)write(768+i*4,palette[i]);
+ auto parsed=extract_text_palette(bytes);CCZ_REQUIRE_EQ(parsed,palette);
+ bytes.resize(900);CCZ_REQUIRE(extract_text_palette(bytes).empty());
+}
+CCZ_TEST(simulation_controls_clear_unknowns_and_reset_live_aliases) {
+ SimulationEnvironment e;e.unknown_integer_variables.insert(0);
+ CCZ_REQUIRE(apply_variable_control_action(e,VariableControlKind::Integer,0,VariableControlAction::SetIntegerValue,0));
+ std::int32_t value;CCZ_REQUIRE(read_simulated_operand(e,4,0,value) && value==0);
+ e.integer_variables[1]=145;
+ CCZ_REQUIRE(apply_variable_control_action(e,VariableControlKind::Memory,static_cast<std::int32_t>(simulated_variable_address(false,1)),VariableControlAction::RestoreIntegerDefault,0));
+ CCZ_REQUIRE(read_simulated_operand(e,4,1,value) && value==0);
+ e.unknown_pointer_variables.insert(0);
+ CCZ_REQUIRE(apply_variable_control_action(e,VariableControlKind::Pointer,0,VariableControlAction::RestoreIntegerDefault,0));
+ CCZ_REQUIRE(e.unknown_pointer_variables.empty());
+}
+
+CCZ_TEST(integer_comparison_simulates_all_six_operand_types) {
+ SimulationEnvironment e;e.integer_variables[1]=145;e.pointer_variables[0]=0x42bd36;e.simulated_memory[0x42bd36]=145;e.pointer_variables[2]=145;
+ for(int kind=0;kind<6;++kind) {
+  int id=kind==0?145:kind==2?2:kind==4 || kind==5?1:0;
+  std::int32_t expected=145;if(kind==3)expected=static_cast<std::int32_t>(simulated_variable_address(true,0));if(kind==5)expected=static_cast<std::int32_t>(simulated_variable_address(false,1));
+  DialogueCommandView command{0x79,{kind,id,0,0,expected},L""};bool value=false;
+  CCZ_REQUIRE(evaluate_integer_expression(decode_integer_expression(command),e,value) && value);
+  command.int_data={0,expected,0,kind,id};CCZ_REQUIRE(evaluate_integer_expression(decode_integer_expression(command),e,value) && value);
+ }
+ CCZ_REQUIRE(apply_simulated_arithmetic(e,{0,0,2,0,146}));bool value=false;
+ CCZ_REQUIRE(evaluate_integer_expression(decode_integer_expression({0x79,{1,0,1,0,146},L""}),e,value) && value);
 }

@@ -1,8 +1,10 @@
-#include "test_framework.h"
+﻿#include "test_framework.h"
 
 #include <ccz/preview/execution_model.h>
 #include <ccz/preview/instruction_catalog.h>
 #include <ccz/preview/playback_timeline.h>
+#include <PreviewIntegration/DynamicPlaybackSession.h>
+#include <PreviewIntegration/PlaybackInterpolation.h>
 
 #include <cstdint>
 #include <string>
@@ -32,7 +34,7 @@ InstructionCatalog catalog() {
     InstructionCatalog value;
     value.valid = true;
     value.names = {{0x00, L"事件结束"}, {0x12, L"选择框"},
-                   {0x13, L"case"},       {0x14, L"对话"},
+                   {0x7a,L"对话3"},{0x77,L"变量运算"},{0x79,L"变量测试"}, {0x13, L"case"},       {0x14, L"对话"},
                    {0x09, L"延时"},        {0x29, L"地图头像显示"},
                    {0x2a, L"地图头像移动"}, {0x30, L"武将出现"},
                    {0x32, L"武将移动"}, {0x33, L"武将转向"},
@@ -238,4 +240,56 @@ CCZ_TEST(playback_timeline_rejects_inactive_case_target) {
 
     CCZ_REQUIRE(!timeline.complete);
     CCZ_REQUIRE(!timeline.diagnostic.empty());
+}
+
+CCZ_TEST(playback_timeline_dialogue3_has_one_event_per_page) {
+ ReplayOptions options;
+ auto model=model_for({raw_node(L"boundary",0x00),raw_node(L"dialogue",0x7a,{},{},L"&4,0,0,-1,-1\n一句\n&0&&\n二句\n&&")},L"dialogue",options);
+ auto timeline=build_playback_timeline(model,L"dialogue",PlaybackRange::StartToTarget,options);
+ CCZ_REQUIRE(timeline.complete);CCZ_REQUIRE_EQ(timeline.events.size(),std::size_t(2));
+ CCZ_REQUIRE_EQ(timeline.events[1].dialogue_segment_index,std::size_t(1));CCZ_REQUIRE_EQ(timeline.events[1].dialogue_segment_count,std::size_t(2));
+}
+
+PlaybackTimeline actual_play_button_timeline(const SectionExecutionModel& model,
+    const LogicalNodeKey& key, PlaybackRange range, const ReplayOptions& options) {
+    struct Frame {const SectionExecutionModel* model;LogicalNodeKey active_node;} frame{&model,key};
+    struct Session {const ReplayOptions& value;const ReplayOptions& options() const{return value;}} m_previewSession{options};
+    PlaybackTimeline m_dynamicTimeline;
+    // PRODUCTION_START_TIMELINE
+    return m_dynamicTimeline;
+}
+
+CCZ_TEST(play_button_starts_adjacent_character_moves_simultaneously) {
+ ReplayOptions options;
+ auto model=model_for({raw_node(L"boundary",0x00),
+  raw_node(L"appear1",0x30,{},{1,10,20,0,0}),
+  raw_node(L"appear2",0x30,{},{2,20,30,0,0}),
+  raw_node(L"move1",0x32,{},{0,1,0,30,40,0}),
+  raw_node(L"move2",0x32,{},{0,2,0,60,50,0}),
+  raw_node(L"hold",0x09,{},{1})},L"hold",options);
+ auto timeline=actual_play_button_timeline(model,L"hold",PlaybackRange::StartToTarget,options);
+ CCZ_REQUIRE(timeline.complete);
+ CCZ_REQUIRE_EQ(timeline.events.size(),std::size_t(4));
+ CCZ_REQUIRE_EQ(timeline.events[2].logical_key,std::wstring(L"move2"));
+ ccz::editor_preview::DynamicPlaybackSession session;
+ CCZ_REQUIRE(session.Start(timeline,PlaybackRange::StartToTarget));
+ session.Tick(0);auto halfway=session.Tick(600);
+ CCZ_REQUIRE_EQ(halfway.event_index,std::size_t(2));CCZ_REQUIRE_EQ(halfway.progress,0.5);
+ auto first=ccz::editor_preview::sample_playback_pose({{10,20},0,0},{{30,40},0,0},halfway.progress);
+ auto second=ccz::editor_preview::sample_playback_pose({{20,30},0,0},{{60,50},0,0},halfway.progress);
+ CCZ_REQUIRE_EQ(first.position.x,20);CCZ_REQUIRE_EQ(second.position.x,40);
+}
+
+CCZ_TEST(consecutive_moves_group_only_distinct_characters_inside_range) {
+ PlaybackTimeline timeline;timeline.complete=true;
+ for(int id:{1,2,1,3}) {PlaybackEvent event;event.kind=PlaybackSegmentKind::CharacterMove;event.logical_key=std::to_wstring(timeline.events.size());event.command.int_data={0,id,0,id*10,20,0};timeline.events.push_back(event);}
+ timeline.range_begin=0;timeline.range_end=4;timeline.target_index=0;timeline.target_end_index=1;
+ auto grouped=group_consecutive_character_moves(timeline);
+ CCZ_REQUIRE_EQ(grouped.events.size(),std::size_t(2));CCZ_REQUIRE_EQ(grouped.events[0].logical_key,std::wstring(L"1"));
+ CCZ_REQUIRE_EQ(grouped.events[1].logical_key,std::wstring(L"3"));
+ timeline.range_end=1;grouped=group_consecutive_character_moves(timeline);
+ CCZ_REQUIRE_EQ(grouped.events[0].logical_key,std::wstring(L"0"));
+ timeline.range_begin=1;timeline.range_end=4;timeline.target_index=1;timeline.target_end_index=2;
+ grouped=group_consecutive_character_moves(timeline);CCZ_REQUIRE_EQ(grouped.range_begin,std::size_t(1));
+ CCZ_REQUIRE_EQ(grouped.events.size(),std::size_t(2));CCZ_REQUIRE_EQ(grouped.events[1].logical_key,std::wstring(L"3"));
 }

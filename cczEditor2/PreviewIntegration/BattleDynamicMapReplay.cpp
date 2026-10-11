@@ -44,11 +44,11 @@ bool read_obstacle_event(const NativeReplayItem& item,
                          std::wstring& diagnostic) {
     const auto& fields = item.command.int_data;
     if (!has_supported_field_storage(fields, 7) ||
-        fields[0] < 0 || fields[0] > 2 ||
+        !IsBattleObstacleTypeSupported(fields[0]) ||
         (fields[1] != 0 && fields[1] != 1) ||
         fields[2] < 0 || fields[2] > 29 ||
         fields[5] < 0 || fields[5] > 1 || fields[6] < 0 || fields[6] > 1) {
-        diagnostic = L"0x58 障碍物类型或字段格式超出首版支持范围";
+        diagnostic = L"0x58 障碍物类型或字段格式不支持";
         return false;
     }
     const ccz::preview::BattleCoord coordinate{fields[3], fields[4]};

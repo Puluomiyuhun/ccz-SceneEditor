@@ -450,6 +450,64 @@ CCZ_TEST(battle_obstacle_defaults_are_snapshotted_and_draft_moves_reject_collisi
     CCZ_REQUIRE(drafts.items()[0].coordinate==BattleCoord({6,7}));
 }
 
+CCZ_TEST(battle_map_writeback_batch_inserts_after_selected_nested_event_container) {
+    std::wstring diagnostic;
+    BattleMapOperationInstruction obstacle;
+    CCZ_REQUIRE(ccz::editor_preview::BuildBattleObstacleInstruction(
+        0, BattleCoord{2, 3}, 19, 18, obstacle, diagnostic));
+    for (const bool has_next_command : {false, true}) {
+        auto capture = selected_capture();
+        auto& event = capture.snapshot.document_roots[0].children[0];
+        CapturedEditorNode info_group;
+        info_group.runtime_handle = 70;
+        info_group.instruction_id = 2;
+        info_group.long_text = L"战前剧情";
+        info_group.children = event.children;
+        CapturedEditorNode next;
+        next.runtime_handle = 80;
+        next.instruction_id = 19;
+        event.children = {info_group};
+        if (has_next_command)
+            event.children.push_back(next);
+        CapturedEditorNode outer_terminal;
+        outer_terminal.runtime_handle = 90;
+        outer_terminal.instruction_id = 0;
+        event.children.push_back(outer_terminal);
+        capture.snapshot.selected_handle = 70;
+
+        const auto batch =
+            ccz::editor_preview::BuildBattleWritebackInsertBatchAfterSelection(
+                capture, {obstacle});
+        CCZ_REQUIRE(batch.ok);
+        CCZ_REQUIRE_EQ(batch.changes.front().parent_handle, std::uintptr_t(30));
+        CCZ_REQUIRE_EQ(batch.changes.front().insert_after_handle,
+                       std::uintptr_t(70));
+        CCZ_REQUIRE_EQ(batch.changes.front().insert_before_handle,
+                       std::uintptr_t(has_next_command ? 80 : 90));
+        CCZ_REQUIRE_EQ(batch.changes.front().insert_terminal_handle,
+                       std::uintptr_t(90));
+    }
+}
+
+CCZ_TEST(battle_gate_types_build_validate_and_stage_with_scene11_defaults) {
+    using namespace ccz::editor_preview;
+    BattleMapOperationInstruction instruction;
+    std::wstring diagnostic;
+    BattleObstacleDraftQueue drafts;
+    for (int type : {4, 5, 6, 7, 127}) {
+        CCZ_REQUIRE(BuildBattleObstacleInstruction(type, {12, 11}, 19, 18,
+            instruction, diagnostic));
+        CCZ_REQUIRE(instruction.int_data ==
+            std::vector<std::int32_t>({type, 0, 17, 12, 11, 0, 0}));
+        CCZ_REQUIRE(ValidateBattleMapOperationInstruction(instruction, diagnostic));
+        CCZ_REQUIRE_EQ(BattleGateClosedImageIndex(type), (type - 4) * 2);
+    }
+    CCZ_REQUIRE(drafts.Add(4, {12, 11}, 19, 18));
+    CCZ_REQUIRE(!drafts.Add(3, {13, 11}, 19, 18));
+    CCZ_REQUIRE(!BuildBattleObstacleInstruction(128, {12, 11}, 19, 18,
+        instruction, diagnostic));
+}
+
 CCZ_TEST(battle_obstacle_brush_path_fills_crossed_cells_without_duplicate_stamps) {
     using namespace ccz::editor_preview;
     BattleObstacleDraftQueue drafts;

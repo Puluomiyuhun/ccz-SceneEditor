@@ -1,4 +1,7 @@
-#include "pch.h"
+﻿#include "pch.h"
+#include "PreviewPageFont.h"
+#include "RAutoWriteMenu.h"
+#include "ScenePreviewHost.h"
 #include "resource.h"
 #include "ScenePreviewWnd.h"
 #include "SceneBackgroundResolver.h"
@@ -372,6 +375,7 @@ bool CRScenePreviewPage::ActivateDocument(
 			m_dynamicPlaybackActive = false;
 			m_dynamicPlaybackPrepared = false;
 			m_dynamicVisualProgress = 0.0;
+			ApplyPreviewAvatars(m_previewSession.frame().avatar_codes);
 			m_visibleDialogueOverlay = m_previewSession.frame().dialogue;
 			m_pTreeCtrl = &tree;
 			m_hCurItem = selectedItem;
@@ -682,6 +686,7 @@ void CRScenePreviewPage::ClearRBitmapCaches()
 	for (auto& entry : m_portraitCache) delete entry.second;
 	m_portraitCache.clear();
 	m_portraitFaceIndices.clear();
+    m_previewAvatarCodes.clear();
 	m_portraitDataLoaded = false;
 }
 
@@ -1116,7 +1121,7 @@ void CRScenePreviewPage::UpdateVariablePaneFromFrame()
 	const auto section_key = frame.model != nullptr
 		? frame.model->section_key : ccz::preview::LogicalNodeKey();
 	m_variableControlPane.UpdateRows(frame.variable_index,
-		m_previewSession.options().simulated_variables, section_key);
+		frame.displayed_variables, section_key);
 	const bool show_button = frame.model != nullptr &&
 		frame.variable_index.valid && m_variableControlPane.HasRows();
 	m_variableButtonVisible = show_button;
@@ -1147,8 +1152,9 @@ void CRScenePreviewPage::UpdateConditionPaneFromFrame()
 		return;
 	}
 	const auto& frame = m_previewSession.frame();
-	m_conditionTreePane.UpdateModel(frame.model, frame.active_node,
-		m_previewSession.options());
+	auto displayOptions = m_previewSession.options();
+    displayOptions.simulated_variables = frame.displayed_variables;
+    m_conditionTreePane.UpdateModel(frame.model, frame.active_node, displayOptions);
 	const bool show_button = frame.model != nullptr &&
 		m_conditionTreePane.HasControllableNodes();
 	m_conditionButtonVisible = show_button;
@@ -1179,9 +1185,11 @@ void CRScenePreviewPage::UpdateActivationButtonFromFrame()
 		return;
 	}
 	const auto& frame = m_previewSession.frame();
+	auto displayOptions = m_previewSession.options();
+	displayOptions.simulated_variables = frame.displayed_variables;
 	const bool show_button = frame.model != nullptr &&
 		ccz::preview::condition_tree_model_can_activate_target(
-			*frame.model, frame.active_node, m_previewSession.options());
+			*frame.model, frame.active_node, displayOptions);
 	m_activationButtonVisible = show_button;
 	if (m_activationButton.GetSafeHwnd() != nullptr) {
 		m_activationButton.ShowWindow(show_button ? SW_SHOW : SW_HIDE);
@@ -1258,6 +1266,15 @@ CRect CRScenePreviewPage::SceneCanvasRect(const CRect& client_rect) const
 	return canvas_rect;
 }
 
+static void r_preview_move(CWnd& control,int x,int y,int width,int height) {
+    if(!control.GetSafeHwnd()) return;
+    CRect old;control.GetWindowRect(old);auto* parent=control.GetParent();if(parent) parent->ScreenToClient(old);
+    CRect next(x,y,x+(std::max)(0,width),y+(std::max)(0,height));if(old==next) return;
+    control.SetWindowPos(nullptr,x,y,next.Width(),next.Height(),SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOREDRAW);
+    if(parent) parent->InvalidateRect(old,FALSE);
+    control.Invalidate(FALSE);
+}
+
 void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 {
 	const int available = (std::max)(0, height - m_canvasTop);
@@ -1317,14 +1334,15 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 	}
 	top = (std::max)(m_canvasTop,
 		(std::min)(height - button_height, top));
-	LayoutPlaybackUi(width, top, button_height);
+
 	const int action_right = (std::max)(0, width - kConditionButtonMargin);
 	const int action_left = (std::max)(0,
 		action_right - total_width);
+	LayoutPlaybackUi((std::max)(0,action_left-kConditionButtonGap), top, button_height);
 	int button_index = 0;
 	if (m_conditionButton.GetSafeHwnd() != nullptr) {
 		if (m_conditionButtonVisible) {
-			m_conditionButton.MoveWindow(
+			r_preview_move(m_conditionButton,
 				action_left + button_index * (kConditionButtonWidth +
 					kConditionButtonGap), top, kConditionButtonWidth,
 				button_height);
@@ -1338,7 +1356,7 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 	}
 	if (m_variableButton.GetSafeHwnd() != nullptr) {
 		if (m_variableButtonVisible) {
-			m_variableButton.MoveWindow(
+			r_preview_move(m_variableButton,
 				action_left + button_index * (kConditionButtonWidth +
 					kConditionButtonGap), top, kConditionButtonWidth,
 				button_height);
@@ -1352,7 +1370,7 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 	}
 	if (m_activationButton.GetSafeHwnd() != nullptr) {
 		if (m_activationButtonVisible) {
-			m_activationButton.MoveWindow(
+			r_preview_move(m_activationButton,
 				action_left + button_index * (kConditionButtonWidth +
 					kConditionButtonGap), top, kConditionButtonWidth + activation_extra,
 				button_height);
@@ -1366,7 +1384,7 @@ void CRScenePreviewPage::LayoutConditionUi(int width, int height)
 	}
 	if (m_undoButton.GetSafeHwnd() != nullptr) {
 		if (m_undoButtonVisible) {
-			m_undoButton.MoveWindow(
+			r_preview_move(m_undoButton,
 				action_left + activation_extra + button_index * (kConditionButtonWidth +
 					kConditionButtonGap), top, kConditionButtonWidth,
 				button_height);
@@ -1405,8 +1423,8 @@ void CRScenePreviewPage::LayoutPlaybackUi(int width, int top, int height)
 	int x = kConditionButtonMargin;
 	auto placeButton = [&](CButton& button) {
 		if (button.GetSafeHwnd() != nullptr) {
-			button.MoveWindow(x, y, kPlaybackButtonSize, buttonHeight);
-			button.ShowWindow(SW_SHOW);
+			r_preview_move(button,x, y, kPlaybackButtonSize, buttonHeight);
+            button.ShowWindow(x+kPlaybackButtonSize<=width?SW_SHOW:SW_HIDE);
 			button.EnableWindow(TRUE);
 		}
 		x += kPlaybackButtonSize + kPlaybackGap;
@@ -1419,28 +1437,27 @@ void CRScenePreviewPage::LayoutPlaybackUi(int width, int top, int height)
 	placeButton(m_playbackStepBackButton);
 	placeButton(m_playbackStepForwardButton);
 	if (m_playbackSpeedButton.GetSafeHwnd() != nullptr) {
-		m_playbackSpeedButton.MoveWindow(x, y, kPlaybackSpeedButtonWidth,
+		r_preview_move(m_playbackSpeedButton,x, y, kPlaybackSpeedButtonWidth,
 			buttonHeight);
-		m_playbackSpeedButton.ShowWindow(SW_SHOW);
+		m_playbackSpeedButton.ShowWindow(x+kPlaybackSpeedButtonWidth<=width?SW_SHOW:SW_HIDE);
 		m_playbackSpeedButton.EnableWindow(TRUE);
 		x += kPlaybackSpeedButtonWidth + kPlaybackGap;
 	}
 	if (m_playbackProgress.GetSafeHwnd() != nullptr) {
-		m_playbackProgress.MoveWindow(x, y + 5, kPlaybackProgressWidth,
+		r_preview_move(m_playbackProgress,x, y + 5, kPlaybackProgressWidth,
 			(std::max)(8, buttonHeight - 10));
-		m_playbackProgress.ShowWindow(SW_SHOW);
+		m_playbackProgress.ShowWindow(x+kPlaybackProgressWidth<=width?SW_SHOW:SW_HIDE);
 		m_playbackProgress.EnableWindow(TRUE);
 		x += kPlaybackProgressWidth + kPlaybackGap;
 	}
 	if (m_playbackCounter.GetSafeHwnd() != nullptr) {
-		m_playbackCounter.MoveWindow(x, y, kPlaybackCounterWidth, buttonHeight);
-		m_playbackCounter.ShowWindow(SW_SHOW);
+		r_preview_move(m_playbackCounter,x, y, kPlaybackCounterWidth, buttonHeight);
+		m_playbackCounter.ShowWindow(x+kPlaybackCounterWidth<=width?SW_SHOW:SW_HIDE);
 		m_playbackCounter.EnableWindow(TRUE);
 	}
 	// If the pane is too narrow, the right-side condition buttons take
 	// precedence.  The playback bar is still useful in the normal dock width;
-	// clipping is preferable to moving controls over the dialogue panel.
-	(void)width;
+	// Hide controls that cannot fit; restore them when the pane becomes wider.
 }
 
 CTreeCtrl* CRScenePreviewPage::ResolvePreviewTree(
@@ -2015,7 +2032,7 @@ bool CRScenePreviewPage::RefreshDynamicTimelineForCurrentTarget()
 		m_dynamicTimeline = {};
 		return false;
 	}
-	m_dynamicTimeline = timeline;
+	m_dynamicTimeline = ccz::preview::group_consecutive_character_moves(timeline);
 	if (m_dynamicTimeline.events.empty()) return true;
 	if (m_dynamicPlaybackRange == ccz::preview::PlaybackRange::StartToTarget) {
 		m_dynamicStaticProgressIndex = (std::min)(
@@ -2079,6 +2096,7 @@ bool CRScenePreviewPage::PublishDynamicFrame(
 		}
 		return false;
 	}
+	ApplyPreviewAvatars(frame.avatar_codes);
 	m_visibleDialogueOverlay = frame.dialogue;
 	EnsureDynamicAssets();
 	return true;
@@ -2143,7 +2161,7 @@ void CRScenePreviewPage::PrepareDynamicPlaybackEvent(std::size_t event_index)
 	const auto from_dialogue = m_visibleDialogueOverlay;
 	ccz::editor_preview::PreviewFrame target_frame;
 	const std::optional<std::size_t> dialogue_segment_index =
-		(event.command.instruction_id == 0x14 &&
+		((event.command.instruction_id == 0x14 || event.command.instruction_id == 0x7a) &&
 		 event.dialogue_segment_count > 0)
 			? std::optional<std::size_t>(event.dialogue_segment_index)
 			: std::nullopt;
@@ -2217,7 +2235,7 @@ bool CRScenePreviewPage::RewindDynamicPlaybackOneEvent()
 	} else {
 		const auto& before_event = m_dynamicTimeline.events[desired - 1];
 		const std::optional<std::size_t> dialogue_segment_index =
-			(before_event.command.instruction_id == 0x14 &&
+			((before_event.command.instruction_id == 0x14 || before_event.command.instruction_id == 0x7a) &&
 			 before_event.dialogue_segment_count > 0)
 				? std::optional<std::size_t>(before_event.dialogue_segment_index)
 				: std::nullopt;
@@ -2249,6 +2267,7 @@ bool CRScenePreviewPage::StartDynamicPlayback(
 	m_dynamicTimeline = ccz::preview::build_playback_timeline(
 		*frame.model, frame.active_node, range,
 		m_previewSession.options());
+	m_dynamicTimeline = ccz::preview::group_consecutive_character_moves(m_dynamicTimeline);
 	if (!m_dynamicTimeline.complete) {
 		if (!m_dynamicTimeline.diagnostic.empty()) {
 			AppendDiagnostic(CString(m_dynamicTimeline.diagnostic.c_str()));
@@ -2817,6 +2836,13 @@ void CRScenePreviewPage::RecordInsertedUndo(
 	const wchar_t* label, std::vector<HTREEITEM> items,
 	HTREEITEM restoreSelection)
 {
+    std::vector<HTREEITEM> expanded;
+    for(auto item:items) {
+        auto group=m_autoWriteGroups.find(item);
+        if(group==m_autoWriteGroups.end()) expanded.push_back(item);
+        else {expanded.insert(expanded.end(),group->second.begin(),group->second.end());m_autoWriteGroups.erase(group);}
+    }
+    items=std::move(expanded);
 	items.erase(std::remove(items.begin(), items.end(), nullptr), items.end());
 	if (items.empty()) return;
 	PreviewUndoTransaction transaction;
@@ -2837,6 +2863,7 @@ void CRScenePreviewPage::RecordInsertedUndo(
 
 void CRScenePreviewPage::ClearPreviewUndo()
 {
+	m_autoWriteGroups.clear();
 	m_previewUndoStack.clear();
 	UpdateUndoButton();
 }
@@ -3893,6 +3920,12 @@ bool CRScenePreviewPage::LoadPortraitData(const wchar_t* modPath)
 	return true;
 }
 
+void CRScenePreviewPage::ApplyPreviewAvatars(const std::map<int,int>& codes) {
+ if(codes==m_previewAvatarCodes) return;
+ for(auto& entry:m_portraitCache) delete entry.second;
+ m_portraitCache.clear();m_previewAvatarCodes=codes;
+}
+
 Gdiplus::Bitmap* CRScenePreviewPage::GetPortraitBitmap(int personID, const wchar_t* modPath)
 {
 	if (!ccz::scene_preview::is_direct_data_portrait_target(personID)) return nullptr;
@@ -3911,11 +3944,14 @@ Gdiplus::Bitmap* CRScenePreviewPage::GetPortraitBitmap(int personID, const wchar
 		return nullptr;
 	}
 
-	CString rootPath = GetRootPath(modPath);
+	int effectiveFaceIndex=faceIt->second;
+    auto override=m_previewAvatarCodes.find(personID);
+    if(override!=m_previewAvatarCodes.end()) effectiveFaceIndex=ccz::scene_preview::face_image_index_for_data_person(personID,(unsigned short)override->second);
+    CString rootPath = GetRootPath(modPath);
 	CString facePath = rootPath + _T("E5\\Face.e5");
 	CString debugInfo;
 	Gdiplus::Bitmap* portrait = LoadBitmapFromE5(
-		facePath, faceIt->second, debugInfo, false);
+		facePath, effectiveFaceIndex, debugInfo, false);
 	m_portraitCache.emplace(personID, portrait);
 	if (!portrait) {
 		CString msg;
@@ -4194,7 +4230,8 @@ void CRScenePreviewPage::UpdatePreview(CTreeCtrl& tree, HTREEITEM hSelectedItem,
 		if (!apply.diagnostic.empty()) {
 			AppendDiagnostic(CString(apply.diagnostic.c_str()));
 		}
-		m_visibleDialogueOverlay = frame.dialogue;
+		ApplyPreviewAvatars(frame.avatar_codes);
+	m_visibleDialogueOverlay = frame.dialogue;
 	}
 	ReconcileCharacterSelection();
 
@@ -4268,15 +4305,14 @@ void CRScenePreviewPage::OnPaint()
 	graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
 	graphics.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
 
-	const int MAP_W = 640, MAP_H = 400;
-	float scaleX = (float)canvasRect.Width() / MAP_W;
-	float scaleY = (float)canvasRect.Height() / MAP_H;
-	float scale = min(scaleX, scaleY);
-
-	int canvasW = (int)(MAP_W * scale);
-	int canvasH = (int)(MAP_H * scale);
-	int offsetX = (canvasRect.Width() - canvasW) / 2;
-	int offsetY = (canvasRect.Height() - canvasH) / 2;
+	const auto sceneViewport = ccz::editor_preview::CalculateRSceneViewport(
+		CRect(0, 0, canvasRect.Width(), canvasRect.Height()),
+		kPlaybackBarHeight + kConditionButtonMargin);
+	const float scale = sceneViewport.scale;
+	const int canvasW = sceneViewport.bounds.Width();
+	const int canvasH = sceneViewport.bounds.Height();
+	const int offsetX = sceneViewport.bounds.left;
+	const int offsetY = sceneViewport.bounds.top;
 	const SceneState paintState = DynamicPaintState();
 	const SceneState& renderState = paintState;
 
@@ -4506,7 +4542,7 @@ void CRScenePreviewPage::OnPaint()
 			L"挥剑扬起",L"挥剑劈下",L"活埋",L"起身",L"单手举起",L"未知",L"变量",L"无"
 		};
 
-		Gdiplus::Font infoFont(L"Microsoft YaHei", 9);
+		Gdiplus::Font infoFont(L"Microsoft YaHei", (float)PreviewUiPointSize());
 		Gdiplus::SolidBrush infoBrush(Gdiplus::Color(200, 200, 200, 200));
 
 		const bool outerScene = renderState.coordinateSpace ==
@@ -4641,8 +4677,10 @@ void CRScenePreviewPage::OnPaint()
 	{
 		const CRect overlayClient(0, 0, canvasRect.Width(), canvasRect.Height());
 		ccz::editor_preview::OverlayLayout overlayLayout;
-		if (ccz::editor_preview::CalculateDialogueOverlayLayout(
-				overlayClient, overlayLayout)) {
+        const bool layoutValid=m_visibleDialogueOverlay.half_body
+            ? ccz::editor_preview::CalculateHalfBodyDialogueLayout(CRect(offsetX,offsetY,offsetX+canvasW,offsetY+canvasH),overlayClient,overlayLayout)
+            : ccz::editor_preview::CalculateDialogueOverlayLayout(overlayClient,overlayLayout);
+		if (layoutValid) {
 			ccz::editor_preview::PaintDialogueOverlay(
 				memDC, overlayLayout, m_visibleDialogueOverlay);
 		}
@@ -5080,8 +5118,10 @@ void CRScenePreviewPage::OnLButtonDown(UINT nFlags, CPoint point)
 			const HTREEITEM restoreSelection = pView->cur_item;
 			const int intData[5] = { m_selectedCharID, game.x, game.y,
 				m_placeDir, m_placeAction };
-			const HTREEITEM inserted = pView->InsertInstructionAt(
+			const BOOL wasModified=pView->GetDocument()->IsModified();
+			HTREEITEM inserted = pView->InsertInstructionAt(
 				48, restoreSelection, intData, 5);
+            inserted=CompleteAppearWrite(inserted,restoreSelection,wasModified);
 			if (inserted != nullptr) {
 				RecordInsertedUndo(L"放置角色", { inserted }, restoreSelection);
 			}
@@ -5132,6 +5172,14 @@ void CRScenePreviewPage::OnLButtonDblClk(UINT nFlags, CPoint point)
 	CWnd::OnLButtonDblClk(nFlags, point);
 }
 
+HTREEITEM CRScenePreviewPage::CompleteAppearWrite(HTREEITEM primary,HTREEITEM restoreSelection,BOOL wasModified) {
+    if(!primary || !AfxGetApp()->GetProfileInt(L"RPreviewAux",L"AppearRedraw",0)) return primary;
+    auto* view=GetActiveEditorView();if(!view) return primary;
+    auto followup=view->InsertInstructionAt(0x1e,primary,nullptr,0);
+    if(!followup) {RemoveInsertedInstruction(primary);RestoreAfterBatchFailure(restoreSelection,wasModified);return nullptr;}
+    m_autoWriteGroups[followup]={primary,followup};return followup;
+}
+
 HTREEITEM CRScenePreviewPage::InsertAppearInstruction(
 	int charID, int screenX, int screenY, bool record_undo)
 {
@@ -5141,8 +5189,10 @@ HTREEITEM CRScenePreviewPage::InsertAppearInstruction(
 	CPoint game = PixelToGame(screenX, screenY);
 	int intData[5] = { charID, game.x, game.y, 2, 0 };
 	const HTREEITEM restoreSelection = pView->cur_item;
-	const HTREEITEM inserted = pView->InsertInstructionAt(
+	const BOOL wasModified=pView->GetDocument()->IsModified();
+	HTREEITEM inserted = pView->InsertInstructionAt(
 		48, restoreSelection, intData, 5);
+    inserted=CompleteAppearWrite(inserted,restoreSelection,wasModified);
 	if (inserted != nullptr && record_undo) {
 		RecordInsertedUndo(L"放置角色", { inserted }, restoreSelection);
 	}
@@ -5153,6 +5203,17 @@ HTREEITEM CRScenePreviewPage::InsertAppearInstruction(
 
 void CRScenePreviewPage::OnContextMenu(CWnd* pWnd, CPoint point)
 {
+    CPoint headerPoint=point;ScreenToClient(&headerPoint);
+    if(headerPoint.y>=0 && headerPoint.y<m_canvasTop) {
+        CMenu menu,fonts;menu.CreatePopupMenu();AppendPageFontMenu(menu,fonts,L"Scene",0xec00);
+        auto action=menu.TrackPopupMenu(TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,this);
+        if(action==0xec00 || (action>=0xec08 && action<=0xec0e)) {
+            auto frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());
+            if(frame)frame->m_wndScenePreview.SetUiPointSize(action==0xec00?0:action-0xec00);
+        }
+        return;
+    }
+
 	if (m_dynamicPlaybackActive) return;
 	// 特殊模式下不弹菜单
 	if (m_bPortraitAdjustMode || m_bPortraitPlaceMode || m_bPortraitMoveMode ||
@@ -5217,10 +5278,16 @@ void CRScenePreviewPage::OnContextMenu(CWnd* pWnd, CPoint point)
 	if (hitIdx < 0) {
 		CMenu menu;
 		menu.CreatePopupMenu();
+		CMenu fonts;AppendPageFontMenu(menu,fonts,L"Scene",0xec00);
+        CMenu autoAction;AppendRAutoWriteMenu(menu,autoAction);
 		menu.AppendMenuW(MF_STRING | (m_bShowGrid ? MF_CHECKED : 0),
 			ID_SCENE_TOGGLE_GRID, L"显示网格");
 		int cmd = (int)menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RETURNCMD, point.x, point.y, this);
-		if (cmd == ID_SCENE_TOGGLE_GRID) {
+		if(cmd==0xec00 || (cmd>=0xec08 && cmd<=0xec0e)) {
+            auto frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());if(frame)frame->m_wndScenePreview.SetUiPointSize(cmd==0xec00?0:cmd-0xec00);return;
+        }
+        if(HandleRAutoWriteMenuCommand(cmd)) return;
+        if (cmd == ID_SCENE_TOGGLE_GRID) {
 			m_bShowGrid = !m_bShowGrid;
 			Invalidate();
 		}
@@ -5247,6 +5314,8 @@ void CRScenePreviewPage::OnContextMenu(CWnd* pWnd, CPoint point)
 
 	CMenu menuAction;
 	menuAction.CreatePopupMenu();
+    CMenu autoAction;
+
 	for (int i = 0; i < 20; i++)
 		menuAction.AppendMenuW(MF_STRING, ID_SCENE_ACTION_0 + i, actionNames[i]);
 
@@ -5260,7 +5329,16 @@ void CRScenePreviewPage::OnContextMenu(CWnd* pWnd, CPoint point)
 	menu.AppendMenuW(MF_STRING, ID_SCENE_DISAPPEAR, L"消失");
 	menu.AppendMenuW(MF_STRING, 0xeff0, L"删除角色");
 
+    menu.AppendMenuW(MF_SEPARATOR,0,(LPCTSTR)nullptr);
+    CMenu fonts;AppendPageFontMenu(menu,fonts,L"Scene",0xec00);
+    AppendRAutoWriteMenu(menu,autoAction);
 	int cmd = (int)menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RETURNCMD, point.x, point.y, this);
+    if(cmd==0xec00 || (cmd>=0xec08 && cmd<=0xec0e)) {
+        auto frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());
+        if(frame) frame->m_wndScenePreview.SetUiPointSize(cmd==0xec00?0:cmd-0xec00);return;
+    }
+    if(HandleRAutoWriteMenuCommand(cmd)) return;
+
 	if(cmd==0xeff0){DeletePreviewCharacter(m_hitCharID);return;}
 	if (cmd >= ID_SCENE_DIR_0 && cmd <= ID_SCENE_DIR_3) {
 		InsertTurnInstruction(m_hitCharID, cmd - ID_SCENE_DIR_0);
@@ -5298,6 +5376,8 @@ void CRScenePreviewPage::ShowMultiContextMenu(CPoint screenPoint)
 
 	CMenu menuAction;
 	menuAction.CreatePopupMenu();
+    CMenu autoAction;
+
 	for (int i = 0; i < 20; ++i)
 		menuAction.AppendMenuW(MF_STRING, ID_SCENE_ACTION_0 + i, actionNames[i]);
 
@@ -5339,8 +5419,17 @@ void CRScenePreviewPage::ShowMultiContextMenu(CPoint screenPoint)
 		ID_SCENE_MULTI_SET_PRIMARY, L"设为主角色");
 	menu.AppendMenuW(MF_STRING, ID_SCENE_MULTI_REMOVE_SELECTED, L"取消选择该角色");
 
+    menu.AppendMenuW(MF_SEPARATOR,0,(LPCTSTR)nullptr);
+    CMenu fonts;AppendPageFontMenu(menu,fonts,L"Scene",0xec00);
+    AppendRAutoWriteMenu(menu,autoAction);
 	int cmd = (int)menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RETURNCMD,
 		screenPoint.x, screenPoint.y, this);
+    if(cmd==0xec00 || (cmd>=0xec08 && cmd<=0xec0e)) {
+        auto frame=DYNAMIC_DOWNCAST(CMainFrame,AfxGetMainWnd());
+        if(frame) frame->m_wndScenePreview.SetUiPointSize(cmd==0xec00?0:cmd-0xec00);return;
+    }
+    if(HandleRAutoWriteMenuCommand(cmd)) return;
+
 	if (cmd == ID_SCENE_MULTI_ALIGN) {
 		ApplyMultiAlignment();
 	} else if (cmd == ID_SCENE_MULTI_DISTRIBUTE) {
@@ -5573,12 +5662,27 @@ void CRScenePreviewPage::ApplyMultiDisappear()
 		RestoreAfterBatchFailure(restoreSelection, wasModified);
 		return;
 	}
+    if(AfxGetApp()->GetProfileInt(L"RPreviewAux",L"Redraw",1)) {
+        auto followup=pView->InsertInstructionAt(0x1e,anchor,nullptr,0);
+        if(!followup) {
+            for(auto i=insertedItems.rbegin();i!=insertedItems.rend();++i) RemoveInsertedInstruction(*i);
+            RestoreAfterBatchFailure(restoreSelection,wasModified);return;
+        }
+        insertedItems.push_back(followup);
+    }
 	RecordInsertedUndo(L"批量消失", std::move(insertedItems), restoreSelection);
 	ClearCharacterSelection();
 }
 
 void CRScenePreviewPage::RemoveInsertedInstruction(HTREEITEM item)
 {
+    auto group=m_autoWriteGroups.find(item);
+    if(group!=m_autoWriteGroups.end()) {
+        auto items=group->second;m_autoWriteGroups.erase(group);
+        for(auto i=items.rbegin();i!=items.rend();++i) RemoveInsertedInstruction(*i);
+        return;
+    }
+
 	if (!item) return;
 	CcczEditor2View* pView = GetActiveEditorView();
 	if (!pView) return;
@@ -5660,7 +5764,7 @@ void CRScenePreviewPage::CommitMultiMove()
 	HTREEITEM anchor = restoreSelection;
 	std::vector<HTREEITEM> insertedItems;
 	insertedItems.reserve(selectedStates.size());
-	const bool committed = ccz::scene_preview::ApplyBatchTransaction<CharacterState, HTREEITEM>(
+	bool committed = ccz::scene_preview::ApplyBatchTransaction<CharacterState, HTREEITEM>(
 		selectedStates,
 		[&](const CharacterState& character) {
 			HTREEITEM inserted = InsertMoveInstruction(
@@ -5672,6 +5776,19 @@ void CRScenePreviewPage::CommitMultiMove()
 		},
 		[&](HTREEITEM inserted) { RemoveInsertedInstruction(inserted); },
 		[](HTREEITEM inserted) { return inserted != nullptr; });
+    const int followupAction=AfxGetApp()->GetProfileInt(L"RPreviewAux",L"MoveAction",0);
+    if(committed && followupAction>=0 && followupAction<20) {
+        for(const auto& character:selectedStates) {
+            int fields[2]={character.id,followupAction};
+            auto followup=pView->InsertInstructionAt(0x34,anchor,fields,2);
+            if(!followup) {
+                for(auto i=insertedItems.rbegin();i!=insertedItems.rend();++i) RemoveInsertedInstruction(*i);
+                committed=false;break;
+            }
+            insertedItems.push_back(followup);anchor=followup;
+        }
+    }
+
 	if (!committed) {
 		RestoreAfterBatchFailure(restoreSelection, wasModified);
 	} else {
@@ -5732,7 +5849,7 @@ void CRScenePreviewPage::CommitPointMove()
 	HTREEITEM anchor = restoreSelection;
 	std::vector<HTREEITEM> insertedItems;
 	insertedItems.reserve(selectedStates.size());
-	const bool committed = ccz::scene_preview::ApplyBatchTransaction<CharacterState, HTREEITEM>(
+	bool committed = ccz::scene_preview::ApplyBatchTransaction<CharacterState, HTREEITEM>(
 		selectedStates,
 		[&](const CharacterState& character) {
 			HTREEITEM inserted = InsertMoveInstruction(
@@ -5743,6 +5860,19 @@ void CRScenePreviewPage::CommitPointMove()
 		},
 		[&](HTREEITEM inserted) { RemoveInsertedInstruction(inserted); },
 		[](HTREEITEM inserted) { return inserted != nullptr; });
+    const int followupAction=AfxGetApp()->GetProfileInt(L"RPreviewAux",L"MoveAction",0);
+    if(committed && followupAction>=0 && followupAction<20) {
+        for(const auto& character:selectedStates) {
+            int fields[2]={character.id,followupAction};
+            auto followup=pView->InsertInstructionAt(0x34,anchor,fields,2);
+            if(!followup) {
+                for(auto i=insertedItems.rbegin();i!=insertedItems.rend();++i) RemoveInsertedInstruction(*i);
+                committed=false;break;
+            }
+            insertedItems.push_back(followup);anchor=followup;
+        }
+    }
+
 	if (!committed) {
 		RestoreAfterBatchFailure(restoreSelection, wasModified);
 	} else {
@@ -5785,11 +5915,18 @@ HTREEITEM CRScenePreviewPage::InsertDisappearInstruction(
 {
 	CcczEditor2View* pView = GetActiveEditorView();
 	if (!pView) return nullptr;
+    const BOOL wasModified=pView->GetDocument()->IsModified();
 	// 武将消失: [0]=模式(0=单人), [1]=人物ID
 	int intData[7] = { 0, charID, 0, 0, 0, 0, 0 };
 	const HTREEITEM restoreSelection = hAfter ? hAfter : pView->cur_item;
-	const HTREEITEM inserted = pView->InsertInstructionAt(
+	HTREEITEM inserted = pView->InsertInstructionAt(
 		49, restoreSelection, intData, 7);
+    if(inserted && record_undo && AfxGetApp()->GetProfileInt(L"RPreviewAux",L"Redraw",1)) {
+        auto primary=inserted;
+        auto followup=pView->InsertInstructionAt(0x1e,primary,nullptr,0);
+        if(!followup) {RemoveInsertedInstruction(primary);if(record_undo) RestoreAfterBatchFailure(restoreSelection,wasModified);return nullptr;}
+        m_autoWriteGroups[followup]={primary,followup};inserted=followup;
+    }
 	if (inserted != nullptr && record_undo) {
 		RecordInsertedUndo(L"角色消失", { inserted }, restoreSelection);
 	}
@@ -5802,6 +5939,7 @@ HTREEITEM CRScenePreviewPage::InsertMoveInstruction(
 {
 	CcczEditor2View* pView = GetActiveEditorView();
 	if (!pView) return nullptr;
+    const BOOL wasModified=pView->GetDocument()->IsModified();
 	// 武将移动: [0]=模式(0=data角色), [1]=人物ID, [2]=0, [3]=目标X, [4]=目标Y, [5]=方向
 	int dir = directionOverride;
 	if (dir < 0) {
@@ -5811,8 +5949,16 @@ HTREEITEM CRScenePreviewPage::InsertMoveInstruction(
 	}
 	int intData[6] = { 0, charID, 0, gameX, gameY, dir };
 	const HTREEITEM restoreSelection = hAfter ? hAfter : pView->cur_item;
-	const HTREEITEM inserted = pView->InsertInstructionAt(
+	HTREEITEM inserted = pView->InsertInstructionAt(
 		50, restoreSelection, intData, 6);
+    const int action=AfxGetApp()->GetProfileInt(L"RPreviewAux",L"MoveAction",0);
+    if(inserted && record_undo && action>=0 && action<20) {
+        auto primary=inserted;
+        int fields[2]={charID,action};
+        auto followup=pView->InsertInstructionAt(0x34,primary,fields,2);
+        if(!followup) {RemoveInsertedInstruction(primary);if(record_undo) RestoreAfterBatchFailure(restoreSelection,wasModified);return nullptr;}
+        m_autoWriteGroups[followup]={primary,followup};inserted=followup;
+    }
 	if (inserted != nullptr && record_undo) {
 		RecordInsertedUndo(L"移动角色", { inserted }, restoreSelection);
 	}

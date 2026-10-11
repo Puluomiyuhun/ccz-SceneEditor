@@ -36,7 +36,7 @@ int main(){try{
  for(unsigned id:{0x25,0x26})for(const auto& selector:std::vector<std::pair<const wchar_t*,int>>{{L"任何部队",1024},{L"我军当前人物",1027},{L"w0",1028},{L"w249",1277},{L"v0",-2},{L"v4095",-4097},{L"无",-1}}){
   auto entry=ccz::editor_preview::DefaultBattleCommandConfiguration(id);
   pane.Open(&owner,entry,40,40,[&](const auto& command){submitted=command;return true;});
-  auto* people=static_cast<CMyComboBox*>(pane.GetDlgItem(300));auto* edit=people->GetDlgItem(0x7F42);CHECK(edit!=nullptr);
+  auto* people=static_cast<CMyComboBox*>(pane.GetDlgItem(300));auto* edit=people->GetDlgItem(1001);CHECK(edit!=nullptr);
   edit->SetWindowText(selector.first);CHECK(people->CommitIndexedInput());pane.SendMessage(WM_COMMAND,MAKEWPARAM(201,BN_CLICKED));CHECK(submitted.int_data[0]==selector.second);
  }
  pane.DestroyWindow();owner.DestroyWindow();std::cout<<"PASS compact role/area/entry parameter layouts; delay checkbox submission; cancel does not write; full entry selectors and name searches preserve original codes\n";return 0;

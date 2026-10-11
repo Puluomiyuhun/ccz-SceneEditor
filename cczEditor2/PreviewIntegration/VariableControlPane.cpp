@@ -5,6 +5,7 @@
 #include <climits>
 #include <cwchar>
 #include <cwctype>
+#include <cwchar>
 #include <string>
 
 namespace {
@@ -306,16 +307,16 @@ void CVariableControlPane::RebuildVisibleRows()
 		m_visibleRowIndices.push_back(row_index);
 		const std::wstring type = row.kind ==
 			ccz::preview::VariableControlKind::Boolean
-			? L"布尔变量" : L"整型值";
-		const std::wstring variable = (row.kind ==
-			ccz::preview::VariableControlKind::Boolean ? L"b" : L"n") +
+			? L"布尔变量" : row.kind == ccz::preview::VariableControlKind::Pointer ? L"指针" : row.kind == ccz::preview::VariableControlKind::Memory ? L"模拟地址" : L"整型值";
+		std::wstring variable = (row.kind ==
+			ccz::preview::VariableControlKind::Boolean ? L"b" : row.kind == ccz::preview::VariableControlKind::Pointer ? L"p" : row.kind == ccz::preview::VariableControlKind::Memory ? L"@" : L"n") +
 			std::to_wstring(row.id);
+		if(row.kind==ccz::preview::VariableControlKind::Memory) {wchar_t address[16]{};swprintf_s(address,L"@0x%08X",static_cast<std::uint32_t>(row.id));variable=address;}
 		const std::wstring value = row.kind ==
 			ccz::preview::VariableControlKind::Boolean
 			? (row.boolean_value ? L"True" : L"False")
-			: (row.is_default ? L"" : std::to_wstring(row.integer_value));
-		const std::wstring usage = L"使用 " +
-			std::to_wstring(row.occurrence_count) + L" 次";
+			: ccz::preview::format_variable_control_value(row);
+		const std::wstring usage = row.usage_summary;
 		LVITEMW item{};
 		item.mask = LVIF_TEXT;
 		item.iItem = static_cast<int>(m_visibleRowIndices.size() - 1);
@@ -375,8 +376,8 @@ const ccz::preview::VariableControlRow* CVariableControlPane::SelectedRow() cons
 void CVariableControlPane::UpdateActionControls()
 {
 	const auto* row = SelectedRow();
-	const bool integer = row != nullptr && row->kind ==
-		ccz::preview::VariableControlKind::Integer;
+	const bool integer = row != nullptr && row->kind !=
+		ccz::preview::VariableControlKind::Boolean;
 	const bool boolean = row != nullptr && row->kind ==
 		ccz::preview::VariableControlKind::Boolean;
 	for (CWnd* control : {static_cast<CWnd*>(&m_integerLabel),
@@ -397,8 +398,7 @@ void CVariableControlPane::UpdateActionControls()
 	if (m_integerEdit.GetSafeHwnd() != nullptr) {
 		m_integerEdit.EnableWindow(integer);
 		m_integerEdit.SetWindowTextW(
-			integer && !row->is_default ? std::to_wstring(row->integer_value).c_str()
-			: L"");
+			integer ? (row->value_known ? ccz::preview::format_variable_control_value(*row).c_str() : L"0") : L"");
 	}
 	if (m_integerAssignButton.GetSafeHwnd() != nullptr) {
 		m_integerAssignButton.EnableWindow(integer);
@@ -421,15 +421,9 @@ bool CVariableControlPane::ReadIntegerValue(std::int32_t& value) const
 	if (length <= 0) {
 		return false;
 	}
-	wchar_t* end = nullptr;
-	errno = 0;
-	const long long parsed = std::wcstoll(buffer, &end, 10);
-	if (errno == ERANGE || end == buffer || *end != L'\0' ||
-		parsed < INT_MIN || parsed > INT_MAX) {
-		return false;
-	}
-	value = static_cast<std::int32_t>(parsed);
-	return true;
+    const auto* row = SelectedRow();
+    const bool address = row && (row->kind == ccz::preview::VariableControlKind::Pointer || row->kind == ccz::preview::VariableControlKind::Memory);
+    return ccz::preview::parse_simulated_control_value(buffer, address, value);
 }
 
 void CVariableControlPane::NotifyDiagnostic(const std::wstring& diagnostic)
@@ -452,7 +446,7 @@ void CVariableControlPane::NotifyAction(
 		 action != ccz::preview::VariableControlAction::SetBooleanFalse)) {
 		return;
 	}
-	if (row->kind == ccz::preview::VariableControlKind::Integer &&
+	if (row->kind != ccz::preview::VariableControlKind::Boolean &&
 		(action != ccz::preview::VariableControlAction::SetIntegerValue &&
 		 action != ccz::preview::VariableControlAction::RestoreIntegerDefault)) {
 		return;
@@ -479,7 +473,7 @@ void CVariableControlPane::OnActionCommand(UINT command_id)
 		case kIntegerAssignButtonId: {
 			std::int32_t value = 0;
 			if (!ReadIntegerValue(value)) {
-				NotifyDiagnostic(L"整型值必须是完整的十进制整数");
+				NotifyDiagnostic(L"请输入有效整数；指针和地址值也支持0x十六进制、&a编号、&p编号");
 				return;
 			}
 			NotifyAction(ccz::preview::VariableControlAction::SetIntegerValue,

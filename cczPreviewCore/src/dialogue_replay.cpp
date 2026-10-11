@@ -14,7 +14,7 @@ using ExecutionNodeList = std::vector<ExecutionNode>;
 
 bool is_preview_command(const ExecutionNode& node,
                         const DialogueProfile& profile) {
-    return node.command.instruction_id == profile.face_state_instruction_id ||
+    return node.command.instruction_id == 0x77 || node.command.instruction_id == 0x78 || node.command.instruction_id == 0x38 || node.command.instruction_id == profile.face_state_instruction_id ||
            find_dialogue_spec(profile, node.command.instruction_id) != nullptr;
 }
 
@@ -307,7 +307,7 @@ bool walk_predicate(const ExecutionNode& predicate,
         if (predicate.boolean_expression.decoded) {
             if (!evaluate_boolean_variable_expression(
                     predicate.boolean_expression,
-                    options.simulated_variables, predicate_value,
+                    result.state.simulated, predicate_value,
                     &evaluation_diagnostic)) {
                 result.reason = ReplayStopReason::UnsupportedCondition;
                 result.waiting_node = predicate.logical_key;
@@ -321,7 +321,7 @@ bool walk_predicate(const ExecutionNode& predicate,
         } else if (predicate.integer_expression.decoded) {
             if (!evaluate_integer_expression(
                     predicate.integer_expression,
-                    options.simulated_variables, predicate_value,
+                    result.state.simulated, predicate_value,
                     &evaluation_diagnostic)) {
                 result.reason = ReplayStopReason::UnsupportedCondition;
                 result.waiting_node = predicate.logical_key;
@@ -483,6 +483,12 @@ void apply_dialogue_command(
     std::wstring* diagnostic,
     bool use_last_embedded_dialogue) {
     track_rename_command(state, command);
+    if(command.instruction_id==0x77) {
+        if(!apply_simulated_arithmetic(state.simulated,command.int_data)) invalidate_simulated_destination(state.simulated,command.int_data);
+    }
+    if(command.instruction_id==0x78 && !apply_simulated_property(state.simulated,command.int_data) && diagnostic) append_diagnostic(*diagnostic,L"属性读写的模拟值未确定；未模拟的头像写入保持原头像");
+    if(command.instruction_id==0x38) apply_simulated_avatar(state.simulated,command.int_data);
+
 
     if (command.instruction_id == profile.face_state_instruction_id) {
         if (command.int_data.empty()) {
@@ -529,6 +535,7 @@ ReplayResult replay_section_to(
     const DialogueProfile& profile,
     const ReplayOptions& options) {
     ReplayResult result;
+    result.state.simulated=options.simulated_variables;
     for (const std::wstring& diagnostic : model.diagnostics) {
         if (result.diagnostic.find(diagnostic) == std::wstring::npos) {
             append_diagnostic(result.diagnostic, diagnostic);

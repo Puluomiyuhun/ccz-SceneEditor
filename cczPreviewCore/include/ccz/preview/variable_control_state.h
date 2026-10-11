@@ -19,6 +19,8 @@ enum class VariableControlAction : std::uint8_t {
 enum class VariableControlKind : std::uint8_t {
     Boolean,
     Integer,
+    Pointer,
+    Memory,
 };
 
 struct VariableControlRow {
@@ -29,7 +31,12 @@ struct VariableControlRow {
     bool is_default{};
     std::size_t occurrence_count{};
     std::wstring usage_summary;
+    bool value_known{true};
 };
+
+std::wstring format_variable_control_value(const VariableControlRow& row);
+bool parse_simulated_control_value(const std::wstring& text, bool address_value,
+                                  std::int32_t& value);
 
 std::wstring format_variable_control_row(const VariableControlRow& row);
 
@@ -44,5 +51,4 @@ bool apply_variable_control_action(
     std::int32_t integer_value);
 
 }  // namespace ccz::preview
-
 

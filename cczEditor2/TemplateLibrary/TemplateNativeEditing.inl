@@ -50,9 +50,7 @@ void TemplateRemapCapturedJumps(std::vector<ccz::templates::Node> &nodes,
   for (auto &node : nodes) {
     if (node.id == 0x76) {
       auto target = ords.find(node.params.at(0));
-      if (target == ords.end())
-        throw std::runtime_error("external jump");
-      node.jump_target = target->second;
+      node.jump_target = target == ords.end() ? -1 : target->second;
     }
     TemplateRemapCapturedJumps(node.children, ords);
   }
@@ -108,13 +106,13 @@ TemplatePreparedNode TemplatePrepare(const ccz::templates::Node &node,
 }
 void TemplatePatchJumps(TemplatePreparedNode &p,
                         const ccz::templates::Node &node,
-                        const std::map<int, int> &keys) {
+                        const std::map<int, int> &keys, const std::map<int,int>& external) {
   if (node.id == 0x76) {
-    p.data->int_data[0] = keys.at(node.jump_target);
+    p.data->int_data[0] = node.jump_target >= 0 ? keys.at(node.jump_target) : external.at(node.params.at(0));
     p.label = L"76:无条件跳转 " + std::to_wstring(p.data->int_data[0]);
   }
   for (std::size_t i = 0; i < p.children.size(); ++i)
-    TemplatePatchJumps(p.children[i], node.children[i], keys);
+    TemplatePatchJumps(p.children[i], node.children[i], keys, external);
 }
 HTREEITEM TemplateInsertPrepared(CTreeCtrl &tree, TemplatePreparedNode &p,
                                  HTREEITEM parent, HTREEITEM after) {
@@ -193,7 +191,7 @@ bool CcczEditor2View::CaptureTemplateSelection(ccz::templates::Entry &output,
     output = std::move(entry);
     return true;
   } catch (...) {
-    error = L"无法保存模板：存在指向模板外的无条件跳转，或指令结构不完整";
+    error = L"无法保存模板：指令结构不完整或数据无效";
     return false;
   }
 }
@@ -278,6 +276,18 @@ bool CcczEditor2View::InsertTemplate(const ccz::templates::Entry &entry,
       }
     }
   }
+  std::set<int> externalIds;
+  std::function<void(const std::vector<ccz::templates::Node>&)> collectExternal = [&](const auto& nodes) {
+    for (const auto& node : nodes) {
+      if (node.id == 0x76 && node.jump_target == -1) externalIds.insert(node.params.at(0));
+      collectExternal(node.children);
+    }
+  };
+  collectExternal(entry.roots);
+  std::map<int,int> externalTargets;
+  if (!ResolveTransferExternal(*this,externalIds,true,externalTargets)) {
+    error = L"已取消模板插入"; return false;
+  }
   if (!CanUndoTemplateInsertion())
     m_templateUndo.clear();
   TemplateInsertionUndo undo;
@@ -292,7 +302,7 @@ bool CcczEditor2View::InsertTemplate(const ccz::templates::Entry &entry,
     for (auto &n : entry.roots)
       prepared.push_back(TemplatePrepare(n, nextOrdinal, keys));
     for (std::size_t i = 0; i < prepared.size(); ++i)
-      TemplatePatchJumps(prepared[i], entry.roots[i], keys);
+      TemplatePatchJumps(prepared[i], entry.roots[i], keys, externalTargets);
     undo.roots.reserve(prepared.size());
     m_templateUndo.reserve(m_templateUndo.size() + 1);
   } catch (...) {

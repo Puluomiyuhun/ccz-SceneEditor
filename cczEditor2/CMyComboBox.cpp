@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "CMyComboBox.h"
 
 namespace {
@@ -21,6 +21,26 @@ BEGIN_MESSAGE_MAP(CMyComboSearchEdit, CEdit)
     ON_WM_MOUSEWHEEL()
 END_MESSAGE_MAP()
 
+LRESULT CMyComboSearchEdit::WindowProc(UINT message, WPARAM wparam, LPARAM lparam)
+{
+    const auto result = CEdit::WindowProc(message, wparam, lparam);
+    // The native edit may hide the cursor while processing a character.
+    // Restore it after that processing, once the search popup owns capture.
+    if (owner_ && (message == WM_CHAR || message == WM_MOUSEMOVE || message == WM_SETCURSOR))
+        owner_->RestoreCapturedSearchCursor();
+    return result;
+}
+
+LRESULT CMyComboSearchList::WindowProc(UINT message, WPARAM wparam, LPARAM lparam)
+{
+    const auto result = CWnd::WindowProc(message, wparam, lparam);
+    // WM_SETCURSOR is normally absent during mouse capture. Mouse movement
+    // must therefore restore the cursor explicitly, including re-entry.
+    if (owner_ && (message == WM_MOUSEMOVE || message == WM_SETCURSOR))
+        owner_->RestoreCapturedSearchCursor();
+    return result;
+}
+
 BOOL CMyComboSearchEdit::OnMouseWheel(UINT nFlags, short zDelta, CPoint point)
 {
     return owner_ ? owner_->ForwardMouseWheel(nFlags, zDelta, point) : FALSE;
@@ -34,6 +54,7 @@ BEGIN_MESSAGE_MAP(CMyComboBox, CComboBox)
     ON_CONTROL_REFLECT(CBN_DROPDOWN, OnDropDown)
     ON_CONTROL_REFLECT(CBN_CLOSEUP, OnCloseUp)
     ON_CONTROL(EN_CHANGE, kIndexedSearchEditId, OnSearchEditChange)
+    ON_CONTROL(EN_CHANGE, 1001, OnSearchEditChange)
     ON_CONTROL(EN_SETFOCUS, kIndexedSearchEditId, OnSearchEditSetFocus)
     ON_CONTROL(EN_KILLFOCUS, kIndexedSearchEditId, OnSearchEditKillFocus)
 END_MESSAGE_MAP()
@@ -99,6 +120,7 @@ int CMyComboBox::GetCurSel() const
         return CComboBox::GetCurSel();
     }
     if (indexed_selection_valid_) return indexed_selection_;
+    if (indexed_mode_ == IndexedMode::Instruction) return CB_ERR;
 
     const int visible_row = CComboBox::GetCurSel();
     if (visible_row >= 0 && visible_row < static_cast<int>(visible_option_indexes_.size())) {
@@ -145,6 +167,24 @@ int CMyComboBox::SetCurSel(int nSelect)
 void CMyComboBox::EnablePersonSearch()
 {
     ConfigureIndexedMode(IndexedMode::Person);
+}
+
+void CMyComboBox::RestoreIndexedOptions()
+{
+    RestoreFullOptionList();
+}
+
+bool CMyComboBox::RemoveFinalIndexedOption()
+{
+    RestoreFullOptionList();
+    const int count = CComboBox::GetCount();
+    if (count <= 0 || indexed_options_.size() != static_cast<size_t>(count) ||
+        CComboBox::DeleteString(count - 1) == CB_ERR) return false;
+    indexed_options_.pop_back();
+    if (!visible_option_indexes_.empty()) visible_option_indexes_.pop_back();
+    indexed_selection_valid_ = false;
+    native_list_complete_ = true;
+    return true;
 }
 
 void CMyComboBox::EnableInstructionSearch()
@@ -253,28 +293,44 @@ CString CMyComboBox::GetComboText() const
 
 void CMyComboBox::CreateSearchEdit()
 {
-    if (search_edit_.GetSafeHwnd() || !GetSafeHwnd()) return;
-
-    CRect client;
-    GetClientRect(&client);
-    // Leave the native drop-down button exposed.  The edit is an overlay for
-    // list-only resources, which lets us add input without rewriting the
-    // legacy UTF-16 .rc file or changing ordinary combo styles.
-    const int button_width = GetSystemMetrics(SM_CXVSCROLL);
-    CRect edit_rect(2, 2, max(2, client.Width() - button_width - 1), max(4, client.Height() - 2));
-    if (!search_edit_.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_LEFT,
-        edit_rect, this, kIndexedSearchEditId)) {
-        return;
+    if(search_edit_.GetSafeHwnd() || !GetSafeHwnd()) return;
+    if((GetStyle() & 3)==CBS_DROPDOWNLIST) {
+        CWnd* parent=GetParent();const UINT id=GetDlgCtrlID();
+        CRect bounds,dropped;GetWindowRect(bounds);GetDroppedControlRect(dropped);parent->ScreenToClient(bounds);
+        CFont* font=GetFont();const DWORD style=GetStyle();const DWORD extended=GetExStyle();
+        HWND previous=::GetWindow(m_hWnd,GW_HWNDPREV);const BOOL enabled=IsWindowEnabled();
+        bounds.bottom=bounds.top+(std::max)((int)dropped.Height(),180);
+        DestroyWindow();
+        // Windows removes WS_VSCROLL from the combo's own style after
+        // assigning it to the list; copying GetStyle alone loses scrolling.
+        if(!Create((style&~3u)|CBS_DROPDOWN|WS_VSCROLL,bounds,parent,id)) return;
+        ModifyStyleEx(0,extended);SetFont(font);EnableWindow(enabled);
+        SetWindowPos(previous?CWnd::FromHandle(previous):&CWnd::wndTop,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+        for(const auto& option:indexed_options_) CComboBox::AddString(option.label.c_str());
     }
-    search_edit_.SetOwner(this);
-    search_edit_.SetFont(GetFont());
-    search_edit_.SetLimitText(255);
-    const bool previous_rebuilding = rebuilding_;
-    rebuilding_ = true;
-    search_edit_.SetWindowTextW(last_committed_text_);
-    rebuilding_ = previous_rebuilding;
-    select_all_on_next_focus_ = true;
-    search_edit_.BringWindowToTop();
+    COMBOBOXINFO info{sizeof(info)};
+    if(!::GetComboBoxInfo(m_hWnd,&info) || !info.hwndItem || !search_edit_.SubclassWindow(info.hwndItem)) return;
+    search_edit_.SetOwner(this);search_edit_.SetFont(GetFont());search_edit_.SetLimitText(255);
+    if (info.hwndList && search_list_.SubclassWindow(info.hwndList))
+        search_list_.SetOwner(this);
+    const bool previous_rebuilding=rebuilding_;rebuilding_=true;
+    search_edit_.SetWindowTextW(last_committed_text_);rebuilding_=previous_rebuilding;
+    select_all_on_next_focus_=true;
+}
+
+void CMyComboBox::RestoreCapturedSearchCursor()
+{
+    if (indexed_mode_ == IndexedMode::None ||
+        !search_list_.GetSafeHwnd() || ::GetCapture() != search_list_.GetSafeHwnd())
+        return;
+    POINT point;
+    if (!::GetCursorPos(&point)) return;
+    const HWND under = ::WindowFromPoint(point);
+    // Do not override another application's cursor when capture delivers
+    // movement from outside this editor.
+    if (!under || ::GetWindowThreadProcessId(under, nullptr) != ::GetCurrentThreadId()) return;
+    const bool over_edit = under == search_edit_.GetSafeHwnd();
+    ::SetCursor(::LoadCursorW(nullptr, over_edit ? IDC_IBEAM : IDC_ARROW));
 }
 
 void CMyComboBox::SetSearchEditText(const CString& text)
@@ -340,6 +396,7 @@ void CMyComboBox::RestoreFullOptionList()
         return;
     }
 
+    const CString draft=GetComboText();const DWORD caret=search_edit_.GetSafeHwnd()?search_edit_.GetSel():0;
     rebuilding_ = true;
     CComboBox::ResetContent();
     visible_option_indexes_.clear();
@@ -351,6 +408,7 @@ void CMyComboBox::RestoreFullOptionList()
     filter_active_ = false;
     last_filter_query_.clear();
     filter_candidate_indexes_.clear();
+    SetSearchEditText(draft);if(search_edit_.GetSafeHwnd())search_edit_.SetSel(LOWORD(caret),HIWORD(caret));
     rebuilding_ = false;
 }
 
@@ -429,6 +487,7 @@ void CMyComboBox::RebuildVisibleOptions(const CString& query)
     // same live-filter behavior used by the scene-preview character index.
     const bool popup_open_before_rebuild =
         dropdown_open_ || GetDroppedState();
+    const DWORD caret=search_edit_.GetSel();
     rebuilding_ = true;
     CComboBox::SetRedraw(FALSE);
     CComboBox::ResetContent();
@@ -438,6 +497,7 @@ void CMyComboBox::RebuildVisibleOptions(const CString& query)
         visible_option_indexes_.push_back(model_index);
     }
     CComboBox::SetCurSel(-1);
+    SetSearchEditText(query);search_edit_.SetSel(LOWORD(caret),HIWORD(caret));
     CComboBox::SetRedraw(TRUE);
     Invalidate();
     native_list_complete_ = false;
@@ -449,10 +509,15 @@ void CMyComboBox::RebuildVisibleOptions(const CString& query)
     if (!matches.empty() && !popup_open_before_rebuild && !GetDroppedState()) {
         auto_filter_dropdown_ = true;
         ShowDropDown(TRUE);
+        rebuilding_ = true;
+        SetSearchEditText(query);
+        search_edit_.SetSel(LOWORD(caret), HIWORD(caret));
+        rebuilding_ = false;
         // The popup is asynchronous.  Return focus to the overlay edit after
         // the native list has been shown so the caret and subsequent typing
         // remain owned by the search field.
         RestoreSearchEditFocus();
+        RestoreCapturedSearchCursor();
     }
 }
 

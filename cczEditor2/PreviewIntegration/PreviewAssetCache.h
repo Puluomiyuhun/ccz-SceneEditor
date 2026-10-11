@@ -30,6 +30,9 @@ private:
     std::vector<std::uint8_t> data_e5_;
     std::vector<std::uint8_t> face_e5_;
     ccz::preview::FaceArchive face_archive_;
+    std::vector<std::uint32_t> text_palette_;
+    std::vector<std::uint8_t> fb_e5_;
+    ccz::preview::FaceArchive fb_archive_;
     ccz::preview::InstructionCatalog instruction_catalog_;
     std::wstring diagnostic_;
 };

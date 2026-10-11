@@ -1,6 +1,8 @@
-#include <ccz/preview/playback_timeline.h>
+﻿#include <ccz/preview/playback_timeline.h>
+#include <ccz/preview/dialogue_model.h>
 
 #include <algorithm>
+#include <set>
 #include <cstddef>
 #include <limits>
 #include <string>
@@ -21,7 +23,7 @@ enum class WalkResult : std::uint8_t {
 struct WalkState {
     const LogicalNodeKey& target;
     PlaybackRange range;
-    const ReplayOptions& options;
+    ReplayOptions options;
     PlaybackTimeline& timeline;
     bool target_seen{};
     std::size_t target_index{};
@@ -141,15 +143,17 @@ std::size_t append_event(const ExecutionNode& node, WalkState& state,
         return (std::numeric_limits<std::size_t>::max)();
     }
 
+    if(node.instruction_id==0x77 && !apply_simulated_arithmetic(state.options.simulated_variables,node.command.int_data)) invalidate_simulated_destination(state.options.simulated_variables,node.command.int_data);
+    if(node.instruction_id==0x38) apply_simulated_avatar(state.options.simulated_variables,node.command.int_data);
+    if(node.instruction_id==0x78) apply_simulated_property(state.options.simulated_variables,node.command.int_data);
     const std::size_t first_index = state.timeline.events.size();
     const std::vector<DialogueSegment> dialogue_segments =
         node.instruction_id == 0x14
             ? split_dialogue_segments(node.command.text)
             : std::vector<DialogueSegment>{};
-    const std::size_t segment_count =
-        node.instruction_id == 0x14 ? dialogue_segments.size() : 0;
+    const std::size_t segment_count = node.instruction_id == 0x7a ? decode_dialogue_segments(node.command,DialogueProfile{}).size() : node.instruction_id == 0x14 ? dialogue_segments.size() : 0;
     const std::size_t event_count =
-        node.instruction_id == 0x14 ? (std::max)(std::size_t{1}, segment_count)
+        (node.instruction_id == 0x14 || node.instruction_id == 0x7a) ? (std::max)(std::size_t{1}, segment_count)
                                     : std::size_t{1};
     for (std::size_t segment_index = 0; segment_index < event_count;
          ++segment_index) {
@@ -160,7 +164,7 @@ std::size_t append_event(const ExecutionNode& node, WalkState& state,
         event.kind = segment_kind_for(node);
         event.duration_units =
             event.kind == PlaybackSegmentKind::Instant ? 0 : 1;
-        if (node.instruction_id == 0x14) {
+        if (node.instruction_id == 0x14 || node.instruction_id == 0x7a) {
             event.dialogue_segment_index = segment_index;
             event.dialogue_segment_count = event_count;
         }
@@ -369,6 +373,36 @@ WalkResult walk_nodes(const ExecutionNodeList& nodes, WalkState& state) {
 }
 
 }  // namespace
+
+PlaybackTimeline group_consecutive_character_moves(const PlaybackTimeline& source) {
+    if(!source.complete || source.events.empty() || source.range_begin>=source.range_end ||
+       source.range_end>source.events.size() || source.target_index>=source.events.size() ||
+       source.target_end_index<=source.target_index || source.target_end_index>source.events.size()) return source;
+    PlaybackTimeline result=source;result.events.clear();
+    std::vector<std::size_t> mapped(source.events.size()+1);
+    for(std::size_t i=0;i<source.events.size();) {
+        std::size_t end=i+1;
+        const auto isMove=[](const PlaybackEvent& event) {
+            return event.kind==PlaybackSegmentKind::CharacterMove &&
+                event.command.int_data.size()>=6 && event.command.int_data[0]==0;
+        };
+        if(i>=source.range_begin && i<source.range_end && isMove(source.events[i])) {
+            std::set<int> people{source.events[i].command.int_data[1]};
+            while(end<source.range_end && isMove(source.events[end]) &&
+                  people.insert(source.events[end].command.int_data[1]).second) ++end;
+        }
+        // The last instruction reconstructs the final pose of every member.
+        result.events.push_back(source.events[end-1]);
+        for(std::size_t j=i;j<end;++j) mapped[j]=result.events.size()-1;
+        i=end;
+    }
+    mapped[source.events.size()]=result.events.size();
+    result.target_index=mapped[source.target_index];
+    result.target_end_index=mapped[source.target_end_index-1]+1;
+    result.range_begin=mapped[source.range_begin];
+    result.range_end=mapped[source.range_end-1]+1;
+    return result;
+}
 
 PlaybackTimeline build_playback_timeline(
     const SectionExecutionModel& model, const LogicalNodeKey& target_node,

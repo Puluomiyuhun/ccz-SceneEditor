@@ -71,6 +71,8 @@ CCZ_TEST(template_internal_jump_requires_existing_local_target) {
   lib.entries[0].roots[1].jump_target = 999;
   CCZ_REQUIRE(Rejects(lib));
   lib.entries[0].roots[1].jump_target = -1;
+  CCZ_REQUIRE(!Rejects(lib));
+  lib.entries[0].roots[1].jump_target = -2;
   CCZ_REQUIRE(Rejects(lib));
 }
 CCZ_TEST(template_damaged_or_future_file_is_rejected) {

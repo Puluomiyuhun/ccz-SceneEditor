@@ -1,9 +1,10 @@
-#include "test_framework.h"
+﻿#include "test_framework.h"
 
 #include <PreviewIntegration/PreviewSession.h>
 
 #include <ccz/preview/dialogue_profile.h>
 #include <ccz/preview/condition_tree_state.h>
+#include <ccz/preview/condition_tree.h>
 #include <ccz/preview/execution_model.h>
 #include <ccz/preview/instruction_catalog.h>
 
@@ -807,4 +808,103 @@ CCZ_TEST(preview_session_invalid_input_does_not_publish_partial_frame) {
                    previous_options.simulated_variables.boolean_variables);
     CCZ_REQUIRE_EQ(session.options().simulated_variables.integer_variables,
                    previous_options.simulated_variables.integer_variables);
+}
+
+CCZ_TEST(preview_frame_replays_avatar_assignments_and_color_mode) {
+ auto input=make_input(L"avatar",false);input.section.nodes.clear();
+ input.section.nodes={raw_node(L"boundary",0x00,L"0:边界"),raw_node(L"assign",0x77,L"",{},{2,0,2,0,532}),raw_node(L"avatar",0x78,L"",{},{0,1,0,1}),raw_node(L"mode",0x77,L"",{},{2,4071,2,0,3}),raw_node(L"after",0x14,L"&*.0\n测试")};
+ input.document_nodes=input.section.nodes;
+ auto catalog=fixture_catalog();catalog.names[0x77]=L"变量运算";catalog.names[0x78]=L"属性赋值";
+ auto profile=fixture_profile();std::vector<std::uint8_t> data(0x18c+0x20,0);data[0x18c+0x0d]=1;
+ PreviewAssetsView assets{};assets.data_e5=&data;
+ auto model=build_section_execution_model(input.section,catalog,ReplayOptions{});
+ auto frame=BuildPreviewFrame(input,model,ReplayOptions{},catalog,profile,assets);
+ CCZ_REQUIRE_EQ(frame.avatar_codes.at(0),532);CCZ_REQUIRE_EQ(frame.dialogue.base_text_color,0x3a);
+ CCZ_REQUIRE_EQ(data[0x18c+0x0d],std::uint8_t(1));
+ input.section.selected_target_key=L"avatar";
+ frame=BuildPreviewFrame(input,model,ReplayOptions{},catalog,profile,assets);
+ CCZ_REQUIRE_EQ(frame.avatar_codes.at(0),532);
+}
+CCZ_TEST(preview_frame_dialogue3_selects_each_embedded_page) {
+ auto input=make_input(L"halfbody",false);input.section.nodes.back()=raw_node(L"after",0x7a,L"&4,0,0,-1,-1\n左句\n&0&&\n暗句\n&&");input.document_nodes=input.section.nodes;
+ auto catalog=fixture_catalog();catalog.names[0x7a]=L"对话3";
+ auto profile=fixture_profile();profile.dialogue_ids.push_back({0x7a,DialogueKind::Extended,true,{},PersonFieldEncoding::SpeakerPrefixLabel,true});
+ auto model=build_section_execution_model(input.section,catalog,ReplayOptions{});
+ auto frame=BuildPreviewFrame(input,model,ReplayOptions{},catalog,profile,no_assets(),std::size_t(1));
+ CCZ_REQUIRE(frame.dialogue.half_body && !frame.dialogue.show_portrait);CCZ_REQUIRE_EQ(frame.dialogue.half_body_mask,0u);CCZ_REQUIRE_EQ(frame.dialogue.body,std::wstring(L"暗句\n"));
+}
+
+CCZ_TEST(pointer_runtime_target_can_be_initialized_without_replaying_runtime_as_override) {
+ auto input=make_input(L"pointer-real-r00",false);
+ input.section.nodes.insert(input.section.nodes.begin()+1,raw_node(L"pointer",0x77,L"",{},{1,0,2,0,4373814}));
+ input.section.nodes.insert(input.section.nodes.begin()+2,raw_node(L"predicate",0x79,L"",{raw_node(L"body",0x20,L"matched")},{1,0,1,0,145}));
+ input.document_nodes=input.section.nodes;
+ auto catalog=fixture_catalog();catalog.names[0x77]=L"variable";
+ PreviewSession session;session.Refresh(input,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE_EQ(session.frame().displayed_variables.pointer_variables.at(0),4373814);
+ CCZ_REQUIRE(session.options().simulated_variables.pointer_variables.empty());
+ std::wstring diagnostic;
+ CCZ_REQUIRE(session.ApplyConditionAction(L"predicate",ConditionTreeAction::SetIntegerValue,145,&diagnostic));
+ CCZ_REQUIRE_EQ(session.options().simulated_variables.simulated_memory.at(4373814),145);
+ session.Refresh(input,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE(session.frame().native_plan.target_reached);
+ CCZ_REQUIRE(session.ApplyConditionAction(L"predicate",ConditionTreeAction::RestoreIntegerDefault,0,&diagnostic));
+ session.Refresh(input,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE(session.frame().displayed_variables.simulated_memory.count(4373814)==0);
+ CCZ_REQUIRE(session.ApplyVariableAction(VariableControlKind::Memory,4373814,VariableControlAction::SetIntegerValue,145,&diagnostic));
+ session.Refresh(input,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE_EQ(session.frame().displayed_variables.simulated_memory.at(4373814),145);
+}
+
+CCZ_TEST(pointer_quick_activation_uses_runtime_address_without_copying_runtime_assignments) {
+ auto input=make_input(L"pointer-activation",false);
+ input.section.nodes.insert(input.section.nodes.begin()+1,raw_node(L"pointer",0x77,L"",{},{1,0,2,0,4373814}));
+ input.section.nodes.insert(input.section.nodes.begin()+2,raw_node(L"increment",0x77,L"",{},{2,3,0,0,1}));
+ input.section.nodes.insert(input.section.nodes.begin()+3,raw_node(L"predicate",0x79,L"",{raw_node(L"body",0x20,L"matched")},{1,0,1,0,145}));
+ input.section.selected_target_key=L"body";input.document_nodes=input.section.nodes;
+ auto catalog=fixture_catalog();catalog.names[0x77]=L"variable";
+ PreviewSession session;session.Refresh(input,catalog,fixture_profile(),no_assets());
+ auto displayed=session.options();displayed.simulated_variables=session.frame().displayed_variables;
+ CCZ_REQUIRE(condition_tree_model_has_controls(*session.frame().model));
+ CCZ_REQUIRE(condition_tree_model_can_activate_target(*session.frame().model,L"body",displayed));
+ std::wstring diagnostic;CCZ_REQUIRE(session.ActivateTarget(L"body",&diagnostic));
+ CCZ_REQUIRE_EQ(session.options().simulated_variables.simulated_memory.at(4373814),145);
+ CCZ_REQUIRE(session.options().simulated_variables.pointer_variables.empty());
+ CCZ_REQUIRE_EQ(session.options().simulated_variables.integer_variables.at(3),0);
+ session.Refresh(input,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE(session.frame().native_plan.target_reached);
+ CCZ_REQUIRE_EQ(session.frame().displayed_variables.integer_variables.at(3),1);
+}
+
+CCZ_TEST(choice_accepts_sibling_cases_after_subevent_marker) {
+ auto input=make_input(L"sibling-choice",false);
+ input.section.nodes.insert(input.section.nodes.begin()+1,raw_node(L"choice",0x12,L"choices"));
+ input.section.nodes.insert(input.section.nodes.begin()+2,raw_node(L"marker",0x01,L"marker"));
+ input.section.nodes.insert(input.section.nodes.begin()+3,raw_node(L"case1",0x13,L"case1",{raw_node(L"body1",0x20,L"first")}));
+ input.section.nodes.insert(input.section.nodes.begin()+4,raw_node(L"case2",0x13,L"case2",{raw_node(L"body2",0x20,L"second")}));
+ input.document_nodes=input.section.nodes;
+ auto model=build_section_execution_model(input.section,fixture_catalog(),ReplayOptions{});
+ const ExecutionNode* choice=nullptr;for(const auto& node:model.body) if(node.logical_key==L"choice") choice=&node;CCZ_REQUIRE(choice!=nullptr);CCZ_REQUIRE_EQ(choice->cases.size(),std::size_t(2));
+ ReplayOptions options;options.selected_case_by_choice[L"choice"]=L"case2";
+ auto frame=BuildPreviewFrame(input,model,options,fixture_catalog(),fixture_profile(),no_assets());
+ CCZ_REQUIRE(frame.native_plan.target_reached);
+}
+
+CCZ_TEST(local_initialization_preserves_user_boolean_and_integer_simulation) {
+ auto input=make_boolean_variable_condition_input(L"local-reset");
+ input.section.nodes.insert(input.section.nodes.begin()+1,raw_node(L"reset",0x0a,L"reset"));
+ input.section.selected_target_key=L"after";input.document_nodes=input.section.nodes;
+ auto catalog=fixture_catalog();catalog.names[0x0a]=L"local-init";
+ PreviewSession session;session.Refresh(input,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE(session.frame().native_plan.target_reached);
+ CCZ_REQUIRE(!session.frame().displayed_variables.boolean_values_invalidated);
+ CCZ_REQUIRE_EQ(condition_tree_node_count(build_condition_tree_from_execution_model(*session.frame().model)),std::size_t(1));
+ std::wstring diagnostic;CCZ_REQUIRE(session.ApplyVariableAction(VariableControlKind::Boolean,700,VariableControlAction::SetBooleanTrue,0,&diagnostic));
+ session.Refresh(input,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE(session.frame().native_plan.target_reached);CCZ_REQUIRE(session.frame().displayed_variables.boolean_variables.at(700));
+ auto integers=make_integer_condition_input(L"integer-reset");integers.section.nodes.insert(integers.section.nodes.begin()+1,raw_node(L"reset",0x0a,L"reset"));integers.document_nodes=integers.section.nodes;
+ PreviewSession other;other.Refresh(integers,catalog,fixture_profile(),no_assets());
+ CCZ_REQUIRE(other.ApplyVariableAction(VariableControlKind::Integer,600,VariableControlAction::SetIntegerValue,1,&diagnostic));
+ other.Refresh(integers,catalog,fixture_profile(),no_assets());CCZ_REQUIRE(other.frame().native_plan.target_reached);
+ CCZ_REQUIRE_EQ(other.frame().displayed_variables.integer_variables.at(600),1);
 }

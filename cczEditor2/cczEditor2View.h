@@ -422,6 +422,8 @@ public:
 	CButton wrap_enable;
 	CEdit wrap_bytes;
 	CButton wrap_mode;
+	CButton color_assist;
+	afx_msg void OnColorAssist();
 	bool wrap_history_mode = false;
 	bool wrap_supported = false;
 	bool wrap_updating = false;
@@ -628,6 +630,8 @@ class Dialog_21 :
 	public myDialog
 {
 public:
+ CButton color_assist;
+ afx_msg void OnColorAssist();
 	Dialog_21() noexcept : myDialog(IDD_DIALOG21) {}
 	virtual BOOL OnInitDialog();
 
@@ -933,6 +937,8 @@ class Dialog_44 :
 	public myDialog
 {
 public:
+ CButton color_assist;
+ afx_msg void OnColorAssist();
 	Dialog_44() noexcept : myDialog(IDD_DIALOG44) {}
 	virtual BOOL OnInitDialog();
 

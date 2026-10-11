@@ -215,7 +215,10 @@ void CSBattlePreviewPage::DrawEnhancedBattleOverlays(Gdiplus::Graphics& graphics
  Gdiplus::StringFormat format;format.SetAlignment(Gdiplus::StringAlignmentCenter);format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
  Gdiplus::SolidBrush white(Gdiplus::Color(255,255,255,255)),draftFill(Gdiplus::Color(235,143,54,92));
  auto draftLabel=[&](ccz::preview::BattleCoord at){float h=(std::max)(12.0f,(std::min)(17.0f,cell*.3f));Gdiplus::RectF r(ox+at.x*cell+2,oy+(at.y+1)*cell-h-2,cell-4,h);graphics.FillRectangle(&draftFill,r);graphics.DrawString(L"暂存",-1,&font,r,&format,&white);};
- for(const auto& unit:ActiveSession().editor_state.battle.units)if(unit.editor_staged_new&&!unit.editor_pending_delete)draftLabel(unit.position);
+ // Both new deployments and edits to existing source fields await Writeback.
+ for(const auto& unit:ActiveSession().editor_state.battle.units)
+  if(unit.fields_decoded && !unit.editor_pending_delete &&
+     (unit.editor_staged_new || !unit.dirty_fields.empty()))draftLabel(unit.position);
  for(const auto& item:m_obstacleDrafts.items())draftLabel(item.coordinate);
  Gdiplus::Pen dark(Gdiplus::Color(255,15,47,43),(std::max)(3.0f,m_zoom*3));
  Gdiplus::Pen turquoise(Gdiplus::Color(255,53,214,197),(std::max)(1.5f,m_zoom*1.5f));
@@ -260,6 +263,16 @@ void CSBattlePreviewPage::SyncBattleSpellAnimations() {
  if(std::any_of(m_spellPreviews.begin(),m_spellPreviews.end(),[](const auto& p){return p.asset.frames.size()>1;}))SetTimer(0xB601,80,nullptr);
 }
 void CSBattlePreviewPage::OnTimer(UINT_PTR id){
+ if(id==0xB603){
+  KillTimer(id);
+  if(m_activeSession && m_editorOps){
+   std::vector<std::wstring> names(1024);
+   for(const auto& character:ActiveSession().editor_state.characters.entries)
+    if(character.data_id>=0&&character.data_id<1024)names[character.data_id]=character.name;
+   m_commandParametersPane.Prepare(this,names);
+  }
+  return;
+ }
  if(id==0xB602){KillTimer(id);m_brushRefreshPending=false;if(m_obstacleStampActive)UpdateObstacleDraftControls();InvalidateRect(m_canvasRect,FALSE);UpdateWindow();return;}
  if(id!=0xB601){CWnd::OnTimer(id);return;}
  if(!m_dynamicPreviewEnabled||!m_dynamicPreviewReady){KillTimer(id);m_spellPreviews.clear();m_spellSignature.clear();return;}

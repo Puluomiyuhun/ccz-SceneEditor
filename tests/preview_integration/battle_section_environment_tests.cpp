@@ -27,7 +27,9 @@ CCZ_TEST(battle_section_environment_tests_regression) {
     auto reset=section({command(L"reset",0x0a),command(L"map",0x58)});
     CCZ_REQUIRE(build_native_battle_map_plan_to_end(reset,profile,options,&terminal).complete);
     options.simulated_variables=terminal;
-    CCZ_REQUIRE(!build_native_battle_map_plan_to_end(b,profile,options,&terminal).complete);
+    CCZ_REQUIRE(build_native_battle_map_plan_to_end(b,profile,options,&terminal).complete);
+    CCZ_REQUIRE(terminal.boolean_variables.at(7));
+    CCZ_REQUIRE(!terminal.boolean_values_invalidated);
     auto recover=section({command(L"reset",0x0a),command(L"set",0x0b,{7,1}),predicate});
     CCZ_REQUIRE(build_native_battle_map_plan_to_end(recover,profile,options,&terminal).complete);
     auto unknown=section({command(L"property",0x78,{9,0,1,0}),command(L"map",0x58)});

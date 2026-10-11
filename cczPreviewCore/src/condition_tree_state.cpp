@@ -1,4 +1,4 @@
-#include <ccz/preview/condition_tree_state.h>
+﻿#include <ccz/preview/condition_tree_state.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -269,27 +269,27 @@ ConditionTreeActionState condition_tree_action_state(
     if (selected_node == nullptr) {
         return result;
     }
+    if (selected_node->category == ExecutionCategory::Predicate &&
+        selected_node->predicate_kind == PredicateKind::Integer) {
+        const auto& expression = selected_node->integer_expression;
+        std::uint32_t address;
+        const bool editable = expression.decoded &&
+            expression.comparator != IntegerComparisonOperator::Unsupported &&
+            effective_predicate_state_for_ui(*selected_node, options) != PredicateState::Unsupported &&
+            resolve_simulated_assignment_address(options.simulated_variables, expression.left, address);
+        result.can_set_integer = editable;
+        result.can_restore_integer = editable;
+        auto candidate = options.simulated_variables;
+        result.can_make_reachable = expression.decoded &&
+            effective_predicate_state_for_ui(*selected_node, options) != PredicateState::Unsupported &&
+            apply_integer_variable_assignment(candidate, expression, true, nullptr);
+        return result;
+    }
     if (!selected_node->diagnostic.empty()) {
         return result;
     }
 
     if (selected_node->category == ExecutionCategory::Predicate &&
-        selected_node->predicate_kind == PredicateKind::Integer) {
-        const IntegerComparisonExpression& expression =
-            selected_node->integer_expression;
-        bool predicate_result = false;
-        const bool editable =
-            expression.decoded &&
-            expression.left.kind == IntegerOperandKind::IntegerVariable &&
-            expression.comparator != IntegerComparisonOperator::Unsupported &&
-            effective_predicate_state_for_ui(*selected_node, options) !=
-                PredicateState::Unsupported &&
-            evaluate_predicate_for_ui(*selected_node, options,
-                                      predicate_result);
-        result.can_set_integer = editable;
-        result.can_restore_integer = editable;
-        result.can_make_reachable = editable;
-    } else if (selected_node->category == ExecutionCategory::Predicate &&
                selected_node->instruction_id == 0x05 &&
                selected_node->boolean_expression.decoded) {
         bool conflict = false;
@@ -601,7 +601,9 @@ bool target_is_in_diagnostic_subtree(const ExecutionNode& node,
                                      bool diagnostic_ancestor) {
     const bool diagnostic_here =
         diagnostic_ancestor || node.category == ExecutionCategory::Diagnostic ||
-        !node.diagnostic.empty();
+        (!node.diagnostic.empty() && !(node.category == ExecutionCategory::Predicate &&
+          node.predicate_kind == PredicateKind::Integer && node.integer_expression.decoded &&
+          node.integer_expression.comparator != IntegerComparisonOperator::Unsupported));
     if (diagnostic_here && node.logical_key == target_key) {
         return true;
     }
@@ -697,15 +699,21 @@ std::optional<TargetActivationPlan> find_activation_in_node(
         return TargetActivationPlan{};
     }
     if (node.category == ExecutionCategory::Diagnostic ||
-        !node.diagnostic.empty()) {
+        (!node.diagnostic.empty() && !(node.category == ExecutionCategory::Predicate &&
+          node.predicate_kind == PredicateKind::Integer && node.integer_expression.decoded))) {
         return std::nullopt;
     }
 
     if (node.category == ExecutionCategory::Predicate) {
+        if (effective_predicate_state_for_ui(node, options) == PredicateState::Unsupported)
+            return std::nullopt;
         if (contains_execution_node(node.true_children, target_key)) {
             bool current = false;
             if (!current_predicate_result(node, options, current)) {
-                return std::nullopt;
+                auto candidate = options.simulated_variables;
+                if (node.predicate_kind != PredicateKind::Integer ||
+                    !apply_integer_variable_assignment(candidate, node.integer_expression, true, nullptr)) return std::nullopt;
+                current = !true;
             }
             TargetActivationPlan plan;
             if (!current) {
@@ -723,7 +731,10 @@ std::optional<TargetActivationPlan> find_activation_in_node(
         if (contains_execution_node(node.false_children, target_key)) {
             bool current = false;
             if (!current_predicate_result(node, options, current)) {
-                return std::nullopt;
+                auto candidate = options.simulated_variables;
+                if (node.predicate_kind != PredicateKind::Integer ||
+                    !apply_integer_variable_assignment(candidate, node.integer_expression, false, nullptr)) return std::nullopt;
+                current = !false;
             }
             TargetActivationPlan plan;
             if (current) {
@@ -825,6 +836,16 @@ std::optional<TargetActivationPlan> find_activation_in_nodes(
 
 bool model_nodes_have_controls(const ExecutionNodeList& nodes) {
     for (const ExecutionNode& node : nodes) {
+        // Pointer addresses may be assigned earlier in replay. The model still
+        // exposes its condition tree before that runtime address is available.
+        const auto writable_kind = [](IntegerOperandKind kind) {
+            return kind == IntegerOperandKind::IntegerVariable ||
+                kind == IntegerOperandKind::PointerVariable || kind == IntegerOperandKind::PointerValue;
+        };
+        if (node.category == ExecutionCategory::Predicate && node.predicate_kind == PredicateKind::Integer &&
+            node.integer_expression.decoded && node.integer_expression.comparator != IntegerComparisonOperator::Unsupported &&
+            node.predicate_state != PredicateState::Unsupported &&
+            (writable_kind(node.integer_expression.left.kind) || writable_kind(node.integer_expression.right.kind))) return true;
         const ConditionTreeActionState state =
             condition_tree_action_state(&node, {});
         // Reachability is deliberately represented by the separate
@@ -947,7 +968,17 @@ bool condition_tree_model_can_activate_target(
 
 bool activate_condition_tree_target(
     ReplayOptions& options, const SectionExecutionModel& model,
-    const LogicalNodeKey& target_key, std::wstring* diagnostic) {
+    const LogicalNodeKey& target_key, std::wstring* diagnostic,
+    const SimulationEnvironment* displayed_variables) {
+    if (displayed_variables) {
+        auto candidate = options;
+        candidate.simulated_variables = *displayed_variables;
+        if (!activate_condition_tree_target(candidate, model, target_key, diagnostic)) return false;
+        merge_simulation_changes(options.simulated_variables, *displayed_variables, candidate.simulated_variables);
+        candidate.simulated_variables = options.simulated_variables;
+        options = std::move(candidate);
+        return true;
+    }
     if (diagnostic != nullptr) {
         diagnostic->clear();
     }

@@ -1,4 +1,4 @@
-#include "test_framework.h"
+﻿#include "test_framework.h"
 
 #include <PreviewIntegration/DialogueOverlayRenderer.h>
 #include <PreviewIntegration/PreviewAssetCache.h>
@@ -443,4 +443,64 @@ CCZ_TEST(overlay_layout_keeps_all_subrectangles_inside_narrow_canvases) {
         CCZ_REQUIRE(rect_inside(client, layout.body));
         CCZ_REQUIRE(rect_inside(client, layout.diagnostic));
     }
+}
+
+CCZ_TEST(half_body_layout_scales_inside_game_scene) {
+    for(int factor=1;factor<=2;++factor) {
+        CRect scene(100,40,100+640*factor,40+400*factor);
+        ccz::editor_preview::OverlayLayout layout;
+        CCZ_REQUIRE(ccz::editor_preview::CalculateHalfBodyOverlayLayout(scene,layout));
+        CCZ_REQUIRE(rect_inside(scene,layout.panel));
+        CCZ_REQUIRE_EQ(layout.panel.Height(),84*factor);
+        for(const auto& body:layout.half_bodies) {
+            CCZ_REQUIRE(rect_inside(scene,body));
+            CCZ_REQUIRE_EQ(body.Width(),192*factor);
+            CCZ_REQUIRE_EQ(body.Height(),272*factor);
+            CCZ_REQUIRE_EQ(body.bottom,layout.panel.top);
+        }
+    }
+}
+
+CCZ_TEST(half_body_dialogue_stays_in_footer_while_figures_scale) {
+ for(int factor:{1,2}) {
+  CRect client(0,0,800*factor,600*factor),scene(0,0,640*factor,400*factor);
+  ccz::editor_preview::OverlayLayout plain,combined,figures;
+  CCZ_REQUIRE(ccz::editor_preview::CalculateDialogueOverlayLayout(client,plain));
+  CCZ_REQUIRE(ccz::editor_preview::CalculateHalfBodyDialogueLayout(scene,client,combined));
+  CCZ_REQUIRE(ccz::editor_preview::CalculateHalfBodyOverlayLayout(scene,figures));
+  CCZ_REQUIRE(combined.panel==plain.panel);
+  CCZ_REQUIRE_EQ(combined.body.left,combined.speaker.left);
+  for(int i=0;i<3;++i) CCZ_REQUIRE(combined.half_bodies[i]==figures.half_bodies[i]);
+ }
+}
+
+CCZ_TEST(scene_viewport_reserves_footer_space_and_caps_enlargement) {
+ for (const auto& client : {CRect(0,0,300,260), CRect(0,0,640,600), CRect(0,0,2400,1800)}) {
+  ccz::editor_preview::OverlayLayout footer;
+  CCZ_REQUIRE(ccz::editor_preview::CalculateDialogueOverlayLayout(client,footer));
+  auto scene=ccz::editor_preview::CalculateRSceneViewport(client,32);
+  CCZ_REQUIRE(scene.bounds.bottom<=footer.panel.top-32);
+  CCZ_REQUIRE(scene.scale<=2.0f);
+  CCZ_REQUIRE(rect_inside(client,scene.bounds));
+ }
+}
+
+CCZ_TEST(dialogue_overlay_keeps_compact_dialogue_visible) {
+ ccz::editor_preview::OverlayLayout large,compact,tiny;
+ CCZ_REQUIRE(ccz::editor_preview::CalculateDialogueOverlayLayout(CRect(0,0,640,600),large));
+ CCZ_REQUIRE(ccz::editor_preview::CalculateDialogueOverlayLayout(CRect(0,0,400,360),compact));
+ CCZ_REQUIRE(compact.panel.Height()<large.panel.Height());
+ CCZ_REQUIRE(compact.portrait.Width()<large.portrait.Width());
+ CCZ_REQUIRE(compact.text_scale<large.text_scale);
+ CCZ_REQUIRE(compact.panel.Height()<=360*0.30);
+ CCZ_REQUIRE(ccz::editor_preview::CalculateDialogueOverlayLayout(CRect(0,0,300,260),tiny));
+ CCZ_REQUIRE(!tiny.panel.IsRectEmpty());
+ CCZ_REQUIRE(tiny.panel.Height() <= 260*0.30);
+}
+
+CCZ_TEST(half_body_figures_and_compact_footer_remain_visible) {
+ ccz::editor_preview::OverlayLayout layout;
+ CCZ_REQUIRE(ccz::editor_preview::CalculateHalfBodyDialogueLayout(CRect(0,0,300,188),CRect(0,0,300,260),layout));
+ CCZ_REQUIRE(!layout.panel.IsRectEmpty());CCZ_REQUIRE(layout.game_half_body);
+ for(const auto& rect:layout.half_bodies) CCZ_REQUIRE(!rect.IsRectEmpty());
 }

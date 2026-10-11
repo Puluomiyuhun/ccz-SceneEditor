@@ -85,6 +85,22 @@ private:
 	bool m_selected{};
 };
 
+class CBattleGateThumbnail : public CButton
+{
+public:
+	void SetGate(int type, std::shared_ptr<Gdiplus::Bitmap> sprite) {
+		if (m_type == type && m_sprite == sprite) return;
+		m_type = type;
+		m_sprite = std::move(sprite);
+		if (GetSafeHwnd()) Invalidate(FALSE);
+	}
+protected:
+	void DrawItem(LPDRAWITEMSTRUCT draw_item) override;
+private:
+	int m_type{-1};
+	std::shared_ptr<Gdiplus::Bitmap> m_sprite;
+};
+
 class CSBattlePreviewPage : public CWnd
 {
 public:
@@ -155,6 +171,7 @@ protected:
 	afx_msg void OnWriteback();
 	afx_msg void OnObstaclePageClicked();
 	afx_msg void OnObstacleTypeClicked(UINT control_id);
+	afx_msg void OnGateTypeSelected();
 	afx_msg void OnClearObstacleDrafts();
 	afx_msg void OnObstacleDefaults();
 	afx_msg void OnObstacleMultiSelect();
@@ -267,6 +284,9 @@ private:
 	void LayoutObstacleSidebar(const CRect& client);
 	void LayoutPreviewControlToolbar();
 	void RefreshEditorControls();
+	void RefreshObstacleActionControls();
+	void RefreshGateThumbnail();
+	void InvalidateCanvasAndStatus();
 	void RefreshCharacterList();
 	void RefreshCharacterListIfDeploymentChanged();
 	void RefreshDeploymentList();
@@ -299,7 +319,7 @@ private:
 		bool include_selection_group,
 		std::vector<ccz::preview::BattleUnit>& units,
 		std::size_t& anchor_index, std::wstring& diagnostic);
-	void RefreshConditionTree();
+	void RefreshConditionTree(bool replay_variables = true);
 	void UpdateConditionActivationTarget(
 		const ccz::preview::LogicalNodeKey& target_key);
 	LRESULT ApplyConditionActionAndRefresh(
@@ -394,6 +414,8 @@ private:
 	std::size_t m_spellFrame{};
 	CButton m_obstaclePageButton;
 	CBattleObstacleButton m_obstacleTypeButtons[3];
+	CComboBox m_gateTypeCombo;
+	CBattleGateThumbnail m_gateThumbnail;
 	CStatic m_obstaclePageTitle;
 	CButton m_clearObstacleDraftsButton;
 	CButton m_obstacleDefaultsButton;
@@ -417,6 +439,8 @@ private:
 	CEdit m_searchEdit;
 	CComboBox m_deploymentCombo;
 	CListBox m_characterList;
+	std::vector<std::pair<int, std::wstring>> m_characterRows;
+	bool m_characterRowsValid{};
 	CStatic m_pageLabel;
 	CFont m_uiFont;
 	CFont m_toolbarFont;
@@ -427,6 +451,8 @@ private:
 		std::unique_ptr<Gdiplus::Bitmap>> m_decodedBitmaps;
 	std::set<ccz::editor_preview::BattleBitmapCacheKey> m_activeBitmapPins;
 	std::set<ccz::editor_preview::BattleBitmapCacheKey> m_activeSpritePins;
+	bool m_showGrid = AfxGetApp()->GetProfileInt(L"SPreview", L"ShowGrid", 1) != 0;
+	void ShowEmptyContextMenu(CPoint point);
 	bool m_sidebarVisible = true;
 	bool m_brushTabActive = false;
 	bool m_controlsCreated = false;
@@ -436,6 +462,11 @@ private:
 	std::wstring m_dynamicMapImagePath;
 	std::uint64_t m_dynamicMapImageRevision{};
 	std::array<std::shared_ptr<Gdiplus::Bitmap>, 3> m_dynamicObstacleSprites;
+	std::map<int, std::shared_ptr<Gdiplus::Bitmap>> m_gateSprites;
+	std::set<int> m_gateSpriteAttempts;
+	std::wstring m_gateAssetPath;
+	std::uint64_t m_gateAssetRevision{};
+	Gdiplus::Bitmap* GateSprite(int type);
 	bool m_obstacleAssetsAttempted{};
 	std::wstring m_dynamicObstacleAssetPath;
 	std::uint64_t m_dynamicObstacleAssetRevision{};
@@ -444,6 +475,10 @@ private:
 	std::shared_ptr<const ccz::preview::SectionExecutionModel>
 		m_dynamicConditionModel;
 	ccz::preview::ReplayOptions m_dynamicConditionOptions;
+    ccz::preview::SimulationEnvironment m_displayedConditionVariables;
+	ccz::preview::SimulationEnvironment m_regularConditionVariablesBeforeDynamic;
+	std::uint64_t m_regularConditionRevisionBeforeDynamic{};
+	bool m_autoExitForCharacterSelection{};
 	ccz::preview::ScriptVariableIndex m_dynamicVariableIndex;
 	ccz::preview::LogicalNodeKey m_dynamicActivationTarget;
 	ccz::preview::LogicalNodeKey m_dynamicTargetNode;

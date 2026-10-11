@@ -24,7 +24,8 @@ public:
     if(i<5) { combos_[i].Create(WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST|WS_VSCROLL,CRect(x+64,y,x+206,y+240),this,100+i);combos_[i].SetFont(&font_); }
     else { edits_[i-5].Create(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL,CRect(x+64,y,x+206,y+25),this,100+i);edits_[i-5].SetFont(&font_); }
    }
-   for(auto text:{L"火",L"船",L"火船"}) combos_[0].AddString(text);
+   for(auto text:{L"火",L"船",L"火船",L"保留"}) combos_[0].AddString(text);
+   for(int type=4;type<=127;++type){CString label;label.Format(L"Gate-%d",(type-4)*2+1);combos_[0].AddString(label);}
    for(auto text:{L"显示",L"消失"}) combos_[1].AddString(text);
    combos_[2].AddString(L"自动匹配类型");for(const auto& t:terrains)combos_[2].AddString(t.c_str());
    for(auto text:{L"不切换",L"切换"}) combos_[3].AddString(text);
@@ -38,7 +39,7 @@ public:
   SetWindowText(defaults?L"战场障碍默认参数":L"战场障碍修改参数");
   combos_[0].EnableWindow(!defaults);edits_[0].EnableWindow(!defaults);edits_[1].EnableWindow(!defaults);
   reset_.ShowWindow(defaults?SW_SHOW:SW_HIDE);apply_.SetWindowText(defaults?L"应用新增默认值":L"应用到此障碍物");
-  status_.SetWindowText(defaults?L"仅影响之后添加的障碍物；类型由缩略图选择，坐标由落点确定。":L"修改此障碍物对应的58号指令参数。右上角关闭取消未应用修改。");
+  status_.SetWindowText(defaults?L"仅影响之后添加的障碍物；类型由缩略图或 Gate 列表选择。":L"修改此障碍物对应的58号指令参数。右上角关闭取消未应用修改。");
   Fill();CRect parent;owner->GetWindowRect(&parent);SetWindowPos(&wndTop,parent.left+(parent.Width()-690)/2,parent.top+(parent.Height()-218)/2,0,0,SWP_NOSIZE|SWP_SHOWWINDOW);SetFocus();
  }
  void Hide(){if(GetSafeHwnd())ShowWindow(SW_HIDE);handler_={};}

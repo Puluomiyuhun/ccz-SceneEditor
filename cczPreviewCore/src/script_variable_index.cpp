@@ -106,10 +106,11 @@ void record_boolean_usage(ScriptVariableIndex& index,
 void record_integer_operand(ScriptVariableIndex& index,
                             const IntegerExpressionOperand& operand,
                             const LogicalNodeKey& reference) {
-    if (operand.kind != IntegerOperandKind::IntegerVariable) {
+    if (operand.raw_value<0 || operand.raw_value>=4096 || operand.kind == IntegerOperandKind::Constant || static_cast<int>(operand.kind)>=6) {
         return;
     }
-    IntegerVariableUsage& usage = index.integer_variables[operand.raw_value];
+    const bool pointer = operand.kind == IntegerOperandKind::PointerVariable || operand.kind == IntegerOperandKind::PointerValue || operand.kind == IntegerOperandKind::PointerAddress;
+    IntegerVariableUsage& usage = (pointer ? index.pointer_variables : index.integer_variables)[operand.raw_value];
     usage.id = operand.raw_value;
     ++usage.occurrence_count;
     append_reference(usage.references, reference);
@@ -131,6 +132,16 @@ void scan_nodes(ScriptVariableIndex& index,
                              ? L"结构化数据无效"
                              : expression.diagnostic));
             }
+        } else if (node.instruction_id == 0x77 && node.command.int_data.size()>=5) {
+            const auto& f=node.command.int_data;
+            IntegerExpressionOperand dst;dst.raw_value=f[1];
+            dst.kind=f[0]==2 ? IntegerOperandKind::IntegerVariable : IntegerOperandKind::PointerVariable;
+            record_integer_operand(index,dst,node.logical_key);
+            IntegerExpressionOperand src;src.raw_value=f[4];src.kind=static_cast<IntegerOperandKind>(f[3]);
+            record_integer_operand(index,src,node.logical_key);
+        } else if(node.instruction_id==0x78 && !node.command.int_data.empty()) {
+            IntegerExpressionOperand dst;dst.raw_value=node.command.int_data[0];dst.kind=IntegerOperandKind::IntegerVariable;
+            record_integer_operand(index,dst,node.logical_key);
         } else if (node.instruction_id == 0x79) {
             const IntegerComparisonExpression expression =
                 decode_integer_expression(node.command);

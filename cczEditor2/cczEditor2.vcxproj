@@ -235,7 +235,7 @@
     <ClInclude Include="BattlePreviewPage.h" />
     <ClInclude Include="TextWrapAssist.h" />
     <ClInclude Include="TextWrapEditSession.h" />
-    <ClInclude Include="Resource.h" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="ViewTree.h" />
     <ClInclude Include="PreviewIntegration\EditorTreeSnapshot.h" />
@@ -369,7 +369,6 @@
     <ResourceCompile Include="cczEditor2.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="D:\bird.ico" />
     <Image Include="res\bird.ico" />
     <Image Include="res\cczEditor2.ico" />
     <Image Include="res\cczEditor2Doc.ico" />

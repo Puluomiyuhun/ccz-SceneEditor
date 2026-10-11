@@ -16,8 +16,19 @@ public:
  using Configuration=ccz::editor_preview::BattleCommandConfiguration;
  using Instruction=ccz::editor_preview::BattleMapOperationInstruction;
  using Handler=std::function<bool(const Instruction&)>;
+ void Prepare(CWnd* owner,const std::vector<std::wstring>& data_names){
+  if(owner==nullptr || (GetSafeHwnd() && IsWindowVisible()) ||
+     (GetSafeHwnd() && prepared_names_==data_names &&
+      person_cache_kind_[0]==1 && person_cache_kind_[1]==2 &&
+      person_cache_kind_[8]==1))return;
+  Open(owner,ccz::editor_preview::DefaultBattleCommandConfiguration(0x4e),1,1,
+       {},data_names,{}, {},false);
+  Open(owner,ccz::editor_preview::DefaultBattleCommandConfiguration(0x4f),1,1,
+       {},data_names,{}, {},false);
+  if(GetSafeHwnd())prepared_names_=data_names;
+ }
  void Open(CWnd* owner,const Configuration& config,int width,int height,Handler handler,
-           const std::vector<std::wstring>& data_names={},const std::vector<int>& extra_locked={},const std::vector<std::wstring>& entry_people={}) {
+           const std::vector<std::wstring>& data_names={},const std::vector<int>& extra_locked={},const std::vector<std::wstring>& entry_people={},bool show=true) {
   if(!GetSafeHwnd()) {
    auto cls=AfxRegisterWndClass(CS_DBLCLKS,LoadCursor(nullptr,IDC_ARROW),(HBRUSH)(COLOR_BTNFACE+1));
    if(!CreateEx(WS_EX_TOOLWINDOW,cls,L"S 战场指令参数",WS_POPUP|WS_CAPTION|WS_SYSMENU,CRect(0,0,850,405),owner,0)){AfxMessageBox(L"无法创建参数窗口");return;}
@@ -36,12 +47,16 @@ public:
    cancel_.Create(L"关闭",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,CRect(180,337,320,366),this,202);cancel_.SetFont(&font_);
   }
   config_=config;width_=width;height_=height;handler_=std::move(handler);
+  if(data_names!=cached_data_names_ || entry_people!=cached_entry_people_){
+   cached_data_names_=data_names;cached_entry_people_=entry_people;
+   std::fill(std::begin(person_cache_kind_),std::end(person_cache_kind_),0);
+  }
   const auto defaults=ccz::editor_preview::DefaultBattleCommandConfiguration(config.instruction_id);
   if(config_.fields.size()==20)config_.fields.resize(defaults.fields.size());
   if(config_.fields.size()!=defaults.fields.size())config_=defaults;
   CString title;title.Format(L"S %02X %s",config.instruction_id,Title(config.instruction_id));SetWindowText(title);
   const auto names=Names(config.instruction_id);
-  for(int i=0;i<13;++i){combo_field_[i]=false;values_[i].clear();combos_[i].ResetContent();bool visible=i<(int)config_.fields.size();labels_[i].ShowWindow(visible?SW_SHOW:SW_HIDE);edits_[i].ShowWindow(visible?SW_SHOW:SW_HIDE);combos_[i].ShowWindow(SW_HIDE);if(visible){labels_[i].SetWindowText(names[i]);edits_[i].SetWindowText(std::to_wstring(config_.fields[i]).c_str());}}
+  for(int i=0;i<13;++i){combo_field_[i]=false;bool visible=i<(int)config_.fields.size();labels_[i].ShowWindow(visible?SW_SHOW:SW_HIDE);edits_[i].ShowWindow(visible?SW_SHOW:SW_HIDE);combos_[i].ShowWindow(SW_HIDE);if(visible){labels_[i].SetWindowText(names[i]);edits_[i].SetWindowText(std::to_wstring(config_.fields[i]).c_str());}}
   const auto id=config_.instruction_id;
   if(id==0x25||id==0x26){EntryPeople(0,data_names,entry_people);
   } else if(id==0x4d){Options(0,{L"指定角色",L"战场编号",L"区域部队"});People(1,data_names);Faction(7);
@@ -51,13 +66,13 @@ public:
    combos_[10].SetCurSel(config_.fields[10]<0?0:(config_.fields[10]&128)?2:1);
   } else if(id==0x4e){Options(0,{L"指定角色",L"区域部队"});People(1,data_names);Faction(6);Options(7,{L"被动出击",L"主动出击",L"坚守原地",L"攻击武将",L"到指定点",L"跟随武将",L"逃到指定点"});People(8,data_names);
   } else if(id==0x31||id==0x53){Options(0,{L"指定角色",L"区域部队"});People(1,data_names);Faction(6);if(id==0x53)Options(7,{L"撤退",L"死亡"});
-  } else if(id==0x4f){People(0,data_names);People(1,data_names);combos_[1].AddString(L"无参照");values_[1].push_back(-1);SelectValue(1,config_.fields[1]);
+  } else if(id==0x4f){People(0,data_names);People(1,data_names,false,true);
    Options(2,{L"朝北",L"朝东",L"朝南",L"朝西",L"默认方向"},{0,1,2,3,-1});
    Options(3,{L"转向",L"不转向"});Options(4,{L"无延迟",L"动作前延迟"});Options(5,{L"无延迟",L"动作后延迟"});
   } else if(id==0x50){People(0,data_names);Options(1,{L"静止",L"举起武器",L"防御",L"受攻击",L"虚弱",L"攻击预备",L"攻击",L"二次攻击",L"慢速转圈",L"喘气",L"晕倒",L"快速转圈",L"中速转圈",L"无"},{0,1,2,3,4,5,6,7,8,9,10,11,12,-1});Options(2,{L"无延迟",L"动作前延迟"});Options(3,{L"无延迟",L"动作后延迟"});
   } else if(id==0x5b){Options(4,{L"胜利条件",L"战斗中"});
   } else if(id==0x5c){People(0,data_names);
-  } else if(id==0x6b){combo_field_[2]=true;for(int i=0;i<110;++i){CString label;if(i<100)label.Format(L"MEff-%d",i+1);else label.Format(L"MCall-%02d.e5",i-100);combos_[2].AddString(label);values_[2].push_back(i);}SelectValue(2,config_.fields[2]);Options(3,{L"不切换视点",L"切换视点"});}
+  } else if(id==0x6b){combo_field_[2]=true;combos_[2].ResetContent();values_[2].clear();person_cache_kind_[2]=0;for(int i=0;i<110;++i){CString label;if(i<100)label.Format(L"MEff-%d",i+1);else label.Format(L"MCall-%02d.e5",i-100);combos_[2].AddString(label);values_[2].push_back(i);}SelectValue(2,config_.fields[2]);Options(3,{L"不切换视点",L"切换视点"});}
   for(int i=0;i<13;++i)if(combo_field_[i]){const int selected=combos_[i].GetCurSel();combos_[i].EnablePersonSearch();combos_[i].SetCurSel(selected);edits_[i].ShowWindow(SW_HIDE);combos_[i].ShowWindow(SW_SHOW);}
   for(int i=0;i<6;++i){checks_[i].ShowWindow(id==0x4d?SW_SHOW:SW_HIDE);checks_[i].SetCheck(id==0x4d&&config_.fields[10]>=0&&(config_.fields[10]&(2<<i))?BST_CHECKED:BST_UNCHECKED);}
   note_.SetWindowText(id==0x25||id==0x26?L"角色列表与原编辑器一致，含 DATA、功能角色、战场编号、变量和无，不要求已经在场。坐标使用战场格子坐标；区域包含两端。\n写入的是条件测试指令，不会直接移动角色。":id==0x4f?L"指定参照武将时，按参照关系计算朝向；无参照时使用指定方向。\n复用原指令的不转向与延迟字段。":id==0x50?L"显示所选战场动作的静态姿态，不计算伤害或战斗状态。\n多选时对每个选中角色写入一条动作指令。":id==0x4d?L"先选择目标模式，再选择属性变化及异常状态。HP/MP 为原编辑器标注的扣减参数。\n区域坐标包含端点；范围选择基于当前预览位置。勾选状态后选择赋予或取消。":id==0x4e?L"AI 为攻击/跟随时选择目标武将；到点/逃到点时填写目标坐标。\n指定角色可搜索 Data 角色或战场编号。区域坐标包含端点。":id==0x6b?L"选择 MEff 或 MCall 法术画面及视点选项。\n预览只呈现法术画面，不计算伤害。":id==0x5b?L"选择胜利条件或战斗中类型，指定区域两端坐标。两种类型都保留区域。":L"选择目标角色，或切换到区域部队后填写区域与阵营。");
@@ -93,7 +108,7 @@ public:
   note_.MoveWindow(12,bottom+6,clientWidth-24,58);bottom+=70;
   apply_.MoveWindow(12,bottom,120,28);cancel_.MoveWindow(clientWidth-132,bottom,120,28);
   CRect window(0,0,clientWidth,bottom+40);AdjustWindowRectEx(&window,GetStyle(),FALSE,GetExStyle());
-  UpdateEnabled();CRect parent;owner->GetWindowRect(&parent);SetWindowPos(&wndTop,parent.left+(parent.Width()-window.Width())/2,parent.top+(parent.Height()-window.Height())/2,window.Width(),window.Height(),SWP_SHOWWINDOW);
+  UpdateEnabled();CRect parent;owner->GetWindowRect(&parent);SetWindowPos(&wndTop,parent.left+(parent.Width()-window.Width())/2,parent.top+(parent.Height()-window.Height())/2,window.Width(),window.Height(),show?SWP_SHOWWINDOW:(SWP_HIDEWINDOW|SWP_NOACTIVATE));
  }
  void Hide(){if(GetSafeHwnd())ShowWindow(SW_HIDE);handler_={};}
 protected:
@@ -115,10 +130,12 @@ protected:
 private:
  int Value(int i)const{int row=combos_[i].GetCurSel();return row<0||row>=(int)values_[i].size()?-1:values_[i][row];}
  void SelectValue(int i,int value){for(int row=0;row<(int)values_[i].size();++row)if(values_[i][row]==value){combos_[i].SetCurSel(row);return;}combos_[i].SetCurSel(0);}
- void Options(int i,std::initializer_list<const wchar_t*> labels,std::initializer_list<int> values={}){combo_field_[i]=true;int n=0;auto v=values.begin();for(auto label:labels){combos_[i].AddString(label);values_[i].push_back(values.size()?*v++:n);++n;}SelectValue(i,config_.fields[i]);}
+ void Options(int i,std::initializer_list<const wchar_t*> labels,std::initializer_list<int> values={}){combo_field_[i]=true;person_cache_kind_[i]=0;combos_[i].ResetContent();values_[i].clear();int n=0;auto v=values.begin();for(auto label:labels){combos_[i].AddString(label);values_[i].push_back(values.size()?*v++:n);++n;}SelectValue(i,config_.fields[i]);}
  void Faction(int i){Options(i,{L"我军",L"友军",L"敌军",L"援军",L"我军及友军",L"敌军及援军",L"所有部队"});}
  void EntryPeople(int i,const std::vector<std::wstring>& names,const std::vector<std::wstring>& nativeLabels){
   combo_field_[i]=true;
+  if(person_cache_kind_[i]==3){combos_[i].RestoreIndexedOptions();SelectValue(i,config_.fields[i]);return;}
+  combos_[i].ResetContent();values_[i].clear();
   const wchar_t* functions[]={L"任何部队",L"我军或友军",L"敌军",L"我军当前人物"};
   for(int row=0;row<5375;++row){
    CString label;
@@ -130,9 +147,36 @@ private:
    else label=L"无";
    combos_[i].AddString(label);values_[i].push_back(Per2List2Code(row));
   }
-  combos_[i].EnablePersonSearch();SelectValue(i,config_.fields[i]);
+  person_cache_kind_[i]=3;combos_[i].EnablePersonSearch();SelectValue(i,config_.fields[i]);
  }
- void People(int i,const std::vector<std::wstring>& names,bool dataOnly=false){combo_field_[i]=true;for(int n=0;n<1024;++n){CString text;text.Format(L"%d: Data",n);if(n<(int)names.size()){text+=L" · ";text+=names[n].c_str();}combos_[i].AddString(text);values_[i].push_back(n);}if(!dataOnly)for(int n=0;n<250;++n){CString text;text.Format(L"战场编号 %d",n);combos_[i].AddString(text);values_[i].push_back(n+1028);}combos_[i].EnablePersonSearch();SelectValue(i,config_.fields[i]);}
+ void People(int i,const std::vector<std::wstring>& names,bool dataOnly=false,bool noReference=false){
+  combo_field_[i]=true;
+  const int kind=noReference?2:dataOnly?4:1;
+  if(person_cache_kind_[i]==1 && kind==2){
+   combos_[i].RestoreIndexedOptions();
+   combos_[i].AddString(L"无参照");values_[i].push_back(-1);
+   person_cache_kind_[i]=2;
+  }else if(person_cache_kind_[i]==2 && kind==1){
+   if(combos_[i].RemoveFinalIndexedOption()){
+    values_[i].pop_back();person_cache_kind_[i]=1;
+   }else person_cache_kind_[i]=0;
+  }
+  if(person_cache_kind_[i]!=kind){
+   combos_[i].ResetContent();values_[i].clear();
+   for(int n=0;n<1024;++n){
+    CString text;text.Format(L"%d: Data",n);
+    if(n<(int)names.size()){text+=L" · ";text+=names[n].c_str();}
+    combos_[i].AddString(text);values_[i].push_back(n);
+   }
+   if(!dataOnly)for(int n=0;n<250;++n){
+    CString text;text.Format(L"战场编号 %d",n);
+    combos_[i].AddString(text);values_[i].push_back(n+1028);
+   }
+   if(noReference){combos_[i].AddString(L"无参照");values_[i].push_back(-1);}
+   person_cache_kind_[i]=kind;combos_[i].EnablePersonSearch();
+  }else combos_[i].RestoreIndexedOptions();
+  SelectValue(i,config_.fields[i]);
+ }
  void Enable(int i,bool enabled){edits_[i].EnableWindow(enabled);combos_[i].EnableWindow(enabled);labels_[i].EnableWindow(enabled);toggles_[i].EnableWindow(enabled);}
  void UpdateEnabled(){const auto id=config_.instruction_id;for(int i=0;i<(int)config_.fields.size();++i)Enable(i,true);
   if(id==0x4d){int mode=Value(0);Enable(1,mode==0);Enable(2,mode==1);for(int i=3;i<=7;++i)Enable(i,mode==2);for(auto& c:checks_)c.EnableWindow(Value(10)>=0);}
@@ -152,6 +196,8 @@ private:
   static const wchar_t* highlight[]={L"目标角色"};static const wchar_t* effect[]={L"X",L"Y",L"法术画面",L"视点"};return id==0x25?pointTest:id==0x26?regionTest:id==0x4f?turn:id==0x50?action:id==0x4d?status:id==0x4e?policy:id==0x5b?area:id==0x31?disappear:id==0x53?retreat:id==0x5c?highlight:effect;
  }
  Configuration config_;int width_{},height_{};Handler handler_;bool combo_field_[13]{};std::vector<int> values_[13];std::vector<int> locked_fields_;
+ int person_cache_kind_[13]{};std::vector<std::wstring> cached_data_names_,cached_entry_people_;
+ std::vector<std::wstring> prepared_names_;
  bool boolean_field_[13]{};CButton toggles_[13];
  CStatic labels_[13],note_;CEdit edits_[13];CMyComboBox combos_[13];CButton checks_[6],apply_,cancel_;CFont font_;
 };

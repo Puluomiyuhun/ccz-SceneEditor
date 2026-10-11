@@ -203,6 +203,40 @@ std::vector<DialogueSegment> split_dialogue_segments(
 
 std::vector<DialogueState> decode_dialogue_segments(
     const DialogueCommandView& command, const DialogueProfile& profile) {
+    if(command.instruction_id==0x7a) {
+        std::vector<DialogueState> result;
+        const auto text=normalize_dialogue_text(command.text);
+        std::vector<std::wstring> people(3,L"-1");unsigned mask=0;
+        std::size_t cursor=0;
+        while(cursor<text.size()) {
+            while(cursor<text.size() && (text[cursor]==L'\n' || text[cursor]==L'\r')) ++cursor;
+            if(cursor>=text.size() || text.compare(cursor,2,L"&&")==0) break;
+            if(text[cursor]!=L'&') {DialogueState error;error.diagnostic=L"对话3缺少参数头";result.push_back(error);break;}
+            auto lineEnd=text.find(L'\n',cursor);
+            if(lineEnd==std::wstring::npos) {DialogueState error;error.diagnostic=L"对话3参数头缺少换行";result.push_back(error);break;}
+            auto head=text.substr(cursor+1,lineEnd-cursor-1);
+            bool abbreviated=head.size()>=2 && head.compare(head.size()-2,2,L"&&")==0;
+            if(abbreviated) head.resize(head.size()-2);
+            std::vector<std::wstring> fields;
+            std::size_t start=0;
+            for(;;) {auto comma=head.find(L',',start);fields.push_back(head.substr(start,comma==std::wstring::npos?comma:comma-start));if(comma==std::wstring::npos) break;start=comma+1;}
+            bool valid=!fields[0].empty();unsigned parsed=0;
+            for(auto c:fields[0]) {if(c<L'0'||c>L'9'||parsed>7) {valid=false;break;}parsed=parsed*10+c-L'0';}
+            valid=valid && parsed<=7 && (abbreviated ? fields.size()==1 && !result.empty() : fields.size()==5 && (fields[1]==L"0"||fields[1]==L"1"));
+            if(!valid) {DialogueState error;error.diagnostic=L"对话3参数格式无效";result.push_back(error);break;}
+            mask=parsed;if(!abbreviated) for(int i=0;i<3;++i) people[i]=fields[i+2];
+            auto next=lineEnd+1;
+            auto end=next;
+            while(end<text.size()) {if((end==0||text[end-1]==L'\n') && text[end]==L'&') break;++end;}
+            DialogueState state;state.visible=true;state.kind=DialogueKind::Extended;state.source_instruction_id=0x7a;
+            state.half_body=true;state.half_body_mask=mask;state.half_body_people=people;
+            state.body=text.substr(next,end-next);
+            for(int i=0;i<3;++i) if(people[i]!=L"-1" && (mask&(4u>>i))) {state.speaker_label=people[i];break;}
+            result.push_back(std::move(state));cursor=end;
+        }
+        if(result.empty()) {DialogueState error;error.diagnostic=L"对话3没有有效分句";result.push_back(error);}
+        return result;
+    }
     const DialogueInstructionSpec* spec =
         find_dialogue_spec(profile, command.instruction_id);
     if (spec == nullptr) {

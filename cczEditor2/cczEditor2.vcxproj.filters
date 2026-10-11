@@ -42,7 +42,7 @@
     <ClInclude Include="cczEditor2View.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="Resource.h">
+    <ClInclude Include="resource.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="FileView.h">
@@ -460,9 +460,6 @@
       <Filter>资源文件</Filter>
     </Image>
     <Image Include="res\icon1.ico">
-      <Filter>资源文件</Filter>
-    </Image>
-    <Image Include="D:\bird.ico">
       <Filter>资源文件</Filter>
     </Image>
     <Image Include="res\bird.ico">

@@ -1,4 +1,5 @@
-﻿#include "ConditionTreePane.h"
+#include "ConditionTreePane.h"
+#include <ccz/preview/variable_control_state.h>
 
 #include <algorithm>
 #include <array>
@@ -62,13 +63,10 @@ bool action_enabled(const ccz::preview::ConditionTreeActionState& state,
 
 bool replay_options_equal(const ccz::preview::ReplayOptions& left,
 	const ccz::preview::ReplayOptions& right) {
-	return left.unresolved_status_conditions == right.unresolved_status_conditions &&
-		left.predicate_states == right.predicate_states &&
-		left.selected_case_by_choice == right.selected_case_by_choice &&
-		left.simulated_variables.boolean_variables ==
-			right.simulated_variables.boolean_variables &&
-		left.simulated_variables.integer_variables ==
-			right.simulated_variables.integer_variables;
+	    return left.unresolved_status_conditions == right.unresolved_status_conditions &&
+        left.predicate_states == right.predicate_states &&
+        left.selected_case_by_choice == right.selected_case_by_choice &&
+        ccz::preview::simulation_environments_equal(left.simulated_variables, right.simulated_variables);
 }
 
 void create_condition_icons(CImageList& image_list) {
@@ -790,12 +788,11 @@ void CConditionTreePane::UpdateActionControls()
 	}
 	if (m_integerEdit.GetSafeHwnd() != nullptr) {
 		m_integerEdit.EnableWindow(state.can_set_integer);
-		if (selected != nullptr && selected->integer_value_available) {
-			m_integerEdit.SetWindowTextW(
-				std::to_wstring(selected->simulated_integer_value).c_str());
-		} else if (!state.can_set_integer) {
-			m_integerEdit.SetWindowTextW(L"");
-		}
+        std::int32_t value = 0;
+        const bool known = selected && ccz::preview::read_simulated_operand(m_options.simulated_variables,
+            static_cast<int>(selected->integer_expression.left.kind), selected->integer_expression.left.raw_value, value);
+        if(state.can_set_integer) m_integerEdit.SetWindowTextW(std::to_wstring(known ? value : 0).c_str());
+        else m_integerEdit.SetWindowTextW(L"");
 	}
 }
 
@@ -810,15 +807,9 @@ bool CConditionTreePane::ReadIntegerValue(std::int32_t& value) const
 	if (length <= 0) {
 		return false;
 	}
-	wchar_t* end = nullptr;
-	errno = 0;
-	const long long parsed = std::wcstoll(buffer, &end, 10);
-	if (errno == ERANGE || end == buffer || *end != L'\0' ||
-		parsed < INT_MIN || parsed > INT_MAX) {
-		return false;
-	}
-	value = static_cast<std::int32_t>(parsed);
-	return true;
+    const auto* node = FindNode(m_selectedKey);
+    const bool address = node && node->integer_expression.left.kind == ccz::preview::IntegerOperandKind::PointerVariable;
+    return ccz::preview::parse_simulated_control_value(buffer, address, value);
 }
 
 void CConditionTreePane::NotifyAction(

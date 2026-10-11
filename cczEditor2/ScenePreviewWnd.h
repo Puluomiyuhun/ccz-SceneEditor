@@ -148,6 +148,8 @@ private:
 	// 外场景地图头像相关
 	bool m_portraitDataLoaded = false;
 	std::map<int, int> m_portraitFaceIndices;
+    std::map<int,int> m_previewAvatarCodes;
+    void ApplyPreviewAvatars(const std::map<int,int>& codes);
 	std::map<int, Gdiplus::Bitmap*> m_portraitCache;
 
 	// 武将列表控件
@@ -179,6 +181,9 @@ private:
 	bool m_undoButtonVisible = false;
 	bool m_playbackVisible = false;
 	CFont m_listFont;
+	bool m_autoRedraw = true;
+	int m_autoMoveAction = 0;
+	std::map<HTREEITEM,std::vector<HTREEITEM>> m_autoWriteGroups;
 	CFont m_undoFont;
 	wchar_t(*m_pPer2)[30] = nullptr;
 	bool m_charListInited = false;
@@ -431,6 +436,7 @@ private:
 	PositionWritebackSource MakePositionSource(int instructionId, int subjectId,
 		HTREEITEM sourceItem) const;
 	void RefreshCharList();
+	HTREEITEM CompleteAppearWrite(HTREEITEM primary, HTREEITEM restoreSelection, BOOL wasModified);
 	HTREEITEM InsertAppearInstruction(int charID, int gameX, int gameY,
 		bool record_undo = true);
 	HTREEITEM InsertTurnInstruction(int charID, int direction,

@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 
 #include "cczEditor2.h"
 #include "ScenePreviewHost.h"
@@ -8,10 +8,13 @@
 
 #include <cwctype>
 #include <string>
+#include <functional>
+#include "PreviewPageFont.h"
 
 BEGIN_MESSAGE_MAP(CScenePreviewWnd, CDockablePane)
 	ON_WM_CREATE()
 	ON_WM_SIZE()
+    ON_WM_CONTEXTMENU()
 END_MESSAGE_MAP()
 
 CScenePreviewWnd::Page CScenePreviewWnd::PageForPath(
@@ -81,6 +84,7 @@ int CScenePreviewWnd::OnCreate(LPCREATESTRUCT create)
 			CRect(0, 0, 1, 1), this, 0x7F62)) {
 		return -1;
 	}
+	ApplyPageFont(*this,L"Scene",m_pageFont);
 	ShowPage(Page::Neutral);
 	return 0;
 }
@@ -337,4 +341,17 @@ void CScenePreviewWnd::HideInternalizedEnhancementViews(
 {
 	if (m_activePage == Page::RScene)
 		m_rPage.HideInternalizedEnhancementViews(diagnostic);
+}
+
+void CScenePreviewWnd::SetUiPointSize(int size) {
+ AfxGetApp()->WriteProfileInt(L"PreviewPageFont",L"Scene",size);
+ ApplyPageFont(*this,L"Scene",m_pageFont);
+ CRect client;GetClientRect(client);OnSize(SIZE_RESTORED,client.Width(),client.Height());
+}
+
+void CScenePreviewWnd::OnContextMenu(CWnd* source,CPoint point) {
+    CRect client;GetClientRect(client);CPoint local=point;ScreenToClient(&local);
+    // Child content owns its menus. Preserve the framework menu on the pane caption.
+    if (point==CPoint(-1,-1) ? source && IsChild(source) : client.PtInRect(local)) return;
+    CDockablePane::OnContextMenu(source,point);
 }

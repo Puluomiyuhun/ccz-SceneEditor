@@ -12,9 +12,20 @@ public:
     void SetOwner(CMyComboBox* owner) { owner_ = owner; }
 
 protected:
+    LRESULT WindowProc(UINT message, WPARAM wparam, LPARAM lparam) override;
     afx_msg BOOL OnMouseWheel(UINT nFlags, short zDelta, CPoint point);
     DECLARE_MESSAGE_MAP()
 
+private:
+    CMyComboBox* owner_ = nullptr;
+};
+
+class CMyComboSearchList : public CWnd
+{
+public:
+    void SetOwner(CMyComboBox* owner) { owner_ = owner; }
+protected:
+    LRESULT WindowProc(UINT message, WPARAM wparam, LPARAM lparam) override;
 private:
     CMyComboBox* owner_ = nullptr;
 };
@@ -37,12 +48,15 @@ public:
     // the combo.  Existing list indexes remain the values written by the
     // dialogs; filtering only changes the visible rows.
     void EnablePersonSearch();
+    void RestoreIndexedOptions();
+    bool RemoveFinalIndexedOption();
     void EnableInstructionSearch();
     void EnableItemSearch();
     void EnableItemSegmentSearch(int first_global_code);
     bool CommitIndexedInput();
     bool HasValidIndexedSelection() const;
     BOOL ForwardMouseWheel(UINT nFlags, short zDelta, CPoint point);
+    void RestoreCapturedSearchCursor();
 
     int AddString(LPCTSTR lpszString);
     void ResetContent();
@@ -104,6 +118,7 @@ private:
     std::vector<ccz::editor::IndexedOption> indexed_options_;
     std::vector<size_t> visible_option_indexes_;
     CMyComboSearchEdit search_edit_;
+    CMyComboSearchList search_list_;
 
     wchar_t inputs[10];
     int cnt = 0;

@@ -50,9 +50,9 @@ inline void ValidateForest(const std::vector<Node> &forest, std::size_t depth,
         node.label.size() > 20000)
       throw std::runtime_error("invalid template node");
     if (node.id == 0x76) {
-      if (node.jump_target < 0)
+      if (node.jump_target < -1)
         throw std::runtime_error("external template jump");
-      jumps.push_back(node.jump_target);
+      if (node.jump_target >= 0) jumps.push_back(node.jump_target);
     } else if (node.jump_target != -1)
       throw std::runtime_error("unexpected jump target");
     if (!node.children.empty()) {

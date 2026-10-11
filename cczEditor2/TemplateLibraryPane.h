@@ -1,6 +1,8 @@
 #pragma once
+#include <memory>
 #include <afxcmn.h>
 #include <afxdockablepane.h>
+#include "PreviewPageFont.h"
 #include "TemplateLibrary/TemplateStore.h"
 class CcczEditor2View;
 class CTemplateLibraryPane : public CDockablePane {
@@ -36,6 +38,7 @@ private:
   CStatic status_;
   CButton insert_, edit_, remove_, undo_;
   CFont font_;
+  std::unique_ptr<PageFontSet> page_font_;
   std::vector<std::wstring> visible_ids_;
   bool filling_ = false;
   bool stamp_known_ = false;

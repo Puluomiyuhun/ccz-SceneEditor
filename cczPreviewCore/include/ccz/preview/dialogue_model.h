@@ -24,6 +24,9 @@ struct DialogueState {
     std::uint16_t face_state{};
     bool face_state_known{};
     std::wstring diagnostic;
+    bool half_body{};
+    unsigned half_body_mask{};
+    std::vector<std::wstring> half_body_people;
 };
 
 struct DialogueSegment {

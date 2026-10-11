@@ -22,6 +22,11 @@ struct DialogueOverlayModel {
     // inactive-child hint in a stable error color without recoloring asset or
     // replay warnings.
     bool inactive_sub_event{};
+    std::vector<std::uint32_t> text_palette;
+    int base_text_color=-1;
+    bool half_body{};
+    unsigned half_body_mask{};
+    std::vector<std::vector<std::uint8_t>> half_body_images;
 };
 
 bool dialogue_overlay_model_equal(const DialogueOverlayModel& left,

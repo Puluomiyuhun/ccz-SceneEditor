@@ -463,6 +463,14 @@ void CMainFrame::OnSettingChange(UINT uFlags, LPCTSTR lpszSection)
 
 void CMainFrame::OnContextMenu(CWnd* pWnd, CPoint point)
 {
+    if (pWnd && point != CPoint(-1,-1)) {
+        for (CWnd* pane : {static_cast<CWnd*>(&m_wndScenePreview), static_cast<CWnd*>(&m_wndTemplateLibrary)}) {
+            if (!pane->GetSafeHwnd()) continue;
+            CPoint local=point;pane->ScreenToClient(&local);CRect client;pane->GetClientRect(client);
+            if (client.PtInRect(local) && (pWnd==pane || pane->IsChild(pWnd))) return;
+        }
+    }
+
 	if (pWnd->GetSafeHwnd() == m_wndClientArea.GetSafeHwnd())
 	{
 		CWnd* pWndCur = WindowFromPoint(point);

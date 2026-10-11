@@ -6,11 +6,12 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <map>
 #include <iostream>
 #include <stdexcept>
 #define _T(x) L##x
 struct CString : std::wstring { using std::wstring::wstring; CString(const std::wstring& s):std::wstring(s){} const wchar_t* GetString() const {return c_str();} };
-struct ItemData { int id=0; std::vector<int> int_data; wchar_t* long_char_data=nullptr; ItemData* child=nullptr; ItemData* bro=nullptr; };
+struct ItemData { int ord=0,id=0; std::vector<int> int_data; wchar_t* long_char_data=nullptr; ItemData* child=nullptr; ItemData* bro=nullptr; };
 struct CTreeCtrl {
  HWND window{}; int deleteCalls=0, failDeleteAt=0;
  HWND GetSafeHwnd(){return window;}
@@ -38,7 +39,8 @@ class CRScenePreviewPage {
 public:
  struct CoordinateUndoEntry {HTREEITEM item{};ccz::scene_preview::PositionSource source{};int oldX=0,oldY=0,newX=0,newY=0;bool directionChanged=false;int oldDirection=0,newDirection=0;};
  struct InsertedUndoSnapshot {HTREEITEM item{},parent{};int id=0;std::vector<int> values;CString text;};
- struct PreviewUndoTransaction {enum class Kind{Coordinate,Inserted};Kind kind=Kind::Coordinate;std::wstring label;std::vector<CoordinateUndoEntry> coordinates;std::vector<HTREEITEM> insertedItems;std::vector<InsertedUndoSnapshot> insertedSnapshots;HTREEITEM restoreSelection{};std::uint64_t treeGeneration=0;};
+ struct PreviewUndoTransaction {enum class Kind{Coordinate,Inserted,Deleted};Kind kind=Kind::Coordinate;std::wstring label;std::vector<CoordinateUndoEntry> coordinates;std::vector<HTREEITEM> insertedItems;std::vector<InsertedUndoSnapshot> insertedSnapshots;HTREEITEM deletedPrevious{};int deletedOrd=0;HTREEITEM restoreSelection{};std::uint64_t treeGeneration=0;};
+ std::map<HTREEITEM,std::vector<HTREEITEM>> m_autoWriteGroups;
  std::vector<PreviewUndoTransaction> m_previewUndoStack;CTreeCtrl* m_pTreeCtrl{};HTREEITEM m_hCurItem{};std::uint64_t m_previewTreeGeneration=500;int refreshes=0;std::wstring diagnostic;
  void UpdateUndoButton(){} void AppendDiagnostic(const wchar_t* s){diagnostic=s;}
  void RequestPreviewRefreshForCurrentDocument(CTreeCtrl&,HTREEITEM){if(active->m_suppressBattleWritebackPreview)throw std::runtime_error("suppressed final refresh");++refreshes;}
@@ -60,6 +62,10 @@ int runTests(){
  check(page.m_previewUndoStack.size()==3,"three records");
  for(int i=0;i<3;++i){check(page.UndoLastPreviewOperation(),"continuous undo");check(page.m_previewUndoStack.size()==2-i,"one record popped");}
  check(!page.UndoLastPreviewOperation(),"empty stack");check(page.refreshes==3,"one refresh each");
+ auto move=add(0x32,{0,1,2},anchor), action=add(0x34,{0,0,0},anchor);
+ page.m_autoWriteGroups[action]={move,action};page.RecordInsertedUndo(L"move with action",{action},anchor);
+ check(page.m_previewUndoStack.back().insertedItems.size()==2,"followup grouped");
+ check(page.UndoLastPreviewOperation(),"followup group undo");check(!FindCurrentTreeItem(view.tree,move) && !FindCurrentTreeItem(view.tree,action),"both removed");
  // Mixed insert and coordinate/facing modification.
  auto role=add(30,{1,2,0},anchor);page.RecordInsertedUndo(L"appear",{role},anchor);
  auto data=reinterpret_cast<ItemData*>(view.tree.GetItemData(role));data->int_data={4,5,3};

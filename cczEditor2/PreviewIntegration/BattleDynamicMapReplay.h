@@ -118,7 +118,7 @@ struct BattleDynamicMapProjection {
     std::wstring diagnostic;
 };
 
-// Resolve the final visible 0x58 type-0/1/2 obstacles on a condition-aware
+// Resolve the final visible 0x58 fire/boat and Gate obstacles on a condition-aware
 // Scene1 replay path.  Unsupported obstacle types truncate the known prefix.
 bool BuildBattleDynamicObstacleBaseline(
     const ccz::preview::NativeReplayPlan& scene1_plan,

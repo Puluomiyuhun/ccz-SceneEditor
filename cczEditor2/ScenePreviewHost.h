@@ -1,6 +1,8 @@
-#pragma once
+﻿#pragma once
+#include <memory>
 
 #include <afxdockablepane.h>
+#include "PreviewPageFont.h"
 
 #include "BattlePreviewPage.h"
 #include "ScenePreviewWnd.h"
@@ -17,6 +19,7 @@ public:
 	virtual ~CScenePreviewWnd() = default;
 	void BeginDocumentOpen() noexcept { ++m_documentOpenDepth; }
 	void EndDocumentOpen();
+	void SetUiPointSize(int size);
 
 	bool RequestPreviewRefresh(CTreeCtrl& tree, HTREEITEM selected_item,
 		CcczEditor2Doc& document);
@@ -40,6 +43,7 @@ public:
 	void HideInternalizedEnhancementViews(const std::wstring& diagnostic);
 
 protected:
+	afx_msg void OnContextMenu(CWnd* source, CPoint point);
 	afx_msg int OnCreate(LPCREATESTRUCT create);
 	afx_msg void OnSize(UINT type, int cx, int cy);
 	DECLARE_MESSAGE_MAP()
@@ -58,4 +62,5 @@ private:
 	CStatic m_neutralLabel;
 	Page m_activePage = Page::Neutral;
 	unsigned m_documentOpenDepth{};
+	std::unique_ptr<PageFontSet> m_pageFont;
 };

@@ -1,4 +1,4 @@
-#include <ccz/preview/execution_model.h>
+﻿#include <ccz/preview/execution_model.h>
 
 #include <ccz/preview/dialogue_replay.h>
 
@@ -173,16 +173,9 @@ ExecutionNode make_execution_node(const RawReplayNode& raw,
                                   : result.integer_expression.diagnostic);
             result.integer_evaluation = IntegerEvaluationState::Unsupported;
         } else {
-            if (result.integer_expression.left.kind ==
-                IntegerOperandKind::IntegerVariable) {
-                result.integer_value_available = true;
-                const auto value = options.simulated_variables.integer_variables
-                    .find(result.integer_expression.left.raw_value);
-                result.simulated_integer_value =
-                    value == options.simulated_variables.integer_variables.end()
-                        ? 0
-                        : value->second;
-            }
+            result.integer_value_available = read_simulated_operand(options.simulated_variables,
+                static_cast<int>(result.integer_expression.left.kind), result.integer_expression.left.raw_value,
+                result.simulated_integer_value);
             bool evaluated = false;
             std::wstring diagnostic;
             if (evaluate_integer_expression(result.integer_expression, options.simulated_variables,
@@ -392,8 +385,15 @@ ExecutionNodeList classify_sequence(
                 classify_sequence(ordinary_children, catalog, options);
 
             std::size_t next = index + 1;
-            while (next < sequence.size() &&
-                   sequence[next].node->instruction_id == 0x13) {
+            while (next < sequence.size()) {
+                if (sequence[next].node->instruction_id == 0x01 &&
+                    next + 1 < sequence.size() &&
+                    sequence[next + 1].node->instruction_id == 0x13) {
+                    choice.ordinary_children.push_back(make_execution_node(
+                        *sequence[next].node, catalog, options, false));
+                    ++next;
+                }
+                if (sequence[next].node->instruction_id != 0x13) break;
                 choice.cases.push_back(
                     make_case_node(*sequence[next].node, catalog, options));
                 ++next;
@@ -1169,7 +1169,7 @@ bool evaluate_boolean_variable_expression(
     if (environment.boolean_values_invalidated) {
         for (const auto* variables : {&expression.true_variables, &expression.false_variables})
             for (auto variable : *variables) if (!environment.known_boolean_assignments.count(variable)) {
-                if (diagnostic) *diagnostic=L"局部变量初始化后的布尔值未确定";
+                if (diagnostic) *diagnostic=L"布尔变量的模拟值未确定";
                 return false;
             }
     }
@@ -1261,34 +1261,24 @@ bool apply_integer_variable_assignment(
 
     const auto read_operand = [&](const IntegerExpressionOperand& operand,
                                   std::int64_t& value) {
-        switch (operand.kind) {
-            case IntegerOperandKind::Constant:
-                value = operand.raw_value;
-                return true;
-            case IntegerOperandKind::IntegerVariable: {
-                const auto found =
-                    environment.integer_variables.find(operand.raw_value);
-                value = found == environment.integer_variables.end()
-                            ? 0
-                            : found->second;
-                return true;
-            }
-            default:
-                if (diagnostic != nullptr) {
-                    *diagnostic = L"0x79 快速调整遇到不可写操作数";
-                }
-                return false;
+        std::int32_t resolved;
+        if (!read_simulated_operand(environment, static_cast<int>(operand.kind), operand.raw_value, resolved)) {
+            if (diagnostic) *diagnostic = L"0x79 比较操作数的模拟值未确定";
+            return false;
         }
+        value = resolved;
+        return true;
     };
 
     const IntegerExpressionOperand* target = nullptr;
     const IntegerExpressionOperand* other = nullptr;
     bool target_is_left = false;
-    if (expression.left.kind == IntegerOperandKind::IntegerVariable) {
+    std::uint32_t target_address;
+    if (resolve_simulated_assignment_address(environment, expression.left, target_address)) {
         target = &expression.left;
         other = &expression.right;
         target_is_left = true;
-    } else if (expression.right.kind == IntegerOperandKind::IntegerVariable) {
+    } else if (resolve_simulated_assignment_address(environment, expression.right, target_address)) {
         target = &expression.right;
         other = &expression.left;
     }
@@ -1422,22 +1412,17 @@ bool apply_integer_variable_assignment(
         }
         return false;
     }
-    const std::int32_t value = target_value;
-    auto& values = environment.integer_variables;
-    const auto found = values.find(target->raw_value);
-    const std::int32_t current =
-        found == values.end() ? 0 : found->second;
-    if (current == value) {
+    auto candidate = environment;
+    write_simulated_address(candidate, target_address, target_value);
+    bool verified = false;
+    if (!evaluate_integer_expression(expression, candidate, verified, diagnostic) || verified != desired_result) {
+        if (diagnostic) *diagnostic = L"0x79 操作数关联导致该比较无法快速调整";
         return false;
     }
-    if (value == 0) {
-        if (found == values.end()) {
-            return false;
-        }
-        values.erase(found);
-    } else {
-        values[target->raw_value] = value;
-    }
+    if (target->kind == IntegerOperandKind::IntegerVariable && target_value == 0)
+        candidate.integer_variables.erase(target->raw_value);
+    environment = std::move(candidate);
+    if (diagnostic) diagnostic->clear();
     return true;
 }
 
@@ -1567,33 +1552,12 @@ bool evaluate_integer_expression(const IntegerComparisonExpression& expression,
 
     const auto read_operand = [&](const IntegerExpressionOperand& operand,
                                   std::int64_t& value) {
-        switch (operand.kind) {
-            case IntegerOperandKind::Constant:
-                value = operand.raw_value;
-                return true;
-            case IntegerOperandKind::IntegerVariable: {
-                if (environment.unknown_integer_variables.count(operand.raw_value)) {
-                    if (diagnostic) *diagnostic=L"前序指令写入的整型变量值未确定";
-                    return false;
-                }
-                const auto found =
-                    environment.integer_variables.find(operand.raw_value);
-                value = found == environment.integer_variables.end()
-                            ? 0
-                            : found->second;
-                return true;
-            }
-            case IntegerOperandKind::IntegerVariableAddress:
-                if (diagnostic != nullptr) {
-                    *diagnostic = L"0x79 的整型变量地址形式暂不参与值模拟";
-                }
-                return false;
-            default:
-                if (diagnostic != nullptr) {
-                    *diagnostic = L"0x79 操作数类型不支持值模拟";
-                }
-                return false;
+        std::int32_t resolved;
+        if (read_simulated_operand(environment, static_cast<int>(operand.kind), operand.raw_value, resolved)) {
+            value=resolved;return true;
         }
+        if(diagnostic) *diagnostic=L"变量或指针目标的模拟值未确定";
+        return false;
     };
 
     std::int64_t left = 0;

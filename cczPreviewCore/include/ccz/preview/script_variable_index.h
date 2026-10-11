@@ -36,6 +36,7 @@ struct ScriptVariableIndex {
     bool valid{};
     std::map<std::int32_t, BooleanVariableUsage> boolean_variables;
     std::map<std::int32_t, IntegerVariableUsage> integer_variables;
+    std::map<std::int32_t, IntegerVariableUsage> pointer_variables;
     std::vector<std::wstring> diagnostics;
 };
 

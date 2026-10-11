@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <ccz/preview/execution_model.h>
 
@@ -84,6 +84,7 @@ bool condition_tree_model_can_activate_target(
 
 bool activate_condition_tree_target(
     ReplayOptions& options, const SectionExecutionModel& model,
-    const LogicalNodeKey& target_key, std::wstring* diagnostic = nullptr);
+    const LogicalNodeKey& target_key, std::wstring* diagnostic = nullptr,
+    const SimulationEnvironment* displayed_variables = nullptr);
 
 }  // namespace ccz::preview

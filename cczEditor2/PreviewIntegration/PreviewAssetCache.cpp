@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cwctype>
+#include <ccz/preview/text_color.h>
 
 namespace ccz::editor_preview {
 namespace {
@@ -187,7 +188,7 @@ bool PreviewAssetCache::LoadForDocument(
         if (diagnostic != nullptr) {
             *diagnostic = diagnostic_;
         }
-        return !data_e5_.empty() || face_archive_.valid;
+    return !data_e5_.empty() || face_archive_.valid;
     }
 
     Clear();
@@ -233,6 +234,10 @@ bool PreviewAssetCache::LoadForDocument(
     if (diagnostic != nullptr) {
         *diagnostic = diagnostic_;
     }
+    std::vector<std::uint8_t> engineBytes;std::wstring paletteDiagnostic;
+    if(read_file_bytes(root+L"Ekd5.exe",engineBytes,paletteDiagnostic)) text_palette_=ccz::preview::extract_text_palette(engineBytes);
+    std::wstring fbDiagnostic;
+    if(read_file_bytes(root + L"E5\\fb.e5",fb_e5_,fbDiagnostic)) fb_archive_=ccz::preview::parse_face_archive(fb_e5_,profile);
     return !data_e5_.empty() || face_archive_.valid;
 }
 
@@ -241,6 +246,9 @@ PreviewAssetsView PreviewAssetCache::view() const noexcept {
     result.data_e5 = data_e5_.empty() ? nullptr : &data_e5_;
     result.face_e5 = face_e5_.empty() ? nullptr : &face_e5_;
     result.face_archive = face_archive_.valid ? &face_archive_ : nullptr;
+    result.fb_e5=fb_e5_.empty()?nullptr:&fb_e5_;
+    result.fb_archive=fb_archive_.valid?&fb_archive_:nullptr;
+    result.text_palette=text_palette_.empty()?nullptr:&text_palette_;
     result.diagnostic = diagnostic_.empty() ? nullptr : &diagnostic_;
     return result;
 }
@@ -257,6 +265,7 @@ void PreviewAssetCache::Clear() {
     data_e5_.clear();
     face_e5_.clear();
     face_archive_ = {};
+    fb_e5_.clear();fb_archive_={};text_palette_.clear();
     instruction_catalog_ = {};
     diagnostic_.clear();
 }

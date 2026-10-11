@@ -1,4 +1,4 @@
-#include <ccz/preview/variable_control_state.h>
+﻿#include <ccz/preview/variable_control_state.h>
 
 #include "test_framework.h"
 
@@ -98,3 +98,25 @@ CCZ_TEST(variable_control_actions_change_only_the_selected_type) {
 }
 
 
+
+CCZ_TEST(avatar_attribute_operator_order_matches_instruction_38) {
+    SimulationEnvironment environment;
+    environment.data_attributes[{1000,1}]=532;
+    apply_simulated_avatar(environment,{1000,15,0,1});
+    CCZ_REQUIRE_EQ(environment.data_attributes.at({1000,1}),1);
+    apply_simulated_avatar(environment,{1000,15,1,2});
+    CCZ_REQUIRE_EQ(environment.data_attributes.at({1000,1}),3);
+    apply_simulated_avatar(environment,{1000,15,2,1});
+    CCZ_REQUIRE_EQ(environment.data_attributes.at({1000,1}),2);
+}
+
+CCZ_TEST(simulated_control_accepts_addresses_and_rejects_overflow) {
+ std::int32_t value;
+ CCZ_REQUIRE(parse_simulated_control_value(L"0x42BD36",true,value));CCZ_REQUIRE_EQ(value,4373814);
+ CCZ_REQUIRE(parse_simulated_control_value(L"&a1",true,value));CCZ_REQUIRE_EQ(static_cast<std::uint32_t>(value),0xF0000004u);
+ CCZ_REQUIRE(parse_simulated_control_value(L"0xFFFFFFFF",true,value));CCZ_REQUIRE_EQ(value,-1);
+ CCZ_REQUIRE(!parse_simulated_control_value(L"4294967296",true,value));
+ CCZ_REQUIRE(!parse_simulated_control_value(L"2147483648",false,value));
+ CCZ_REQUIRE(!parse_simulated_control_value(L"&p4096",true,value));
+ VariableControlRow row;row.value_known=false;CCZ_REQUIRE(!format_variable_control_value(row).empty());
+}

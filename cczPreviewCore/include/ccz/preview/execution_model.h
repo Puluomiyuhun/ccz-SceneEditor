@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <ccz/preview/dialogue_model.h>
 #include <ccz/preview/instruction_catalog.h>
@@ -97,6 +97,11 @@ enum class IntegerEvaluationState : std::uint8_t {
 struct SimulationEnvironment {
     std::map<std::int32_t, bool> boolean_variables;
     std::map<std::int32_t, std::int32_t> integer_variables;
+    std::map<std::pair<std::int32_t,std::int32_t>,std::int32_t> data_attributes;
+    std::map<std::int32_t, std::int32_t> pointer_variables;
+    std::map<std::uint32_t, std::int32_t> simulated_memory;
+    std::set<std::int32_t> unknown_pointer_variables;
+    std::set<std::uint32_t> unknown_memory;
     bool boolean_values_invalidated{};
     std::set<std::int32_t> known_boolean_assignments;
     std::set<std::int32_t> unknown_integer_variables;
@@ -105,6 +110,156 @@ struct SimulationEnvironment {
     std::set<std::int32_t> known_battle_unit_data_ids;
     std::set<std::int32_t> unresolved_battle_status_data_ids;
 };
+
+// Offline address spaces: no process memory is read. Aliases address the live maps.
+inline std::uint32_t simulated_variable_address(bool pointer, std::int32_t id) {
+    return (pointer ? 0xE0000000u : 0xF0000000u) + static_cast<std::uint32_t>(id) * 4;
+}
+inline bool read_simulated_address(const SimulationEnvironment& e, std::uint32_t address, std::int32_t& value) {
+    for (bool pointer : {false,true}) {
+        const auto base = pointer ? 0xE0000000u : 0xF0000000u;
+        if (address >= base && address < base + 4096u*4 && (address-base)%4==0) {
+            int id = (address-base)/4;
+            const auto& unknown = pointer ? e.unknown_pointer_variables : e.unknown_integer_variables;
+            const auto& values = pointer ? e.pointer_variables : e.integer_variables;
+            if (unknown.count(id)) return false;
+            auto found = values.find(id);
+            if (pointer && found == values.end()) return false;
+            value = found == values.end() ? 0 : found->second; return true;
+        }
+    }
+    if(e.unknown_memory.count(address)) return false;
+    auto found=e.simulated_memory.find(address);
+    value=found==e.simulated_memory.end() ? 0 : found->second;return true;
+}
+inline void write_simulated_address(SimulationEnvironment& e, std::uint32_t address, std::int32_t value) {
+    for(bool pointer : {false,true}) {
+        auto base=pointer ? 0xE0000000u : 0xF0000000u;
+        if(address>=base && address<base+4096u*4 && (address-base)%4==0) {
+            int id=(address-base)/4;
+            (pointer ? e.pointer_variables : e.integer_variables)[id]=value;
+            (pointer ? e.unknown_pointer_variables : e.unknown_integer_variables).erase(id);return;
+        }
+    }
+    e.simulated_memory[address]=value;e.unknown_memory.erase(address);
+}
+inline bool read_simulated_operand(const SimulationEnvironment& e, int kind, int id, std::int32_t& value) {
+    if(kind==0) {value=id;return true;}
+    if((kind==3 || kind==5) && id>=0 && id<4096) {
+        value=static_cast<std::int32_t>(simulated_variable_address(kind==3,id));return true;
+    }
+    if(kind!=0 && (id<0 || id>=4096)) return false;
+    if(kind==4) return read_simulated_address(e,simulated_variable_address(false,id),value);
+    if(kind==2) return read_simulated_address(e,simulated_variable_address(true,id),value);
+    if(kind==1) {
+        std::int32_t address;
+        return read_simulated_operand(e,2,id,address) && read_simulated_address(e,static_cast<std::uint32_t>(address),value);
+    }
+    return false;
+}
+
+inline bool resolve_simulated_assignment_address(const SimulationEnvironment& environment,
+    const IntegerExpressionOperand& operand, std::uint32_t& address) {
+    if (operand.raw_value < 0 || operand.raw_value >= 4096) return false;
+    if (operand.kind == IntegerOperandKind::IntegerVariable ||
+        operand.kind == IntegerOperandKind::PointerVariable) {
+        address = simulated_variable_address(operand.kind == IntegerOperandKind::PointerVariable, operand.raw_value);
+        return true;
+    }
+    if (operand.kind == IntegerOperandKind::PointerValue) {
+        std::int32_t pointer;
+        if (!read_simulated_operand(environment, 2, operand.raw_value, pointer)) return false;
+        address = static_cast<std::uint32_t>(pointer);
+        return true;
+    }
+    return false;
+}
+
+// Persist only cells changed by a UI action, never replay-derived assignments.
+inline void merge_simulation_changes(SimulationEnvironment& destination,
+    const SimulationEnvironment& before, const SimulationEnvironment& after) {
+    const auto merge_map = [](auto& out, const auto& prior, const auto& next) {
+        for (const auto& item : prior) if (!next.count(item.first)) out.erase(item.first);
+        for (const auto& item : next) {
+            auto found = prior.find(item.first);
+            if (found == prior.end() || found->second != item.second) out[item.first] = item.second;
+        }
+    };
+    const auto merge_set = [](auto& out, const auto& prior, const auto& next) {
+        for (const auto& item : prior) if (!next.count(item)) out.erase(item);
+        for (const auto& item : next) if (!prior.count(item)) out.insert(item);
+    };
+    merge_map(destination.boolean_variables, before.boolean_variables, after.boolean_variables);
+    merge_map(destination.integer_variables, before.integer_variables, after.integer_variables);
+    merge_map(destination.pointer_variables, before.pointer_variables, after.pointer_variables);
+    merge_map(destination.simulated_memory, before.simulated_memory, after.simulated_memory);
+    merge_set(destination.unknown_integer_variables, before.unknown_integer_variables, after.unknown_integer_variables);
+    merge_set(destination.unknown_pointer_variables, before.unknown_pointer_variables, after.unknown_pointer_variables);
+    merge_set(destination.unknown_memory, before.unknown_memory, after.unknown_memory);
+    merge_set(destination.known_boolean_assignments, before.known_boolean_assignments, after.known_boolean_assignments);
+    if (before.boolean_values_invalidated != after.boolean_values_invalidated)
+        destination.boolean_values_invalidated = after.boolean_values_invalidated;
+}
+
+inline bool simulation_environments_equal(const SimulationEnvironment& a, const SimulationEnvironment& b) {
+    return a.boolean_variables == b.boolean_variables && a.integer_variables == b.integer_variables &&
+        a.pointer_variables == b.pointer_variables && a.simulated_memory == b.simulated_memory &&
+        a.data_attributes == b.data_attributes && a.unknown_pointer_variables == b.unknown_pointer_variables &&
+        a.unknown_memory == b.unknown_memory && a.unknown_integer_variables == b.unknown_integer_variables &&
+        a.boolean_values_invalidated == b.boolean_values_invalidated &&
+        a.known_boolean_assignments == b.known_boolean_assignments &&
+        a.battle_unit_identity_available == b.battle_unit_identity_available &&
+        a.known_battle_unit_data_ids == b.known_battle_unit_data_ids &&
+        a.unresolved_battle_status_data_ids == b.unresolved_battle_status_data_ids;
+}
+
+inline bool apply_simulated_arithmetic(SimulationEnvironment& e,const std::vector<std::int32_t>& f) {
+ if(f.size()<5 || f[0]<0 || f[0]>2 || f[1]<0 || f[1]>=4096) return false;
+ std::uint32_t address;
+ if(f[0]==0) {std::int32_t pointer;if(!read_simulated_operand(e,2,f[1],pointer)) return false;address=static_cast<std::uint32_t>(pointer);}
+ else address=simulated_variable_address(f[0]==1,f[1]);
+ std::int32_t operand,current=0;
+ if(!read_simulated_operand(e,f[3],f[4],operand) || (f[2]!=2 && !read_simulated_address(e,address,current))) return false;
+ std::int64_t value=current;
+ switch(f[2]) {case 0:value+=operand;break;case 1:value-=operand;break;case 2:value=operand;break;case 3:value*=operand;break;case 4:if(!operand)return false;value/=operand;break;case 5:if(!operand)return false;value%=operand;break;default:return false;}
+ if(value<INT32_MIN || value>INT32_MAX) return false;
+ write_simulated_address(e,address,static_cast<std::int32_t>(value));return true;
+}
+inline void invalidate_simulated_destination(SimulationEnvironment& e,const std::vector<std::int32_t>& fields) {
+ if(fields.size()<2 || fields[1]<0 || fields[1]>=4096) return;
+ if(fields[0]==2) e.unknown_integer_variables.insert(fields[1]);
+ if(fields[0]==1) e.unknown_pointer_variables.insert(fields[1]);
+ if(fields[0]==0) {
+  std::int32_t pointer;if(!read_simulated_operand(e,2,fields[1],pointer)) return;
+  auto address=static_cast<std::uint32_t>(pointer);e.unknown_memory.insert(address);
+  for(bool p:{false,true}) {
+   auto base=p?0xE0000000u:0xF0000000u;
+   if(address>=base && address<base+4096u*4 && (address-base)%4==0)
+    (p?e.unknown_pointer_variables:e.unknown_integer_variables).insert((address-base)/4);
+  }
+ }
+}
+inline void apply_simulated_avatar(SimulationEnvironment& e,const std::vector<std::int32_t>& fields) {
+ if(fields.size()<4 || fields[0]<0 || fields[0]>1023 || fields[1]!=15) return;
+ auto key=std::make_pair(fields[0],1);auto found=e.data_attributes.find(key);
+ std::int64_t value=fields[3];
+ if(fields[2]!=0) {
+  if(found==e.data_attributes.end() || fields[2]<1 || fields[2]>2) {e.data_attributes.erase(key);return;}
+  value=found->second+(fields[2]==1?(std::int64_t)fields[3]:-(std::int64_t)fields[3]);
+ }
+ if(value>=0 && value<=65535) e.data_attributes[key]=(int)value;else e.data_attributes.erase(key);
+}
+inline bool apply_simulated_property(SimulationEnvironment& e,const std::vector<std::int32_t>& f) {
+ if(f.size()<4 || f[0]<0 || f[0]>=4096 || f[2]<0 || f[2]>1023) return false;
+ auto key=std::make_pair(f[2],f[3]);
+ if(f[1]==0) {
+  auto found=e.data_attributes.find(key);
+  if(found==e.data_attributes.end()) {e.unknown_integer_variables.insert(f[0]);return false;}
+  write_simulated_address(e,simulated_variable_address(false,f[0]),found->second);return true;
+ }
+ if(f[1]==1) {std::int32_t value;if(!read_simulated_operand(e,4,f[0],value)) {e.data_attributes.erase(key);return false;}e.data_attributes[key]=value;return true;}
+ return false;
+}
 
 // 0x05 stores two fixed-width variable lists in int_data rather than a
 // display string: slots [0, 25) are required-true variables and slots

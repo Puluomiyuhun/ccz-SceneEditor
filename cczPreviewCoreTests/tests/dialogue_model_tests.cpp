@@ -98,7 +98,7 @@ CCZ_TEST(dialogue_model_falls_back_for_malformed_multi_dialogue_marker) {
                    std::wstring(L"第一句\n&云筱"));
 }
 
-CCZ_TEST(dialogue_model_keeps_non_0x14_prefixed_command_single) {
+CCZ_TEST(dialogue3_rejects_legacy_single_speaker_prefix) {
     DialogueProfile profile = make_profile();
     profile.dialogue_ids.push_back(
         {122, DialogueKind::Extended, true, {},
@@ -110,9 +110,8 @@ CCZ_TEST(dialogue_model_keeps_non_0x14_prefixed_command_single) {
         decode_dialogue_segments(command, profile);
 
     CCZ_REQUIRE_EQ(segments.size(), std::size_t{1});
-    CCZ_REQUIRE_EQ(segments.front().speaker_label, std::wstring(L"云夜"));
-    CCZ_REQUIRE_EQ(segments.front().body,
-                   std::wstring(L"第一段\n&第二段标记"));
+    CCZ_REQUIRE(!segments.front().visible);
+    CCZ_REQUIRE(!segments.front().diagnostic.empty());
 }
 
 CCZ_TEST(dialogue_model_decodes_explicit_per2_people) {
@@ -176,4 +175,19 @@ CCZ_TEST(dialogue_model_rejects_invalid_per2_code) {
     const PersonReference invalid_low = decode_per2_code(-4098);
     CCZ_REQUIRE_EQ(invalid_high.kind, PersonReferenceKind::Invalid);
     CCZ_REQUIRE_EQ(invalid_low.kind, PersonReferenceKind::Invalid);
+}
+
+CCZ_TEST(dialogue3_three_slots_abbreviated_masks_and_terminator) {
+    DialogueCommandView command;command.instruction_id=0x7a;
+    command.text=L"&4,0,1,2,3\n左\n&2&&\n中\n&1&&\n右\n&7&&\n全部\n&5,0,4,-1,5\n两人\n&&";
+    DialogueProfile profile;
+    auto states=decode_dialogue_segments(command,profile);
+    CCZ_REQUIRE_EQ(states.size(),static_cast<std::size_t>(5));
+    CCZ_REQUIRE(states[0].half_body && states[0].half_body_mask==4);
+    CCZ_REQUIRE(states[1].half_body_people==states[0].half_body_people);
+    CCZ_REQUIRE(states[1].speaker_label==L"2");
+    CCZ_REQUIRE(states[2].half_body_mask==1 && states[3].half_body_mask==7);
+    CCZ_REQUIRE(states[4].half_body_people[1]==L"-1");
+    CCZ_REQUIRE(states[4].body.find(L"&&")==std::wstring::npos);
+    for(int mask=0;mask<8;++mask) {command.text=L"&"+std::to_wstring(mask)+L",0,1,2,3\n正文";auto decoded=decode_dialogue_segments(command,profile);CCZ_REQUIRE(decoded[0].half_body_mask==mask);}
 }

@@ -27,6 +27,7 @@
 #include <string>
 #include "myTool.h"
 #include "TextWrapAssist.h"
+#include "ColorAssist.h"
 #include "TextWrapEditSession.h"
 #include "PreviewIntegration/PreviewWritebackGate.h"
 #include "PreviewIntegration/BattleMapOperations.h"
@@ -2870,6 +2871,8 @@ BOOL Dialog_2::OnInitDialog()
 	wrap_supported = ccz::text_wrap::IsSupportedCommand(pView->cur_code);
 	wrap_history_mode = pView->cur_code == 22 && IsHistoryInfoContext(pView);
 	ConfigureWrapControls(this, wrap_supported, pView->cur_code == 22);
+    if(wrap_supported) CreateColorAssistButton(*this,color_assist,edit1);
+
 	if (wrap_supported)
 	{
 		wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(
@@ -2885,7 +2888,9 @@ BOOL Dialog_2::OnInitDialog()
 	}
 	return TRUE;
 }
+void Dialog_2::OnColorAssist() {ApplyColorAssist(edit1);}
 BEGIN_MESSAGE_MAP(Dialog_2, myDialog)
+	ON_BN_CLICKED(0xee01, &Dialog_2::OnColorAssist)
 	ON_BN_CLICKED(IDOK, &Dialog_2::OnBnClickedOk)
 	ON_BN_CLICKED(IDC_WRAP_MODE, &Dialog_2::OnBnClickedWrapMode)
 	ON_BN_CLICKED(IDC_WRAP_ENABLE, &Dialog_2::OnBnClickedWrapEnable)
@@ -3390,7 +3395,9 @@ void Dialog_18::OnBnClickedOk()
 	pView->GetDocument()->OnModified(TRUE);CDialogEx::OnOK();
 }
 
+void Dialog_21::OnColorAssist() {ApplyColorAssist(edit1);}
 BEGIN_MESSAGE_MAP(Dialog_21, myDialog)
+ ON_BN_CLICKED(0xee01, &Dialog_21::OnColorAssist)
 	ON_BN_CLICKED(IDOK, &Dialog_21::OnBnClickedOk)
 	ON_BN_CLICKED(IDC_WRAP_ENABLE, &Dialog_21::OnBnClickedWrapEnable)
 	ON_EN_CHANGE(IDC_EDIT1, &Dialog_21::OnEnChangeWrapText)
@@ -3424,6 +3431,7 @@ BOOL Dialog_21::OnInitDialog()
 	combo2.SetCurSel(Per2Code2List(code));
 
 	ConfigureWrapControls(this, true, false);
+	CreateColorAssistButton(*this,color_assist,edit1);
 	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(21, false, true) ? BST_CHECKED : BST_UNCHECKED);
 	const int limit = ccz::text_wrap::LoadLimit(21, false);
 	SetWrapLimitText(wrap_bytes, limit);
@@ -4018,7 +4026,9 @@ void Dialog_43::OnBnClickedOk()
 }
 
 
+void Dialog_44::OnColorAssist() {ApplyColorAssist(edit1);}
 BEGIN_MESSAGE_MAP(Dialog_44, myDialog)
+ ON_BN_CLICKED(0xee01, &Dialog_44::OnColorAssist)
 	ON_BN_CLICKED(IDOK, &Dialog_44::OnBnClickedOk)
 	ON_BN_CLICKED(IDC_WRAP_ENABLE, &Dialog_44::OnBnClickedWrapEnable)
 	ON_EN_CHANGE(IDC_EDIT1, &Dialog_44::OnEnChangeWrapText)
@@ -4047,6 +4057,7 @@ BOOL Dialog_44::OnInitDialog()
 	check3.SetCheck(pView->cur_data.int_data[2]);
 
 	ConfigureWrapControls(this, true, false);
+	CreateColorAssistButton(*this,color_assist,edit1);
 	wrap_enable.SetCheck(ccz::text_wrap::LoadEnabled(44, false, true) ? BST_CHECKED : BST_UNCHECKED);
 	const int limit = ccz::text_wrap::LoadLimit(44, false);
 	SetWrapLimitText(wrap_bytes, limit);
@@ -7587,12 +7598,15 @@ void Dialog_Color::OnBnClickedOk()
 }
 
 
+#include "JumpTransferUi.h"
+
 void recur_copy(HTREEITEM cur, ItemData* des, CcczEditor2View* pView, int depth)
 {
 	CTreeCtrl& tree = pView->GetTreeCtrl();
 	ItemData* p = (ItemData*)tree.GetItemData(cur);
 	if (p != NULL) {
 		des->id = p->id;
+		des->ord = p->ord;
 		for (int i = 0; i < p->int_data.size(); i++) des->int_data[i] = p->int_data[i];
 		if (p->long_char_data != NULL) {
 			const std::size_t sourceCapacity = (std::max)(
@@ -7607,14 +7621,14 @@ void recur_copy(HTREEITEM cur, ItemData* des, CcczEditor2View* pView, int depth)
 	}
 	HTREEITEM child = tree.GetChildItem(cur);
 	if (child != NULL) {
-		des->child = pView->InitData(((ItemData*)tree.GetItemData(child))->id);
+		des->child = new ItemData((int)((ItemData*)tree.GetItemData(child))->int_data.size());
 		recur_copy(child, des->child, pView, depth + 1);
 	}
 	else des->child = NULL;
 	if (depth) {
 		HTREEITEM bro = tree.GetNextSiblingItem(cur);
 		if (bro != NULL) {
-			des->bro = pView->InitData(((ItemData*)tree.GetItemData(bro))->id);
+			des->bro = new ItemData((int)((ItemData*)tree.GetItemData(bro))->int_data.size());
 			recur_copy(bro, des->bro, pView, depth + 1);
 		}
 	}
@@ -7644,7 +7658,7 @@ bool CcczEditor2View::OnCopy()
 			ctrl_on = false;
 			return false;
 		}
-		theApp.copy = InitData(id);
+		theApp.copy = new ItemData((int)((ItemData*)m_TreeCtrl.GetItemData(cur_item))->int_data.size());
 		recur_copy(pView->cur_item, theApp.copy, pView, 0);
 	}
 	else {
@@ -7659,7 +7673,7 @@ bool CcczEditor2View::OnCopy()
 		for (int i = 0; i < checkbox_selected.size(); i++) {
 			HTREEITEM item = checkbox_selected[i];
 			int id = ((ItemData*)m_TreeCtrl.GetItemData(item))->id;
-			theApp.copys[i] = InitData(id);
+			theApp.copys[i] = new ItemData((int)((ItemData*)m_TreeCtrl.GetItemData(item))->int_data.size());
 			recur_copy(item, theApp.copys[i], pView, 0);
 		}
 		//refreshCheckbox(m_TreeCtrl.GetRootItem(), -1);
@@ -7667,11 +7681,14 @@ bool CcczEditor2View::OnCopy()
 	return true;
 }
 
-void recur_paste(HTREEITEM cur, ItemData* src, CcczEditor2View* pView)
+void recur_paste(HTREEITEM cur, ItemData* src, CcczEditor2View* pView,
+ std::map<int,int>& mapping, std::vector<ItemData*>& jumps)
 {
 	CTreeCtrl& tree = pView->GetTreeCtrl();
 
 	ItemData* p = (ItemData*)tree.GetItemData(cur);
+	mapping.emplace(src->ord, p->ord);
+	if (p->id == 0x76) jumps.push_back(p);
 	for (int i = 0; i < src->int_data.size(); i++) p->int_data[i] = src->int_data[i];
 	if (src->long_char_data != NULL) {
 		const std::size_t sourceCapacity = (std::max)(
@@ -7688,18 +7705,48 @@ void recur_paste(HTREEITEM cur, ItemData* src, CcczEditor2View* pView)
 	if (src->child != NULL)
 	{
 		HTREEITEM item = pView->CreateItem(src->child->id, cur, TVI_FIRST);
-		recur_paste(item, src->child, pView);
+		recur_paste(item, src->child, pView, mapping, jumps);
 	}
 	if (src->bro != NULL)
 	{
 		HTREEITEM item = pView->CreateItem(src->bro->id, tree.GetParentItem(cur), TVI_LAST);
-		recur_paste(item, src->bro, pView);
+		recur_paste(item, src->bro, pView, mapping, jumps);
 	}
 }
 
 void CcczEditor2View::OnPaste()
 {
 	CTreeCtrl& m_TreeCtrl = GetTreeCtrl();
+  if (!cur_item || !m_TreeCtrl.GetItemData(cur_item)) return;
+  std::set<int> copiedIds, targetIds;
+  std::function<void(ItemData*)> collect = [&](ItemData* node) {
+    if (!node) return;
+    copiedIds.insert(node->ord);
+    if (node->id == 0x76) targetIds.insert(node->int_data.at(0));
+    collect(node->child); collect(node->bro);
+  };
+  if (theApp.condition == 0) collect(theApp.copy);
+  else for (int i=0;i<theApp.copys_sum;++i) collect(theApp.copys[i]);
+  for (int id : copiedIds) targetIds.erase(id);
+  std::map<int,int> externalTargets, mapping;
+  std::vector<ItemData*> pastedJumps;
+  std::vector<ItemData*> roots;
+  if (theApp.condition == 0) { if (theApp.copy) roots.push_back(theApp.copy); }
+  else for (int i=0;i<theApp.copys_sum;++i) roots.push_back(theApp.copys[i]);
+  auto anchorData = reinterpret_cast<ItemData*>(m_TreeCtrl.GetItemData(cur_item));
+  auto anchorParent = m_TreeCtrl.GetParentItem(cur_item);
+  for (auto src : roots) {
+    bool invalid = !src || (src->id < 0 && src->id != anchorData->id);
+    if (!invalid && m_TreeCtrl.GetItemText(cur_item)[0] == 'S' && src->id > 0) invalid = true;
+    if (!invalid && anchorParent && m_TreeCtrl.GetItemText(anchorParent)[0] == 'S' && src->id >= 0)
+      invalid = code_test[src->id] < 2 &&
+        !(theApp.condition == 0 && (src->id == 0x77 || src->id == 0x78));
+    if (!invalid && theApp.condition != 0 && m_TreeCtrl.GetChildItem(cur_item) && anchorData->id > 0) invalid = true;
+    if (invalid) { MessageBox(L"粘贴目标不匹配",L"粘贴失败",MB_ICONERROR); return; }
+  }
+  if (roots.empty()) return;
+  if (!ResolveTransferExternal(*this,targetIds,false,externalTargets)) return;
+
 
 	if (theApp.condition == 0) {
 		if (theApp.copy == NULL)return;
@@ -7732,18 +7779,18 @@ void CcczEditor2View::OnPaste()
 			if (last_data->id == 1) {
 				item = CreateItem(theApp.copy->id, m_TreeCtrl.GetParentItem(cur_item), FindLast(last_item));
 				if (addZSJ)CreateItem(1, m_TreeCtrl.GetParentItem(cur_item), FindLast(item));
-				recur_paste(item, theApp.copy, this);
+				recur_paste(item, theApp.copy, this, mapping, pastedJumps);
 			}
 			else {
 				item = CreateItem(theApp.copy->id, m_TreeCtrl.GetParentItem(cur_item), last_item);
 				if (addZSJ)CreateItem(1, m_TreeCtrl.GetParentItem(cur_item), FindLast(item));
-				recur_paste(item, theApp.copy, this);
+				recur_paste(item, theApp.copy, this, mapping, pastedJumps);
 			}
 		}
 		else {
 			item = CreateItem(theApp.copy->id, m_TreeCtrl.GetParentItem(cur_item), last_item);
 			if (addZSJ)CreateItem(1, m_TreeCtrl.GetParentItem(cur_item), FindLast(item));
-			recur_paste(item, theApp.copy, this);
+			recur_paste(item, theApp.copy, this, mapping, pastedJumps);
 		}
 		cur_item = item;
 		m_TreeCtrl.SelectItem(item);
@@ -7777,10 +7824,20 @@ void CcczEditor2View::OnPaste()
 			}
 			else if (theApp.copys[i]->child != NULL && theApp.copys[i]->id > 0) CreateItem(1, m_TreeCtrl.GetParentItem(cur_item), FindLast(cur_item));
 			HTREEITEM item = CreateItem(theApp.copys[i]->id, m_TreeCtrl.GetParentItem(cur_item), FindLast(cur_item));
-			recur_paste(FindLast(cur_item), theApp.copys[i], this);
+			recur_paste(item, theApp.copys[i], this, mapping, pastedJumps);
 			refreshCheckbox(m_TreeCtrl.GetRootItem(), -1);
 		}
 	}
+  for (auto jump : pastedJumps)
+    jump->int_data[0] = ccz::editor::RemapTransferredJump(jump->int_data[0],mapping,externalTargets);
+  std::function<void(HTREEITEM)> refresh = [&](HTREEITEM node) {
+    for (;node;node=m_TreeCtrl.GetNextSiblingItem(node)) {
+      auto data = reinterpret_cast<ItemData*>(m_TreeCtrl.GetItemData(node));
+      if (data && data->id == 0x76) UpdateShow(node);
+      refresh(m_TreeCtrl.GetChildItem(node));
+    }
+  };
+  refresh(m_TreeCtrl.GetRootItem());
 	GetDocument()->OnModified(TRUE);
 }
 

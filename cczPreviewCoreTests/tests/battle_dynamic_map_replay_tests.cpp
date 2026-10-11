@@ -236,6 +236,8 @@ CCZ_TEST(battle_dynamic_map_replay_rewinds_scene1_obstacles_for_earlier_target) 
 
 CCZ_TEST(battle_dynamic_map_replay_rejects_invalid_obstacle_fields) {
     const std::vector<std::vector<std::int32_t>> invalid_fields = {
+        {3, 0, 17, 4, 5, 0, 0},
+        {128, 0, 17, 4, 5, 0, 0},
         {0, 0, 30, 4, 5, 0, 0},
         {1, 0, -1, 4, 5, 0, 0},
         {2, 0, 26, 4, 5, 2, 0},
@@ -646,6 +648,23 @@ CCZ_TEST(battle_dynamic_labels_keep_distinct_unbound_battlefield_units) {
  CCZ_REQUIRE_EQ(updated.labels.size(),std::size_t(2));
  CCZ_REQUIRE_EQ(updated.labels[0].coordinate,(BattleCoord{5,6}));
  CCZ_REQUIRE_EQ(updated.labels[1].coordinate,(BattleCoord{7,8}));
+}
+
+CCZ_TEST(battle_gate_obstacles_replay_closed_and_hidden_states) {
+    NativeReplayPlan source;
+    source.complete = true;
+    source.items = {
+        command(0x58, {4, 0, 17, 12, 11, 0, 1}, L"gate-closed"),
+        command(0x58, {7, 0, 17, 15, 14, 0, 1}, L"gate-closed-2"),
+        command(0x58, {4, 1, 17, 12, 11, 0, 0}, L"gate-open")};
+    std::vector<BattleDynamicObstacle> obstacles;
+    bool complete = false;
+    std::wstring diagnostic;
+    CCZ_REQUIRE(BuildBattleDynamicObstacleBaseline(source, baseline().map,
+        obstacles, complete, diagnostic));
+    CCZ_REQUIRE(complete);
+    CCZ_REQUIRE_EQ(obstacles.size(), std::size_t(1));
+    CCZ_REQUIRE_EQ(obstacles[0].type, 7);
 }
 
 CCZ_TEST(acceptance_unbound_target_does_not_block_later_obstacle) {

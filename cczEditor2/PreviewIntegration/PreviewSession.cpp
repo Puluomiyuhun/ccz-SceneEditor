@@ -1,4 +1,4 @@
-#include "PreviewSession.h"
+﻿#include "PreviewSession.h"
 
 #include <ccz/preview/condition_tree_state.h>
 #include <ccz/preview/dialogue_replay.h>
@@ -223,12 +223,12 @@ bool frame_equal(const PreviewFrame& left, const PreviewFrame& right) {
         left.model != nullptr && right.model != nullptr
             ? ccz::preview::execution_model_equal(*left.model, *right.model)
             : left.model == right.model;
-    return models_equal && native_plan_equal(left.native_plan, right.native_plan) &&
+    return models_equal && ccz::preview::simulation_environments_equal(left.displayed_variables, right.displayed_variables) && native_plan_equal(left.native_plan, right.native_plan) &&
            ccz::preview::dialogue_overlay_model_equal(left.dialogue,
                                                       right.dialogue) &&
            variable_index_equal(left.variable_index, right.variable_index) &&
            left.active_node == right.active_node &&
-           left.diagnostics == right.diagnostics;
+           left.diagnostics == right.diagnostics && left.avatar_codes==right.avatar_codes;
 }
 
 bool belongs_to_section(const LogicalNodeKey& key,
@@ -358,7 +358,7 @@ bool condition_action_enabled(const ConditionTreeActionState& state,
 bool apply_condition_action_to_options(
     ReplayOptions& options, const SectionExecutionModel& model,
     const LogicalNodeKey& node_key, ConditionTreeAction action,
-    std::int32_t integer_value, std::wstring* diagnostic) {
+    std::int32_t integer_value, std::wstring* diagnostic, const SimulationEnvironment* displayed_variables) {
     const ExecutionNode* selected = find_model_node(model, node_key);
     if (selected == nullptr) {
         if (diagnostic != nullptr) {
@@ -367,8 +367,10 @@ bool apply_condition_action_to_options(
         return false;
     }
 
+    auto display_options = options;
+    if (displayed_variables) display_options.simulated_variables = *displayed_variables;
     const ConditionTreeActionState state =
-        ccz::preview::condition_tree_action_state(selected, options);
+        ccz::preview::condition_tree_action_state(selected, display_options);
     if (!condition_action_enabled(state, action)) {
         if (diagnostic != nullptr) {
             *diagnostic = L"当前条件节点不支持该操作：" + node_key;
@@ -379,31 +381,25 @@ bool apply_condition_action_to_options(
     if (selected->category == ExecutionCategory::Predicate) {
         if (selected->predicate_kind == PredicateKind::Integer) {
             if (action == ConditionTreeAction::MakePredicateReachable) {
-                return ccz::preview::apply_integer_variable_assignment(
-                    options.simulated_variables, selected->integer_expression,
-                    true, diagnostic);
-            }
-            if (action == ConditionTreeAction::SetIntegerValue) {
-                auto& values = options.simulated_variables.integer_variables;
-                const auto found =
-                    values.find(selected->integer_expression.left.raw_value);
-                if (integer_value == 0) {
-                    if (found == values.end()) {
-                        return false;
-                    }
-                    values.erase(found);
-                    return true;
-                }
-                if (found != values.end() && found->second == integer_value) {
-                    return false;
-                }
-                values[selected->integer_expression.left.raw_value] =
-                    integer_value;
+                auto changed = display_options.simulated_variables;
+                if (!ccz::preview::apply_integer_variable_assignment(changed,
+                    selected->integer_expression, true, diagnostic)) return false;
+                ccz::preview::merge_simulation_changes(options.simulated_variables,
+                    display_options.simulated_variables, changed);
                 return true;
             }
-            if (action == ConditionTreeAction::RestoreIntegerDefault) {
-                return options.simulated_variables.integer_variables.erase(
-                           selected->integer_expression.left.raw_value) != 0;
+            if (action == ConditionTreeAction::SetIntegerValue || action == ConditionTreeAction::RestoreIntegerDefault) {
+                const auto& operand = selected->integer_expression.left;
+                std::uint32_t address;
+                if (!ccz::preview::resolve_simulated_assignment_address(display_options.simulated_variables, operand, address)) return false;
+                auto kind = ccz::preview::VariableControlKind::Memory;
+                auto id = static_cast<std::int32_t>(address);
+                if (operand.kind == ccz::preview::IntegerOperandKind::IntegerVariable) {kind = ccz::preview::VariableControlKind::Integer; id = operand.raw_value;}
+                if (operand.kind == ccz::preview::IntegerOperandKind::PointerVariable) {kind = ccz::preview::VariableControlKind::Pointer; id = operand.raw_value;}
+                return ccz::preview::apply_variable_control_action(options.simulated_variables, kind, id,
+                    action == ConditionTreeAction::SetIntegerValue ? ccz::preview::VariableControlAction::SetIntegerValue
+                                                                  : ccz::preview::VariableControlAction::RestoreIntegerDefault,
+                    integer_value);
             }
             return false;
         }
@@ -510,9 +506,9 @@ bool ApplyConditionTreeActionToOptions(
     const ccz::preview::LogicalNodeKey& node_key,
     ccz::preview::ConditionTreeAction action,
     std::int32_t integer_value,
-    std::wstring* diagnostic) {
+    std::wstring* diagnostic, const SimulationEnvironment* displayed_variables) {
     return apply_condition_action_to_options(options, model, node_key, action,
-                                             integer_value, diagnostic);
+                                             integer_value, diagnostic, displayed_variables);
 }
 
 PreviewFrame BuildPreviewFrame(
@@ -520,22 +516,31 @@ PreviewFrame BuildPreviewFrame(
     const ReplayOptions& options,
     const ccz::preview::InstructionCatalog& catalog,
     const ccz::preview::DialogueProfile& profile,
-    const PreviewAssetsView& assets,
+    const PreviewAssetsView& sourceAssets,
     std::optional<std::size_t> dialogue_segment_index) {
+    auto assets=sourceAssets;
+    auto replayOptions=options;
+    if(assets.data_e5) {
+        for(int id=0;id<1024;++id) {
+            auto offset=static_cast<std::uint64_t>(profile.data_record_base)+static_cast<std::uint64_t>(id)*profile.data_record_stride+profile.avatar_offset;
+            if(offset+1<assets.data_e5->size()) replayOptions.simulated_variables.data_attributes[{id,1}]=(*assets.data_e5)[(std::size_t)offset]|((*assets.data_e5)[(std::size_t)offset+1]<<8);
+        }
+    }
     PreviewFrame frame;
     frame.model = std::make_shared<SectionExecutionModel>(model);
     frame.variable_index = ccz::preview::scan_script_variables(
         input.document_nodes, input.document_key);
     ccz::preview::ReplayResult replay = ccz::preview::replay_section_to(
-        model, input.section.selected_target_key, profile, options);
+        model, input.section.selected_target_key, profile, replayOptions);
     frame.native_plan = ccz::preview::build_native_replay_plan(
-        model, input.section.selected_target_key, profile, options);
+        model, input.section.selected_target_key, profile, replayOptions);
     frame.active_node = input.section.selected_target_key;
+    frame.displayed_variables = replay.state.simulated;
 
     if (dialogue_segment_index.has_value()) {
         const ExecutionNode* target =
             find_model_node(model, input.section.selected_target_key);
-        if (target != nullptr && target->instruction_id == 0x14) {
+        if (target != nullptr && (target->instruction_id == 0x14 || target->instruction_id == 0x7a)) {
             const std::vector<ccz::preview::DialogueState> segments =
                 ccz::preview::decode_dialogue_segments(target->command,
                                                        profile);
@@ -554,10 +559,51 @@ PreviewFrame BuildPreviewFrame(
         }
     }
 
+    std::vector<std::uint8_t> previewData;
+    if(assets.data_e5) {
+        previewData=*assets.data_e5;
+        for(const auto& attribute:replay.state.simulated.data_attributes) {
+            if(attribute.first.second!=1 || attribute.second<0 || attribute.second>65535) continue;
+            frame.avatar_codes[attribute.first.first]=attribute.second;
+            auto offset=static_cast<std::uint64_t>(profile.data_record_base)+static_cast<std::uint64_t>(attribute.first.first)*profile.data_record_stride+profile.avatar_offset;
+            if(offset+1<previewData.size()) {previewData[(std::size_t)offset]=(std::uint8_t)attribute.second;previewData[(std::size_t)offset+1]=(std::uint8_t)(attribute.second>>8);}
+        }
+        assets.data_e5=&previewData;
+    }
+    if(assets.text_palette) frame.dialogue.text_palette=*assets.text_palette;
+    std::int32_t colorMode=0;
+    if(ccz::preview::read_simulated_operand(replay.state.simulated,4,4071,colorMode)) {
+        if(colorMode==2) frame.dialogue.base_text_color=0x28;
+        if(colorMode==3) frame.dialogue.base_text_color=0x3a;
+        if(colorMode==4) frame.dialogue.base_text_color=0x7c;
+    }
     frame.dialogue.visible = replay.state.dialogue.visible;
     frame.dialogue.speaker_label = replay.state.dialogue.speaker_label;
     frame.dialogue.body = replay.state.dialogue.body;
     frame.dialogue.diagnostic = replay.state.dialogue.diagnostic;
+    frame.dialogue.half_body=replay.state.dialogue.half_body;
+    frame.dialogue.half_body_mask=replay.state.dialogue.half_body_mask;
+    if(frame.dialogue.half_body && assets.data_e5) {
+        frame.dialogue.show_portrait=false;
+        frame.dialogue.half_body_images.resize(3);
+        const auto& people=replay.state.dialogue.half_body_people;
+        for(std::size_t slot=0;slot<people.size() && slot<3;++slot) {
+            if(people[slot]==L"-1") continue;
+            std::int32_t person=find_person_by_label(*assets.data_e5,profile,people[slot]);
+            if(auto token=parse_data_speaker_label(L"*."+people[slot]);token.has_value()) person=*token;
+            if(person<0 || !assets.fb_e5 || !assets.fb_archive) {
+                frame.dialogue.diagnostic+=L"；半身像素材或人物未解析";continue;
+            }
+            ccz::preview::DialogueOverlayModel portrait;
+            ccz::preview::populate_portrait_overlay(portrait,person,replay.state.face_state,*assets.data_e5,profile,*assets.fb_archive,*assets.fb_e5);
+            frame.dialogue.half_body_images[slot]=std::move(portrait.portrait_image);
+            if(people[slot]==replay.state.dialogue.speaker_label) {
+                auto name=read_data_person_name(*assets.data_e5,profile,person);
+                if(!name.empty()) frame.dialogue.speaker_label=name;
+            }
+        }
+    }
+
 
     // A target that is present in the typed Section model but is rejected by
     // the currently selected predicate branch is an inactive child event,
@@ -593,7 +639,7 @@ PreviewFrame BuildPreviewFrame(
     frame.dialogue.show_speaker =
         dialogue_visible && !plain_text_dialogue;
     frame.dialogue.show_portrait =
-        dialogue_visible && !plain_text_dialogue;
+        dialogue_visible && !plain_text_dialogue && !frame.dialogue.half_body;
 
     if (assets.data_e5 != nullptr && assets.face_e5 != nullptr &&
         assets.face_archive != nullptr && dialogue_visible &&
@@ -726,10 +772,7 @@ RefreshResult PreviewSession::Refresh(
                              options_.predicate_states ||
                          next_options.selected_case_by_choice !=
                              options_.selected_case_by_choice ||
-                         next_options.simulated_variables.boolean_variables !=
-                             options_.simulated_variables.boolean_variables ||
-                         next_options.simulated_variables.integer_variables !=
-                             options_.simulated_variables.integer_variables;
+                         !ccz::preview::simulation_environments_equal(next_options.simulated_variables, options_.simulated_variables);
 
     options_ = std::move(next_options);
     frame_ = std::move(next_frame);
@@ -756,7 +799,7 @@ bool PreviewSession::ApplyConditionAction(
     }
     ReplayOptions candidate = options_;
     if (!ApplyConditionTreeActionToOptions(candidate, *frame_.model, node_key,
-            action, integer_value, diagnostic)) {
+            action, integer_value, diagnostic, &frame_.displayed_variables)) {
         return false;
     }
     options_ = std::move(candidate);
@@ -777,7 +820,7 @@ bool PreviewSession::ActivateTarget(
     }
     ReplayOptions candidate = options_;
     if (!ccz::preview::activate_condition_tree_target(
-            candidate, *frame_.model, target_key, diagnostic)) {
+            candidate, *frame_.model, target_key, diagnostic, &frame_.displayed_variables)) {
         return false;
     }
     options_ = std::move(candidate);

@@ -77,10 +77,18 @@ enum class BattleRoleOperationKind {
 
 struct BattleObstacleDefaults {
     int visibility{};
-    int terrain{-1}; // -1: match fire/boat type
+    int terrain{-1}; // -1: match fire/boat/Gate type
     int viewpoint{};
     int sound{};
 };
+
+// 0-2 use U_select; 3 is reserved; 4-127 are the Gate.e5 pairs.
+inline bool IsBattleObstacleTypeSupported(int type) noexcept {
+    return (type >= 0 && type <= 2) || (type >= 4 && type <= 127);
+}
+inline int BattleGateClosedImageIndex(int type) noexcept {
+    return (type - 4) * 2;
+}
 
 struct BattleObstacleDraft {
     int type{};
