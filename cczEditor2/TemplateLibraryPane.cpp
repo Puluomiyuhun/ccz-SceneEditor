@@ -120,6 +120,7 @@ void CTemplateLibraryPane::OnContextMenu(CWnd* source, CPoint point) {
   const UINT flags = MF_STRING | (Selected() ? 0 : MF_GRAYED);
   menu.AppendMenu(flags, 1, L"插入");
   menu.AppendMenu(flags | (diagnostic_.empty() ? 0 : MF_GRAYED), 2, L"修改");
+  menu.AppendMenu(flags | (diagnostic_.empty() ? 0 : MF_GRAYED), 4, L"删除");
   auto* view = ActiveView();
   menu.AppendMenu(MF_STRING | (view && view->CanUndoTemplateInsertion() ? 0 : MF_GRAYED), 3, L"撤回");
   const UINT action = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, this);
@@ -128,7 +129,7 @@ void CTemplateLibraryPane::OnContextMenu(CWnd* source, CPoint point) {
     ApplyPageFont(*this,L"Templates",page_font_);CRect r;GetClientRect(r);OnSize(SIZE_RESTORED,r.Width(),r.Height());return;
   }
 
-  if (action == 1) OnInsert(); else if (action == 2) OnEdit(); else if (action == 3) OnUndo();
+  if (action == 1) OnInsert(); else if (action == 2) OnEdit(); else if (action == 3) OnUndo(); else if (action == 4) OnDelete();
 }
 int CTemplateLibraryPane::OnCreate(LPCREATESTRUCT cs) {
   if (CDockablePane::OnCreate(cs) == -1)
