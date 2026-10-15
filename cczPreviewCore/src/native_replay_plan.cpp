@@ -260,7 +260,7 @@ const ExecutionNode* find_unique_target_case(
 }
 
 bool apply_script_write(const ExecutionNode& node, SimulationEnvironment* environment,
-                        NativeReplayPlan& plan) {
+                        bool include_battle_map_commands, NativeReplayPlan& plan) {
     (void)plan;
     if (!environment) return true;
     const auto& fields = node.command.int_data;
@@ -279,13 +279,15 @@ bool apply_script_write(const ExecutionNode& node, SimulationEnvironment* enviro
         }
     } else if (id == 0x38) {
         apply_simulated_avatar(*environment,fields);return true;
+    } else if (id == 0x35 || id == 0x75) {
+        apply_simulated_appearance(*environment,fields,id == 0x35 ? 0 : 27);return true;
     } else if (id == 0x77) {
         if(apply_simulated_arithmetic(*environment,fields)) return true;
     } else if (id == 0x0a) {
         // Standard script initialization is transparent to user-controlled offline values.
         return true;
     } else if (id == 0x78) {
-        if(apply_simulated_property(*environment,fields)) return true;
+        if(apply_simulated_property(*environment,fields,!include_battle_map_commands)) return true;
         if(fields.size()>=2 && fields[0]>=0 && fields[1]==0)
             environment->unknown_integer_variables.insert(fields[0]);
         return true;
@@ -420,7 +422,7 @@ WalkResult walk_node(const ExecutionNode& node,
         case ExecutionCategory::ElseBranch:
         case ExecutionCategory::Trigger:
         default:
-            if (!apply_script_write(node, environment, plan)) return WalkResult::UnsupportedCondition;
+            if (!apply_script_write(node, environment, include_battle_map_commands, plan)) return WalkResult::UnsupportedCondition;
             append_native_item(plan, node, include_battle_map_commands);
             return walk_nodes(node.ordinary_children, target_node, options,
                               include_battle_map_commands, environment, plan);
@@ -438,7 +440,7 @@ WalkResult walk_nodes(const ExecutionNodeList& nodes,
         // no editor instruction, but a selected native command must not be
         // silently dropped at the boundary.
         if (node.logical_key == target_node) {
-            if (!apply_script_write(node, environment, plan)) return WalkResult::UnsupportedCondition;
+            if (!apply_script_write(node, environment, include_battle_map_commands, plan)) return WalkResult::UnsupportedCondition;
             append_native_item(plan, node, include_battle_map_commands);
             return WalkResult::ReachedTarget;
         }
@@ -526,7 +528,7 @@ WalkResult walk_node_to_end(const ExecutionNode& node,
         case ExecutionCategory::ElseBranch:
         case ExecutionCategory::Trigger:
         default:
-            if (!apply_script_write(node, environment, plan)) return WalkResult::UnsupportedCondition;
+            if (!apply_script_write(node, environment, include_battle_map_commands, plan)) return WalkResult::UnsupportedCondition;
             append_native_item(plan, node, include_battle_map_commands);
             return walk_nodes_to_end(node.ordinary_children, options,
                                      include_battle_map_commands, environment, plan);

@@ -321,7 +321,8 @@ bool BattleAssetCache::LoadUnitSpriteAssets(const std::wstring& root,
 
 bool BattleAssetCache::ResolveUnitSprite(int data_id, int arm_kind,
                                          int direction,
-                                         UnitSpriteRef* result, int action) const noexcept {
+                                         UnitSpriteRef* result, int action,
+                                         int appearance_override) const noexcept {
     if (result == nullptr) return false;
     *result = {};
     if (!unit_sprite_ready_ || data_id < 0 ||
@@ -330,7 +331,8 @@ bool BattleAssetCache::ResolveUnitSprite(int data_id, int arm_kind,
         return false;
     }
 
-    const int appearance = appearance_[static_cast<std::size_t>(data_id)];
+    const int appearance = appearance_override >= 0 ? appearance_override
+        : appearance_[static_cast<std::size_t>(data_id)];
     int resource_index = -1;
     if (appearance == 0) {
         resource_index = 3 * static_cast<int>(

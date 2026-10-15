@@ -6085,8 +6085,13 @@ Gdiplus::Bitmap* CSBattlePreviewPage::GetUnitSprite(
 	const auto armKind = ccz::preview::battle_visual_arm_kind(unit);
     int action=-1;
     if(m_dynamicPreviewEnabled && m_dynamicPreviewReady){const auto found=m_dynamicProjection.unit_details.find(unit.editor_cache_id);if(found!=m_dynamicProjection.unit_details.end())action=found->second.action;}
+	int appearanceOverride=-1;
+	const auto appearance=m_displayedConditionVariables.data_attributes.find({visualUnit.data_id,27});
+	if(appearance!=m_displayedConditionVariables.data_attributes.end() &&
+		appearance->second>=0 && appearance->second<=65535)
+		appearanceOverride=appearance->second;
 	if (!armKind || !m_assets.ResolveUnitSprite(visualUnit.data_id, *armKind,
-			rawDirection, spriteRef,action)) return nullptr;
+			rawDirection, spriteRef,action,appearanceOverride)) return nullptr;
 	if (m_unitSpritePath != m_assets.unit_mov_path() ||
 		m_unitSpriteRevision != m_assets.sprite_revision()) {
 		ClearUnitSprites();

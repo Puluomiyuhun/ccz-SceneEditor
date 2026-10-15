@@ -124,7 +124,6 @@ inline bool read_simulated_address(const SimulationEnvironment& e, std::uint32_t
             const auto& values = pointer ? e.pointer_variables : e.integer_variables;
             if (unknown.count(id)) return false;
             auto found = values.find(id);
-            if (pointer && found == values.end()) return false;
             value = found == values.end() ? 0 : found->second; return true;
         }
     }
@@ -249,12 +248,25 @@ inline void apply_simulated_avatar(SimulationEnvironment& e,const std::vector<st
  }
  if(value>=0 && value<=65535) e.data_attributes[key]=(int)value;else e.data_attributes.erase(key);
 }
-inline bool apply_simulated_property(SimulationEnvironment& e,const std::vector<std::int32_t>& f) {
+inline void apply_simulated_appearance(SimulationEnvironment& e,
+                                       const std::vector<std::int32_t>& fields,
+                                       std::int32_t attribute) {
+ if(fields.size()<2 || fields[0]<0 || fields[0]>1023 || fields[1]<0 || fields[1]>65535) return;
+ e.data_attributes[{fields[0],attribute}]=fields[1];
+}
+inline bool apply_simulated_property(SimulationEnvironment& e,const std::vector<std::int32_t>& f,
+                                     bool offline_default=false) {
  if(f.size()<4 || f[0]<0 || f[0]>=4096 || f[2]<0 || f[2]>1023) return false;
  auto key=std::make_pair(f[2],f[3]);
  if(f[1]==0) {
   auto found=e.data_attributes.find(key);
-  if(found==e.data_attributes.end()) {e.unknown_integer_variables.insert(f[0]);return false;}
+  if(found==e.data_attributes.end()) {
+   if(!offline_default) {e.unknown_integer_variables.insert(f[0]);return false;}
+   // An unavailable game-property read replaces the previous script value
+   // with the ordinary offline integer default.
+   write_simulated_address(e,simulated_variable_address(false,f[0]),0);
+   return true;
+  }
   write_simulated_address(e,simulated_variable_address(false,f[0]),found->second);return true;
  }
  if(f[1]==1) {std::int32_t value;if(!read_simulated_operand(e,4,f[0],value)) {e.data_attributes.erase(key);return false;}e.data_attributes[key]=value;return true;}

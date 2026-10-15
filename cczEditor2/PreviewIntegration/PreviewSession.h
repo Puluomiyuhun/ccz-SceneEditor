@@ -43,6 +43,7 @@ struct PreviewFrame {
     ccz::preview::LogicalNodeKey active_node;
     std::vector<std::wstring> diagnostics;
     std::map<int,int> avatar_codes;
+    std::map<int,int> r_image_codes;
     ccz::preview::SimulationEnvironment displayed_variables;
 };
 

@@ -56,6 +56,8 @@ InstructionCatalog fixture_catalog() {
     catalog.names.emplace(static_cast<std::uint16_t>(0x55), L"战场复活");
     catalog.names.emplace(static_cast<std::uint16_t>(0x58), L"战场障碍设定");
     catalog.names.emplace(static_cast<std::uint16_t>(0x6d), L"相对移动");
+    catalog.names.emplace(static_cast<std::uint16_t>(0x77), L"变量运算");
+    catalog.names.emplace(static_cast<std::uint16_t>(0x78), L"整型变量赋值");
     catalog.names.emplace(static_cast<std::uint16_t>(0x79), L"变量测试");
     return catalog;
 }
@@ -110,6 +112,26 @@ CCZ_TEST(native_replay_plan_includes_scene_effect_from_nested_condition) {
                    RuntimeNodeHandle(0));
     CCZ_REQUIRE_EQ(plan.items.front().command.instruction_id,
                    static_cast<std::uint16_t>(0x30));
+}
+
+CCZ_TEST(r_native_replay_uses_zero_for_unavailable_game_property) {
+    ReplayOptions options;
+    const SectionExecutionModel model = make_model(
+        {raw_node(L"section-boundary", 0x00, L"0:事件结束"),
+         raw_node(L"seed", 0x77, L"77:设置 n0", {}, {2, 0, 2, 0, 343}),
+         raw_node(L"read", 0x78, L"78:读取属性", {}, {0, 0, 0, 16}),
+         raw_node(L"check", 0x79, L"79:整型测试",
+                  {raw_node(L"target", 0x27, L"27:背景显示", {}, {4})},
+                  {4, 0, 0, 0, 0})},
+        L"target", options);
+    const NativeReplayPlan plan = build_native_replay_plan(
+        model, L"target", DialogueProfile{}, options);
+    CCZ_REQUIRE(plan.complete);
+    CCZ_REQUIRE(plan.target_reached);
+    const NativeReplayPlan battle = build_native_battle_map_plan_to_end(
+        model, DialogueProfile{}, options);
+    CCZ_REQUIRE(!battle.complete);
+    CCZ_REQUIRE_EQ(battle.stop_reason, ReplayStopReason::UnsupportedCondition);
 }
 
 CCZ_TEST(native_replay_plan_to_end_follows_selected_condition_path) {
@@ -517,4 +539,20 @@ CCZ_TEST(native_replay_battle_turn_action_only_collected_when_s_mode_enabled) {
  const auto s=build_native_battle_map_plan_through_target(model,L"end",DialogueProfile{},options);
  CCZ_REQUIRE(s.target_reached);CCZ_REQUIRE_EQ(s.items.size(),std::size_t(2));
  CCZ_REQUIRE_EQ(s.items[0].command.instruction_id,std::uint16_t(0x4f));CCZ_REQUIRE_EQ(s.items[1].command.instruction_id,std::uint16_t(0x50));
+}
+
+CCZ_TEST(native_replay_battle_appearance_direct_and_variable_commands_share_state) {
+ auto catalog=fixture_catalog();
+ ReplayOptions options;
+ SectionInput input;input.section_key=L"appearance";input.selected_target_key=L"end";
+ input.nodes={raw_node(L"boundary",0x00,L"0:事件结束"),
+  raw_node(L"direct",0x75,L"75:S特殊形象指定",{},{823,12}),
+  raw_node(L"value",0x77,L"77:变量运算",{},{2,0,2,0,343}),
+  raw_node(L"write",0x78,L"78:整型变量赋值",{},{0,1,823,27}),
+  raw_node(L"end",0x24,L"24:CD音轨")};
+ const auto model=build_section_execution_model(input,catalog,options);
+ SimulationEnvironment result;
+ const auto plan=build_native_battle_map_plan_to_end(model,DialogueProfile{},options,&result);
+ CCZ_REQUIRE(plan.complete);
+ CCZ_REQUIRE(result.data_attributes.at({823,27})==343);
 }

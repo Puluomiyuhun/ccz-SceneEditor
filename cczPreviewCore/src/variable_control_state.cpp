@@ -150,7 +150,7 @@ std::vector<VariableControlRow> build_variable_control_rows(
         VariableControlRow row;row.kind=VariableControlKind::Pointer;row.id=usage.id;
         auto found=environment.pointer_variables.find(row.id);
         row.is_default=found==environment.pointer_variables.end();row.integer_value=row.is_default?0:found->second;
-        row.value_known = !row.is_default && !environment.unknown_pointer_variables.count(row.id);
+        row.value_known = !environment.unknown_pointer_variables.count(row.id);
         row.occurrence_count=usage.occurrence_count;row.usage_summary=integer_summary(usage);
         if(matches_search(row,search)) rows.push_back(row);
         if(row.value_known) {

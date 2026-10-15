@@ -145,7 +145,10 @@ std::size_t append_event(const ExecutionNode& node, WalkState& state,
 
     if(node.instruction_id==0x77 && !apply_simulated_arithmetic(state.options.simulated_variables,node.command.int_data)) invalidate_simulated_destination(state.options.simulated_variables,node.command.int_data);
     if(node.instruction_id==0x38) apply_simulated_avatar(state.options.simulated_variables,node.command.int_data);
-    if(node.instruction_id==0x78) apply_simulated_property(state.options.simulated_variables,node.command.int_data);
+    if(node.instruction_id==0x35 || node.instruction_id==0x75)
+        apply_simulated_appearance(state.options.simulated_variables,node.command.int_data,
+                                   node.instruction_id==0x35 ? 0 : 27);
+    if(node.instruction_id==0x78) apply_simulated_property(state.options.simulated_variables,node.command.int_data,true);
     const std::size_t first_index = state.timeline.events.size();
     const std::vector<DialogueSegment> dialogue_segments =
         node.instruction_id == 0x14

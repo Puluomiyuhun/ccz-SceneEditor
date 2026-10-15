@@ -376,6 +376,7 @@ bool CRScenePreviewPage::ActivateDocument(
 			m_dynamicPlaybackPrepared = false;
 			m_dynamicVisualProgress = 0.0;
 			ApplyPreviewAvatars(m_previewSession.frame().avatar_codes);
+			ApplyPreviewRImages(m_previewSession.frame().r_image_codes);
 			m_visibleDialogueOverlay = m_previewSession.frame().dialogue;
 			m_pTreeCtrl = &tree;
 			m_hCurItem = selectedItem;
@@ -683,6 +684,7 @@ void CRScenePreviewPage::ClearRBitmapCaches()
 	m_spriteCache.clear();
 	m_spriteDataLoaded = false;
 	memset(m_charImageIDs, 0, sizeof(m_charImageIDs));
+	m_previewRImageCodes.clear();
 	for (auto& entry : m_portraitCache) delete entry.second;
 	m_portraitCache.clear();
 	m_portraitFaceIndices.clear();
@@ -2097,6 +2099,7 @@ bool CRScenePreviewPage::PublishDynamicFrame(
 		return false;
 	}
 	ApplyPreviewAvatars(frame.avatar_codes);
+	ApplyPreviewRImages(frame.r_image_codes);
 	m_visibleDialogueOverlay = frame.dialogue;
 	EnsureDynamicAssets();
 	return true;
@@ -3836,7 +3839,7 @@ Gdiplus::Bitmap* CRScenePreviewPage::GetSpriteBitmap(int charID, const wchar_t* 
 	if (charID < 0 || charID >= 1024) return nullptr;
 	if (!LoadSpriteData(modPath)) return nullptr;
 
-	int imageID = m_charImageIDs[charID];
+	int imageID = EffectiveRImageCode(charID);
 	int frontIdx = imageID * 2;
 	int backIdx = imageID * 2 + 1;
 
@@ -3924,6 +3927,16 @@ void CRScenePreviewPage::ApplyPreviewAvatars(const std::map<int,int>& codes) {
  if(codes==m_previewAvatarCodes) return;
  for(auto& entry:m_portraitCache) delete entry.second;
  m_portraitCache.clear();m_previewAvatarCodes=codes;
+}
+
+void CRScenePreviewPage::ApplyPreviewRImages(const std::map<int,int>& codes) {
+ m_previewRImageCodes=codes;
+}
+
+int CRScenePreviewPage::EffectiveRImageCode(int dataID) const {
+ if(dataID<0 || dataID>=1024) return -1;
+ const auto found=m_previewRImageCodes.find(dataID);
+ return found!=m_previewRImageCodes.end() ? found->second : m_charImageIDs[dataID];
 }
 
 Gdiplus::Bitmap* CRScenePreviewPage::GetPortraitBitmap(int personID, const wchar_t* modPath)
@@ -4023,7 +4036,7 @@ void CRScenePreviewPage::DrawCharacter(Gdiplus::Graphics& g, const CharacterStat
 {
 	if (ch.id < 0 || ch.id >= 1024 || !m_spriteDataLoaded) return;
 
-	int imageID = m_charImageIDs[ch.id];
+	int imageID = EffectiveRImageCode(ch.id);
 	int frontIdx = imageID * 2;
 	int backIdx = imageID * 2 + 1;
 
@@ -4137,7 +4150,7 @@ void CRScenePreviewPage::DrawCharacterGhost(Gdiplus::Graphics& g, const Characte
 {
 	if (ch.id < 0 || ch.id >= 1024 || !m_spriteDataLoaded) return;
 
-	const int imageID = m_charImageIDs[ch.id];
+	const int imageID = EffectiveRImageCode(ch.id);
 	const bool useFront = (ch.direction == 2 || ch.direction == 1);
 	const bool flipH = (ch.direction == 1 || ch.direction == 3);
 	const int spriteIdx = useFront ? imageID * 2 : imageID * 2 + 1;
@@ -4231,6 +4244,7 @@ void CRScenePreviewPage::UpdatePreview(CTreeCtrl& tree, HTREEITEM hSelectedItem,
 			AppendDiagnostic(CString(apply.diagnostic.c_str()));
 		}
 		ApplyPreviewAvatars(frame.avatar_codes);
+		ApplyPreviewRImages(frame.r_image_codes);
 	m_visibleDialogueOverlay = frame.dialogue;
 	}
 	ReconcileCharacterSelection();
@@ -4478,7 +4492,7 @@ void CRScenePreviewPage::OnPaint()
 			int snapScreenY = offsetY + (int)(gamePxForSnap.y * scale);
 
 			if (m_spriteDataLoaded && ghostCharID >= 0 && ghostCharID < 1024) {
-				int imageID = m_charImageIDs[ghostCharID];
+				int imageID = EffectiveRImageCode(ghostCharID);
 				bool useFront = (ghostDir == 2 || ghostDir == 1);
 				bool flipH = (ghostDir == 1 || ghostDir == 3);
 				int spriteIdx = useFront ? imageID * 2 : imageID * 2 + 1;

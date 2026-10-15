@@ -10,6 +10,16 @@
 
 using namespace ccz::preview;
 
+CCZ_TEST(r_appearance_direct_and_variable_write_update_same_preview_attribute) {
+ PreviewState state;
+ DialogueProfile profile;
+ apply_dialogue_command(state,{0x35,{823,343},L""},profile);
+ CCZ_REQUIRE(state.simulated.data_attributes.at({823,0})==343);
+ apply_dialogue_command(state,{0x77,{2,0,2,0,344},L""},profile);
+ apply_dialogue_command(state,{0x78,{0,1,823,0},L""},profile);
+ CCZ_REQUIRE(state.simulated.data_attributes.at({823,0})==344);
+}
+
 namespace {
 
 DialogueProfile make_profile() {

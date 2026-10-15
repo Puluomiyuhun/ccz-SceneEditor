@@ -14,7 +14,7 @@ using ExecutionNodeList = std::vector<ExecutionNode>;
 
 bool is_preview_command(const ExecutionNode& node,
                         const DialogueProfile& profile) {
-    return node.command.instruction_id == 0x77 || node.command.instruction_id == 0x78 || node.command.instruction_id == 0x38 || node.command.instruction_id == profile.face_state_instruction_id ||
+    return node.command.instruction_id == 0x77 || node.command.instruction_id == 0x78 || node.command.instruction_id == 0x38 || node.command.instruction_id == 0x35 || node.command.instruction_id == profile.face_state_instruction_id ||
            find_dialogue_spec(profile, node.command.instruction_id) != nullptr;
 }
 
@@ -486,8 +486,9 @@ void apply_dialogue_command(
     if(command.instruction_id==0x77) {
         if(!apply_simulated_arithmetic(state.simulated,command.int_data)) invalidate_simulated_destination(state.simulated,command.int_data);
     }
-    if(command.instruction_id==0x78 && !apply_simulated_property(state.simulated,command.int_data) && diagnostic) append_diagnostic(*diagnostic,L"属性读写的模拟值未确定；未模拟的头像写入保持原头像");
+    if(command.instruction_id==0x78 && !apply_simulated_property(state.simulated,command.int_data,true) && diagnostic) append_diagnostic(*diagnostic,L"属性读写的模拟值未确定；未模拟的头像写入保持原头像");
     if(command.instruction_id==0x38) apply_simulated_avatar(state.simulated,command.int_data);
+    if(command.instruction_id==0x35) apply_simulated_appearance(state.simulated,command.int_data,0);
 
 
     if (command.instruction_id == profile.face_state_instruction_id) {

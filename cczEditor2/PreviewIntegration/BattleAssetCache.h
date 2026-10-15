@@ -62,7 +62,8 @@ public:
     // visual resolver applies Pro's painter-side 3 - raw-direction mapping;
     // parser and writeback code intentionally keep the raw value unchanged.
     bool ResolveUnitSprite(int data_id, int arm_kind, int direction,
-                           UnitSpriteRef* result, int action = -1) const noexcept;
+                           UnitSpriteRef* result, int action = -1,
+                           int appearance_override = -1) const noexcept;
     std::uint64_t sprite_revision() const noexcept { return root_revision_; }
     std::wstring UnitSpritePath(int archive) const {
         if(archive==0)return unit_mov_path_;

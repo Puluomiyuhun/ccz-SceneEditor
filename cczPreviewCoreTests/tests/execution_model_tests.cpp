@@ -1036,9 +1036,11 @@ CCZ_TEST(execution_model_exposes_canonical_replay_options_name) {
 
 CCZ_TEST(pointer_simulation_aliases_and_unknown_memory) {
     SimulationEnvironment e;
+    std::int32_t value;
+    CCZ_REQUIRE(read_simulated_operand(e,2,67,value) && value==0);
+    CCZ_REQUIRE(read_simulated_operand(e,1,67,value) && value==0);
     write_simulated_address(e,simulated_variable_address(false,1),145);
     write_simulated_address(e,simulated_variable_address(true,0),static_cast<std::int32_t>(simulated_variable_address(false,1)));
-    std::int32_t value;
     CCZ_REQUIRE(read_simulated_operand(e,1,0,value) && value==145);
     write_simulated_address(e,simulated_variable_address(false,1),146);
     CCZ_REQUIRE(read_simulated_operand(e,1,0,value) && value==146);
@@ -1050,6 +1052,35 @@ CCZ_TEST(pointer_simulation_aliases_and_unknown_memory) {
     CCZ_REQUIRE(!read_simulated_operand(e,1,2,value));
     CCZ_REQUIRE(read_simulated_operand(e,3,0,value) && static_cast<std::uint32_t>(value)==simulated_variable_address(true,0));
     CCZ_REQUIRE(read_simulated_operand(e,5,1,value) && static_cast<std::uint32_t>(value)==simulated_variable_address(false,1));
+}
+
+CCZ_TEST(unavailable_game_property_replaces_script_value_with_offline_default) {
+ SimulationEnvironment e;
+ std::int32_t value;
+ CCZ_REQUIRE(read_simulated_operand(e,4,0,value) && value==0);
+ CCZ_REQUIRE(apply_simulated_arithmetic(e,{2,0,2,0,343}));
+ CCZ_REQUIRE(read_simulated_operand(e,4,0,value) && value==343);
+ CCZ_REQUIRE(apply_simulated_property(e,{0,0,0,16},true));
+ CCZ_REQUIRE(read_simulated_operand(e,4,0,value) && value==0);
+ e.data_attributes[{0,16}]=12;
+ CCZ_REQUIRE(apply_simulated_property(e,{0,0,0,16},true));
+ CCZ_REQUIRE(read_simulated_operand(e,4,0,value) && value==12);
+}
+
+CCZ_TEST(r_and_s_appearance_direct_and_variable_writes_share_attributes) {
+ SimulationEnvironment e;
+ apply_simulated_appearance(e,{823,343},0);
+ apply_simulated_appearance(e,{823,12},27);
+ CCZ_REQUIRE(e.data_attributes.at({823,0})==343);
+ CCZ_REQUIRE(e.data_attributes.at({823,27})==12);
+ CCZ_REQUIRE(apply_simulated_arithmetic(e,{2,0,2,0,344}));
+ CCZ_REQUIRE(apply_simulated_property(e,{0,1,823,0}));
+ CCZ_REQUIRE(e.data_attributes.at({823,0})==344);
+ CCZ_REQUIRE(apply_simulated_property(e,{0,1,823,27}));
+ CCZ_REQUIRE(e.data_attributes.at({823,27})==344);
+ CCZ_REQUIRE(apply_simulated_property(e,{1,0,823,27},true));
+ std::int32_t value=0;
+ CCZ_REQUIRE(read_simulated_operand(e,4,1,value) && value==344);
 }
 
 CCZ_TEST(pointer_arithmetic_and_avatar_attribute_share_simulated_values) {

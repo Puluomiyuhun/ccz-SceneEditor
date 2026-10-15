@@ -228,7 +228,8 @@ bool frame_equal(const PreviewFrame& left, const PreviewFrame& right) {
                                                       right.dialogue) &&
            variable_index_equal(left.variable_index, right.variable_index) &&
            left.active_node == right.active_node &&
-           left.diagnostics == right.diagnostics && left.avatar_codes==right.avatar_codes;
+           left.diagnostics == right.diagnostics && left.avatar_codes==right.avatar_codes &&
+           left.r_image_codes==right.r_image_codes;
 }
 
 bool belongs_to_section(const LogicalNodeKey& key,
@@ -536,6 +537,12 @@ PreviewFrame BuildPreviewFrame(
         model, input.section.selected_target_key, profile, replayOptions);
     frame.active_node = input.section.selected_target_key;
     frame.displayed_variables = replay.state.simulated;
+    for(const auto& attribute:replay.state.simulated.data_attributes) {
+        if(attribute.first.second==0 && attribute.first.first>=0 &&
+           attribute.first.first<1024 && attribute.second>=0 &&
+           attribute.second<=65535)
+            frame.r_image_codes[attribute.first.first]=attribute.second;
+    }
 
     if (dialogue_segment_index.has_value()) {
         const ExecutionNode* target =

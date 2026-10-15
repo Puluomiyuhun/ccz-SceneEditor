@@ -143,6 +143,9 @@ private:
 	// 角色形象相关
 	bool m_spriteDataLoaded = false;
 	WORD m_charImageIDs[1024] = {};
+	std::map<int,int> m_previewRImageCodes;
+	void ApplyPreviewRImages(const std::map<int,int>& codes);
+	int EffectiveRImageCode(int dataID) const;
 	std::map<int, Gdiplus::Bitmap*> m_spriteCache;
 
 	// 外场景地图头像相关
